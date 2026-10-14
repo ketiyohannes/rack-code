@@ -1,5 +1,13 @@
 # Change log
 
+## 2026-10-12 - Local desktop packaging
+
+- Added `npm run package` (`scripts/package-desktop.ts`, @electron/packager). It builds a local app bundle for the current OS and architecture into `release/`, with asar off (the Claude Agent SDK runs a native binary) and ad-hoc signing on macOS. `release/` is ignored by Git.
+- The packaged app resolves the login shell's `PATH` at startup (`src/desktop/main/shell-path.ts`) and passes it to the execution host, so provider CLIs installed outside the system `PATH` are found when the app is launched from Finder.
+- Moved bundled-only packages (Phosphor icons, fonts) to devDependencies so they do not ship twice.
+- Validation performed: `npm run check` passes (37 tests). Packaged on darwin-arm64 (537 MB, mostly Electron and the Claude binary), installed to `/Applications`, and `codesign --verify --deep` succeeded. The app was launched through `open` (Finder-style environment): both connect providers loaded, a Codex sign-in reached a real `auth.openai.com` URL (then cancelled), and the bundled `claude` binary reported 2.1.296.
+- Not performed: a run with a connected account in the packaged app; Windows or Linux packaging.
+
 ## 2026-10-12 - Simple chat transcript
 
 - Replaced run cards with a Codex/T3-style chat. Prompts are right-aligned bubbles with clipping for long text. Replies are Markdown-rendered page text with a meta row (copy, time, labels, Details, Stop), compact expandable tool rows, inline approval cards, a turn navigator, and a "Scroll to end" pill. Run details moved behind the per-reply Details toggle.

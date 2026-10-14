@@ -728,35 +728,48 @@ textarea:disabled {
   overflow-wrap: anywhere;
 }
 
-/* Long prompts are clipped with a fade until expanded. */
-.bubble.clipped .bubble-text {
-  max-height: 9.5em;
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
-  mask-image: linear-gradient(to bottom, #000 60%, transparent);
-}
-
-.bubble-toggle {
-  display: block;
-  margin: 6px 0 0 auto;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--text-2);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
-.bubble-toggle:hover {
-  color: var(--text);
-}
-
 .reply {
   display: flex;
   flex-direction: column;
   gap: 10px;
   font-size: 14px;
   line-height: 1.65;
+}
+
+.thinking-line {
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.thinking-line summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: var(--text-3);
+  cursor: pointer;
+  list-style: none;
+}
+
+.thinking-line summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-line summary .icon:first-child {
+  width: 15px;
+  height: 15px;
+}
+
+.thinking-line[open] .tool-line-caret {
+  transform: rotate(90deg);
+}
+
+.thinking-text {
+  max-width: 680px;
+  margin: 8px 0 2px 23px;
+  padding-left: 11px;
+  border-left: 1px solid var(--border);
+  white-space: pre-wrap;
 }
 
 /* Rendered Markdown inside replies. */
@@ -1192,11 +1205,29 @@ details.data summary {
 }
 
 .composer {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
   max-width: 780px;
   margin: 0 auto;
+}
+
+/* Approval requests belong to the active composer, not the chat transcript. */
+.approval-overlay {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 5;
+}
+
+.approval-overlay-card {
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.38), 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .composer-card {

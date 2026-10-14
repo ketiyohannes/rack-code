@@ -35,6 +35,7 @@ import {
   PERMISSION_MODES,
   type AccountView,
   type PermissionMode,
+  type ModelView,
   type RunView,
   type SessionSummaryView,
 } from "../../contracts/desktop/views.js";
@@ -184,7 +185,11 @@ export class HostApi {
         const permissionMappings = Object.fromEntries(
           PERMISSION_MODES.map((mode) => [mode, runtime.describePermissionMode(mode)]),
         ) as Record<PermissionMode, string>;
-        return { runtimeId, permissionMappings };
+        return {
+          runtimeId,
+          ...(runtime.providerId === undefined ? {} : { providerId: runtime.providerId }),
+          permissionMappings,
+        };
       }),
       "runtimes.capabilities": async (params) => {
         const account = await accounts.get(params.accountId);
@@ -195,6 +200,7 @@ export class HostApi {
           runtimeContextId: account.runtimeContextId,
         });
       },
+      "models.list": async () => this.listModels(),
 
       "runs.start": async (params) => {
         const workspace = await projects.getWorkspace(params.workspaceId);
@@ -252,6 +258,44 @@ export class HostApi {
       selectedByProvider.get(account.providerId) === account.id,
       counts.get(account.id) ?? 0,
     ));
+  }
+
+  /**
+   * Builds one provider-neutral model catalog. Runtime IDs never cross into
+   * the renderer as a user choice; they remain attached to each model so the
+   * host can route the selected model to the correct adapter at run start.
+   */
+  private async listModels(): Promise<readonly ModelView[]> {
+    const allAccounts = await this.app.accounts.list();
+    const selectedByProvider = new Map<string, AccountRecord | undefined>();
+    for (const providerId of new Set(allAccounts.map((account) => account.providerId))) {
+      selectedByProvider.set(providerId, await this.app.accounts.selected(providerId));
+    }
+
+    const models = await Promise.all(this.app.runtimes.list().map(async (runtimeId) => {
+      const runtime = this.app.runtimes.get(runtimeId);
+      if (runtime.models === undefined) return [] as ModelView[];
+      const providerId = runtime.providerId ?? runtimeId;
+      const account = selectedByProvider.get(providerId);
+      const discovered = await runtime.models(account === undefined ? undefined : {
+        accountId: account.id,
+        providerId: account.providerId,
+        credential: account.credential,
+        runtimeContextId: account.runtimeContextId,
+      });
+      return discovered.map((model): ModelView => ({
+        ...model,
+        providerId,
+        runtimeId,
+      }));
+    }));
+    const seen = new Set<string>();
+    return models.flat().filter((model) => {
+      const key = `${model.providerId}\u0000${model.runtimeId}\u0000${model.modelId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   private async accountView(account: AccountRecord): Promise<AccountView> {

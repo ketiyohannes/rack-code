@@ -52,8 +52,21 @@ export interface RuntimeCapabilities {
   readonly computerUse: boolean;
 }
 
+/**
+ * A model the runtime can accept for a new attempt. The runtime adapter owns
+ * discovery and keeps provider-specific model metadata behind this contract.
+ */
+export interface RuntimeModel {
+  readonly modelId: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly isDefault?: boolean;
+}
+
 export type RuntimeEvent =
   | { readonly type: "message_delta"; readonly text: string }
+  /** Provider reasoning summaries/traces, kept separate from the final reply. */
+  | { readonly type: "thinking_delta"; readonly text: string }
   | { readonly type: "tool_request"; readonly tool: string; readonly input: unknown }
   | { readonly type: "tool_result"; readonly output: unknown }
   | { readonly type: "approval_request"; readonly request: ApprovalRequest }
@@ -66,7 +79,16 @@ export type RuntimeEvent =
 
 export interface RuntimeAdapter {
   readonly runtimeId: string;
+  /** Provider identity used to pair a model with a connected account. */
+  readonly providerId?: string;
   capabilities(account: RuntimeAccountContext): Promise<RuntimeCapabilities>;
+  /**
+   * Returns the model catalog for this runtime. Adapters may use the account
+   * context to ask the provider for the account-specific catalog; when it is
+   * absent they return a safe local catalog for the model picker to display
+   * before sign-in.
+   */
+  models?(account?: RuntimeAccountContext): Promise<readonly RuntimeModel[]>;
   startRun(input: RuntimeRunInput): AsyncIterable<RuntimeEvent>;
   resumeRun(input: RuntimeRunInput): AsyncIterable<RuntimeEvent>;
   cancel(input: Pick<RuntimeRunInput, "attemptId" | "signal">): Promise<void>;

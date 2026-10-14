@@ -22,7 +22,8 @@ Implementation proceeds one explicitly approved feature at a time. This document
 | Git hooks | Husky | Selected by user; hook policies still to define |
 | Package management and development scripts | npm with Node.js tooling | Selected baseline |
 | Running desktop application | Electron main for lifecycle and IPC validation; application services in a separate Electron utility process (execution host) | Selected by user 2026-10-12; supervision and background mode remain open |
-| Build, packaging, updates, test tooling, storage, supported operating systems | Select when the corresponding foundation work is discussed | Open |
+| Build and packaging | esbuild bundles; @electron/packager for local app builds (asar off, ad-hoc signed); see [desktop application](desktop.md) | Selected for local builds 2026-10-12 |
+| Distribution signing, updates, test tooling, storage, supported operating systems | Select when the corresponding foundation work is discussed | Open |
 
 TypeScript describes the source language, not the runtime. Electron provides the desktop shell; the interface still needs web markup, styling, and UI components. Configuration, documentation, and minimal Git hook shell entry points use their appropriate formats.
 

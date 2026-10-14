@@ -8,9 +8,17 @@ import type {
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeEvent,
+  RuntimeModel,
   RuntimeRunInput,
 } from "../../core/execution/types.js";
 import { JsonRpcProcess, type JsonRpcMessage } from "./json-rpc-process.js";
+
+const CODEX_FALLBACK_MODELS: readonly RuntimeModel[] = [
+  { modelId: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", description: "Workhorse model for coding and everyday tasks.", isDefault: true },
+  { modelId: "gpt-6-astra", displayName: "GPT-6-Astra", description: "Frontier intelligence for demanding work." },
+  { modelId: "gpt-6-sol", displayName: "GPT-6-Sol", description: "Previous-generation workhorse model." },
+  { modelId: "gpt-6-luna", displayName: "GPT-6-Luna", description: "Fast and affordable for easier tasks." },
+];
 
 type CodexProcessFactory = (options: {
   readonly cwd: string;
@@ -32,6 +40,7 @@ interface ActiveCodexRun {
  */
 export class CodexRuntimeAdapter implements RuntimeAdapter {
   readonly runtimeId = "codex-app-server";
+  readonly providerId = "codex";
   private readonly active = new Map<string, ActiveCodexRun>();
   private readonly createProcess: CodexProcessFactory;
 
@@ -59,6 +68,55 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       browserTools: false,
       computerUse: false,
     };
+  }
+
+  /**
+   * Codex exposes its account-aware catalog through `model/list`. When no
+   * account has been connected yet, keep the picker useful with the stable
+   * local aliases; a signed-in account refresh replaces these with the
+   * app-server catalog for that account.
+   */
+  async models(account?: RuntimeAccountContext): Promise<readonly RuntimeModel[]> {
+    if (account === undefined) return CODEX_FALLBACK_MODELS;
+    const fallback = CODEX_FALLBACK_MODELS;
+    let child: JsonRpcProcess | undefined;
+    try {
+      const credential = await this.credentials.resolve(account.credential);
+      const context = await this.contexts.resolve(account.runtimeContextId);
+      child = this.createProcess({
+        cwd: process.cwd(),
+        environment: {
+          ...process.env,
+          ...context.environment,
+          ...credential.environment,
+          CODEX_HOME: context.directory,
+        },
+      });
+      await child.request("initialize", {
+        clientInfo: { name: "thinking-and-code", title: "Thinking and Code", version: "0.1.0" },
+        capabilities: {},
+      });
+      child.notify("initialized", {});
+      const response = await child.request("model/list", { includeHidden: false });
+      const models = asRecord(response).data;
+      if (!Array.isArray(models)) return fallback;
+      const mapped = models.flatMap((value): RuntimeModel[] => {
+        const row = asRecord(value);
+        const modelId = typeof row.model === "string" ? row.model : typeof row.id === "string" ? row.id : undefined;
+        if (modelId === undefined) return [];
+        return [{
+          modelId,
+          displayName: typeof row.displayName === "string" ? row.displayName : modelId,
+          description: typeof row.description === "string" ? row.description : "Codex model",
+          ...(row.isDefault === true ? { isDefault: true } : {}),
+        }];
+      });
+      return mapped.length === 0 ? fallback : mapped;
+    } catch {
+      return fallback;
+    } finally {
+      await child?.close();
+    }
   }
 
   describePermissionMode(mode: PermissionMode): string {
@@ -266,15 +324,19 @@ function mapCodexNotification(
   switch (method) {
     case "item/agentMessage/delta":
       return typeof params.delta === "string" ? [{ type: "message_delta", text: params.delta }] : [];
+    case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/textDelta":
+      return typeof params.delta === "string" ? [{ type: "thinking_delta", text: params.delta }] : [];
     case "item/commandExecution/outputDelta":
     case "item/fileChange/outputDelta":
       return [{ type: "tool_result", output: params.delta ?? params }];
     case "item/started": {
       const item = asRecord(params.item);
       const itemType = typeof item.type === "string" ? item.type : "item";
-      if (itemType === "agentMessage" || itemType === "reasoning") {
+      if (itemType === "agentMessage") {
         return [];
       }
+      if (itemType === "reasoning") return [];
       return [{ type: "tool_request", tool: itemType, input: item }];
     }
     case "item/completed":

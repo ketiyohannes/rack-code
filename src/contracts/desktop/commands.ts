@@ -25,6 +25,7 @@ import {
   type ConnectProviderView,
   type ConnectView,
   type JournalEntryView,
+  type ModelView,
   type PermissionMode,
   type ProjectView,
   type RunView,
@@ -111,6 +112,7 @@ export interface HostCommandMap {
     params: { readonly runtimeId: string; readonly accountId: string };
     result: RuntimeCapabilities;
   };
+  "models.list": { params: NoParams; result: readonly ModelView[] };
   "runs.start": { params: StartRunParams; result: StartRunResult };
   "runs.list": { params: { readonly sessionId: string }; result: readonly RunView[] };
   "runs.journal": { params: { readonly runId: string }; result: readonly JournalEntryView[] };
@@ -161,6 +163,7 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "sessions.get": object({ sessionId: id }),
   "runtimes.list": empty,
   "runtimes.capabilities": object({ runtimeId: id, accountId: id }),
+  "models.list": empty,
   "runs.start": object({
     sessionId: id,
     projectId: id,

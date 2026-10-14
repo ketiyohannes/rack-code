@@ -2,8 +2,7 @@
  * Center column: the open session as a simple chat transcript.
  *
  * Each run is one turn:
- * - the prompt is a right-aligned bubble; long prompts are clipped with a
- *   "Show full message" toggle;
+ * - the prompt is a right-aligned bubble with no technical message metadata;
  * - the reply is plain text in the page (no bubble), rendered as Markdown.
  *   While a run is active it shows the live event fold: streaming text,
  *   compact one-line tool rows that expand on click, and approval cards.
@@ -17,18 +16,16 @@
  * "Scroll to end" pill when the view is not at the bottom.
  *
  * The transcript re-renders on every state change (batched per frame), so
- * presentation state that must survive a re-render (expanded prompts,
- * opened tool rows) lives in closure sets keyed by stable IDs.
+ * presentation state that must survive a re-render (opened tool rows) lives
+ * in a closure set keyed by stable IDs.
  */
 import type {
-  AccountView,
-  ApprovalRequest,
   RunView,
   SessionView,
   WorkspaceView,
 } from "../../../contracts/desktop/index.js";
 import type { Controller } from "../controller.js";
-import { dataView, formatData, formatTime, h, replace, row, shortId } from "../dom.js";
+import { formatData, formatTime, h, replace, shortId } from "../dom.js";
 import { icon } from "../icons.js";
 import { renderMarkdown } from "../markdown.js";
 import type { AppState, LiveRun, Store } from "../store.js";
@@ -36,14 +33,10 @@ import { foldEvents, type TranscriptItem, type TranscriptState } from "../transc
 import { renderRunDetails } from "./run-detail.js";
 import { accountLabel, isActiveStatus, PERMISSION_LABELS, runtimeOf } from "./run-format.js";
 
-/** Prompts longer than this (characters or lines) start clipped. */
-const LONG_PROMPT_CHARS = 600;
-const LONG_PROMPT_LINES = 8;
 /** Distance from the bottom, in pixels, that still counts as "at the end". */
 const AT_END_THRESHOLD = 48;
 
 interface ViewMemory {
-  readonly expandedPrompts: Set<string>;
   readonly openTools: Set<string>;
 }
 
@@ -57,12 +50,8 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   scrollToEnd.hidden = true;
   root.append(transcript, rail, scrollToEnd);
 
-  const memory: ViewMemory = { expandedPrompts: new Set(), openTools: new Set() };
+  const memory: ViewMemory = { openTools: new Set() };
   let current: AppState | undefined;
-  const rerender = () => {
-    if (current !== undefined) draw(current, false);
-  };
-
   // Folding is memoized per events array: unchanged live runs are not re-folded.
   const folds = new WeakMap<readonly unknown[], TranscriptState>();
   const fold = (live: LiveRun): TranscriptState => {
@@ -85,7 +74,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     // Keep following streamed output only when the user is already at the end.
     const follow = jumpToEnd || isAtEnd();
     const scrollTop = transcript.scrollTop;
-    replace(transcript, ...renderTranscript(state, controller, fold, memory, rerender));
+      replace(transcript, ...renderTranscript(state, controller, fold, memory));
     transcript.scrollTop = follow ? transcript.scrollHeight : scrollTop;
     renderRail(rail, transcript);
     updateChrome();
@@ -132,7 +121,6 @@ function renderTranscript(
   controller: Controller,
   fold: (live: LiveRun) => TranscriptState,
   memory: ViewMemory,
-  rerender: () => void,
 ): Node[] {
   const session = state.session;
   if (session === undefined || state.selection.sessionId === undefined) {
@@ -147,7 +135,7 @@ function renderTranscript(
   if (runs.length === 0) {
     return [placeholder("terminal-window", "What should we work on?", "Describe a task below. The agent works in this session's workspace.")];
   }
-  return runs.map((run) => renderTurn(run, state, controller, fold, memory, rerender));
+  return runs.map((run) => renderTurn(run, state, controller, fold, memory));
 }
 
 function renderTurn(
@@ -156,7 +144,6 @@ function renderTurn(
   controller: Controller,
   fold: (live: LiveRun) => TranscriptState,
   memory: ViewMemory,
-  rerender: () => void,
 ): HTMLElement {
   const live = state.live[stored.id];
   const run = live?.run ?? stored;
@@ -169,7 +156,8 @@ function renderTurn(
   if (live !== undefined) {
     const folded = fold(live);
     for (const [index, item] of folded.items.entries()) {
-      reply.push(renderItem(item, `${run.id}:${index}`, run, account, live, controller, memory, openLink));
+      const rendered = renderItem(item, `${run.id}:${index}`, memory, openLink);
+      if (rendered !== undefined) reply.push(rendered);
     }
     copyText = folded.items.flatMap((item) => item.kind === "text" ? [item.text] : []).join("\n\n");
     if (folded.failure !== undefined) reply.push(errorLine(folded.failure.error));
@@ -219,25 +207,15 @@ function renderTurn(
   );
 
   return h("article", { class: "turn", data: { runId: run.id } },
-    renderPrompt(run, memory, rerender),
+    renderPrompt(run),
     h("div", { class: "reply" }, ...reply, meta, detailsOpen ? renderRunDetails(run, state, controller) : null),
   );
 }
 
-function renderPrompt(run: RunView, memory: ViewMemory, rerender: () => void): HTMLElement {
-  const long = run.prompt.length > LONG_PROMPT_CHARS || run.prompt.split("\n").length > LONG_PROMPT_LINES;
-  const expanded = memory.expandedPrompts.has(run.id);
+function renderPrompt(run: RunView): HTMLElement {
   return h("div", { class: "prompt-row" },
-    h("div", { class: long && !expanded ? "bubble clipped" : "bubble" },
+    h("div", { class: "bubble" },
       h("div", { class: "bubble-text" }, run.prompt),
-      !long ? null : h("button", {
-        class: "bubble-toggle",
-        onClick: () => {
-          if (expanded) memory.expandedPrompts.delete(run.id);
-          else memory.expandedPrompts.add(run.id);
-          rerender();
-        },
-      }, expanded ? "Show less" : "Show full message"),
     ),
   );
 }
@@ -245,13 +223,9 @@ function renderPrompt(run: RunView, memory: ViewMemory, rerender: () => void): H
 function renderItem(
   item: TranscriptItem,
   key: string,
-  run: RunView,
-  account: AccountView | undefined,
-  live: LiveRun,
-  controller: Controller,
   memory: ViewMemory,
   openLink: (href: string) => void,
-): Node {
+): Node | undefined {
   switch (item.kind) {
     case "text":
       return h("div", { class: "md" }, renderMarkdown(item.text, openLink));
@@ -260,8 +234,13 @@ function renderItem(
         [["Input", item.input], ...(item.hasOutput ? [["Output", item.output] as const] : [])], !item.hasOutput);
     case "tool_output":
       return toolLine(key, memory, "terminal-window", "Tool result", "", [["Output", item.output]], false);
+    case "thinking":
+      return thinkingLine(key, memory, item.text);
     case "approval":
-      return renderApproval(item.request, run, account, live, controller);
+      // Pending approvals are rendered above the composer. Keeping them out
+      // of the transcript avoids mixing an authorization prompt with the
+      // assistant's trace.
+      return undefined;
     case "status":
       return h("div", { class: "note" }, icon("info"), item.label, item.detail === undefined ? null : `: ${item.detail}`);
   }
@@ -296,44 +275,21 @@ function toolLine(
   return details;
 }
 
-/**
- * Approval card. Shows everything the spec lists (request ID, tool, input,
- * reason, runtime/provider, account, workspace, run/attempt) and answers
- * with the exact request ID. Answered approvals collapse to one line.
- */
-function renderApproval(
-  request: ApprovalRequest,
-  run: RunView,
-  account: AccountView | undefined,
-  live: LiveRun,
-  controller: Controller,
-): HTMLElement {
-  const pending = live.pendingApprovals.some((candidate) => candidate.id === request.id);
-  const decision = live.decisions[request.id];
-  if (!pending) {
-    return h("div", { class: "note" },
-      icon(decision === "deny" ? "prohibit" : "shield-check"),
-      decision === undefined ? `${request.tool}: approval resolved` : `${request.tool}: ${decision === "allow" ? "allowed" : "denied"}`);
-  }
-  return h("div", { class: "approval pending" },
-    h("div", { class: "approval-head" },
-      icon("hand"),
-      h("span", { class: "approval-title" }, `Allow ${request.tool}?`),
-      h("span", { class: "approval-id" }, shortId(request.id)),
+/** Collapsed reasoning trace; unlike user prompts this is useful diagnostic output. */
+function thinkingLine(key: string, memory: ViewMemory, text: string): HTMLElement {
+  const details = h("details", { class: "thinking-line", open: memory.openTools.has(key) },
+    h("summary", {},
+      icon("brain"),
+      h("span", { class: "tool-line-title" }, "Thinking"),
+      icon("caret-right", { className: "tool-line-caret" }),
     ),
-    request.reason === undefined ? null : h("p", { class: "approval-reason" }, request.reason),
-    dataView("Input", request.input),
-    h("div", { class: "detail-rows" },
-      row("Runtime / provider", `${runtimeOf(run)} / ${run.providerId}`),
-      row("Account", accountLabel(account, run.accountId)),
-      row("Workspace", shortId(run.workspaceId)),
-      row("Run / attempt", `${shortId(run.id)} / ${shortId(run.attempts.at(-1)?.id)}`),
-    ),
-    h("div", { class: "approval-actions" },
-      h("button", { class: "button", onClick: () => void controller.respondToApproval(run.id, request.id, "deny") }, "Deny"),
-      h("button", { class: "button button-primary", onClick: () => void controller.respondToApproval(run.id, request.id, "allow") }, "Allow"),
-    ),
+    h("div", { class: "thinking-text" }, text),
   );
+  details.addEventListener("toggle", () => {
+    if (details.open) memory.openTools.add(key);
+    else memory.openTools.delete(key);
+  });
+  return details;
 }
 
 function errorLine(text: string): HTMLElement {

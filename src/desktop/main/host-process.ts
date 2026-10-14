@@ -22,6 +22,8 @@ export interface HostProcessOptions {
   /** Absolute path of the bundled host entry module. */
   readonly modulePath: string;
   readonly args?: readonly string[];
+  /** Environment for the host process; defaults to main's environment. */
+  readonly env?: NodeJS.ProcessEnv;
   readonly onEvent: (event: HostEvent) => void;
   readonly onExit: (code: number) => void;
 }
@@ -39,6 +41,7 @@ export class HostProcess {
   constructor(options: HostProcessOptions) {
     this.child = utilityProcess.fork(options.modulePath, [...(options.args ?? [])], {
       serviceName: "Execution Host",
+      ...(options.env === undefined ? {} : { env: options.env }),
       // Inherit stdio so host logs and crashes are visible in the terminal
       // that launched the app during development.
       stdio: "inherit",

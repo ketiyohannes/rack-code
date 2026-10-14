@@ -46,11 +46,12 @@ export class Controller {
       }
     });
     try {
-      const [connectProviders, connecting, accounts, runtimes, projects, sessions, active] = await Promise.all([
+      const [connectProviders, connecting, accounts, runtimes, models, projects, sessions, active] = await Promise.all([
         this.host.call("auth.providers", {}),
         this.host.call("auth.active", {}),
         this.host.call("accounts.list", {}),
         this.host.call("runtimes.list", {}),
+        this.host.call("models.list", {}),
         this.host.call("projects.list", {}),
         this.host.call("sessions.list", {}),
         this.host.call("runs.active", {}),
@@ -60,6 +61,7 @@ export class Controller {
         host: { status: "ready" },
         accounts,
         runtimes,
+        models,
         projects,
         sessions,
         connectProviders,
@@ -301,6 +303,16 @@ export class Controller {
     }
   }
 
+  /** Refreshes the provider-neutral model catalog after account changes. */
+  async reloadModels(): Promise<void> {
+    try {
+      const models = await this.host.call("models.list", {});
+      this.store.update((state) => ({ ...state, models }));
+    } catch (error) {
+      this.report(error);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Runs
 
@@ -388,6 +400,7 @@ export class Controller {
         return;
       case "accounts.changed":
         void this.reloadAccounts();
+        void this.reloadModels();
         return;
       case "projects.changed":
         void this.reloadProjects();

@@ -19,6 +19,7 @@ import type { ApprovalRequest, RuntimeEvent } from "../../contracts/desktop/view
 
 export type TranscriptItem =
   | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "thinking"; readonly text: string }
   | { readonly kind: "tool"; readonly tool: string; readonly input: unknown; readonly output?: unknown; readonly hasOutput: boolean }
   | { readonly kind: "tool_output"; readonly output: unknown }
   | { readonly kind: "approval"; readonly request: ApprovalRequest }
@@ -48,6 +49,13 @@ export function applyEvent(state: TranscriptState, event: RuntimeEvent): Transcr
         return { ...state, items: [...state.items.slice(0, -1), { kind: "text", text: last.text + event.text }] };
       }
       return { ...state, items: [...state.items, { kind: "text", text: event.text }] };
+    }
+    case "thinking_delta": {
+      const last = state.items.at(-1);
+      if (last?.kind === "thinking") {
+        return { ...state, items: [...state.items.slice(0, -1), { kind: "thinking", text: last.text + event.text }] };
+      }
+      return { ...state, items: [...state.items, { kind: "thinking", text: event.text }] };
     }
     case "tool_request":
       return {

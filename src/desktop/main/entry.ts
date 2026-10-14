@@ -27,6 +27,7 @@ import type { HostEvent } from "../../contracts/desktop/events.js";
 import { IPC_CHANNELS, type CommandResponse } from "../../contracts/desktop/transport.js";
 import { ContractValidationError, object, optional, text } from "../../contracts/desktop/validation.js";
 import { HostProcess } from "./host-process.js";
+import { resolveShellPath } from "./shell-path.js";
 import { createMainWindow } from "./window.js";
 
 /** How long quitting waits for cancelled runs to record a terminal state. */
@@ -176,8 +177,13 @@ void app.whenReady().then(() => {
   // THINKING_AND_CODE_DATA_DIR isolates development or test data from the
   // default `~/.thinking-and-code` directory used by the host.
   const dataDirectory = process.env["THINKING_AND_CODE_DATA_DIR"];
+  // A packaged app started from Finder lacks the shell PATH, so the host
+  // could not find the provider CLIs (`codex`, `claude`). Development runs
+  // from a terminal already have it.
+  const shellPath = app.isPackaged ? resolveShellPath() : process.env["PATH"];
   host = new HostProcess({
     modulePath: paths.host,
+    env: { ...process.env, ...(shellPath === undefined ? {} : { PATH: shellPath }) },
     args: dataDirectory === undefined || dataDirectory === "" ? [] : [`--data-directory=${dataDirectory}`],
     onEvent: broadcast,
     onExit: (code) => {

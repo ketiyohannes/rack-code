@@ -75,7 +75,15 @@ npm run start          # bundle to dist-desktop/ and launch Electron
 npm run build:desktop  # bundle only (scripts/build-desktop.ts, esbuild)
 npm run typecheck      # Node and renderer tsconfig projects
 npm run check          # typecheck, headless build, tests, desktop bundle
+npm run package        # bundle, then package an app for this OS/arch into release/
 ```
+
+Packaging (`scripts/package-desktop.ts`, @electron/packager) builds a local app bundle such as `release/Thinking and Code-darwin-arm64/Thinking and Code.app`. Install it by copying it to `/Applications`. Decisions:
+
+- asar is off, because the Claude Agent SDK executes a native `claude` binary from its platform package and executables cannot run from inside an asar archive.
+- Only runtime files ship. Packager prunes devDependencies. Icons and fonts are bundled by esbuild, so they are devDependencies.
+- macOS builds are ad-hoc signed (`codesign -s -`) for a consistent local signature. They are not signed for distribution or notarized, so they are intended for the machine that built them.
+- A packaged app launched from Finder has a minimal `PATH`. Main resolves the login shell's `PATH` once at startup (`shell-path.ts`) and passes it to the execution host, so the `codex` and `claude` CLIs are found.
 
 `THINKING_AND_CODE_DATA_DIR=/path` makes the host use a separate data directory instead of `~/.thinking-and-code`. The Electron binary is downloaded by its package install script. If npm's install-script policy skipped it, run `node node_modules/electron/install.js`.
 
@@ -85,4 +93,4 @@ npm run check          # typecheck, headless build, tests, desktop bundle
 - A reconnect leaves the account's previous runtime-context directory, and the login inside it, on disk, because an active run may still use it. Cleaning up superseded contexts needs a policy.
 - Accounts registered by reference (headless `accounts.register`) are `unknown` until an adapter reports availability. Connected accounts are marked `available` on a successful sign-in.
 - Tool results carry no call ID, so the transcript pairs each result with the most recent unanswered tool request.
-- There is no packaging or code signing. Node packages stay external to the main and host bundles.
+- Packaging produces unsigned (ad-hoc) local builds only: there is no distribution signing, notarization, auto-update, app icon, or installer. Node packages stay external to the main and host bundles.

@@ -19,6 +19,7 @@ import type {
   RunRecord,
   RuntimeCapabilities,
   RuntimeEvent,
+  RuntimeModel,
 } from "../../core/execution/types.js";
 import type { ProjectRecord, WorkspaceRecord } from "../../core/projects/types.js";
 import type { ConnectView } from "../../core/connections/types.js";
@@ -31,6 +32,7 @@ export type {
   PermissionMode,
   RuntimeCapabilities,
   RuntimeEvent,
+  RuntimeModel,
 };
 
 export const PERMISSION_MODES: readonly PermissionMode[] = [
@@ -88,8 +90,15 @@ export type JournalEntryView = JournalEntry;
 /** Runtime picker entry. Capabilities are loaded per account. */
 export interface RuntimeView {
   readonly runtimeId: string;
+  readonly providerId?: string;
   /** Adapter-reported native controls for each app permission mode. */
   readonly permissionMappings: Readonly<Record<PermissionMode, string>>;
+}
+
+/** A model option shown in the single provider-neutral model picker. */
+export interface ModelView extends RuntimeModel {
+  readonly providerId: string;
+  readonly runtimeId: string;
 }
 
 /**

@@ -27,6 +27,7 @@ import type {
   SessionSummaryView,
   SessionView,
   JournalEntryView,
+  ModelView,
   WorkspaceView,
 } from "../../contracts/desktop/index.js";
 
@@ -56,6 +57,8 @@ export interface AppState {
   readonly host: { readonly status: "connecting" | "ready" | "exited"; readonly detail?: string };
   readonly accounts: readonly AccountView[];
   readonly runtimes: readonly RuntimeView[];
+  /** Provider-neutral catalog; each option carries its internal runtime route. */
+  readonly models: readonly ModelView[];
   readonly projects: readonly ProjectView[];
   /** Workspaces of the selected project. */
   readonly workspaces: readonly WorkspaceView[];
@@ -93,6 +96,7 @@ export const INITIAL_STATE: AppState = {
   host: { status: "connecting" },
   accounts: [],
   runtimes: [],
+  models: [],
   projects: [],
   workspaces: [],
   sessions: [],
