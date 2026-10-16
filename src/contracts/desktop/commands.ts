@@ -81,7 +81,7 @@ export interface StartRunParams {
   /** IDs of session-owned copies, resolved by the host rather than trusting client paths. */
   readonly attachmentIds?: readonly string[];
   readonly sessionId: string;
-  readonly projectId: string;
+  readonly projectId?: string;
   readonly providerId: string;
   readonly runtimeId: string;
   /** Omit to let the Accounts service choose the selected or fallback account. */
@@ -93,6 +93,9 @@ export interface StartRunParams {
   /** An option from the selected model's `speeds`; omit for the provider default. */
   readonly speed?: string;
   readonly permissionMode: PermissionMode;
+  readonly interactionMode?: "normal" | "plan";
+  readonly skillIds?: readonly string[];
+  readonly approvedPlanRunId?: string;
 }
 
 type NoParams = Record<string, never>;
@@ -116,10 +119,13 @@ export interface HostCommandMap {
   "reviews.sync": { params: { projectId: string; remote: string; id: number }; result: { checkpointId: string } };
   "usage.report": { params: { projectId?: string; days: number }; result: UsageReport };
 
+  "sessions.files.list": { params: { readonly sessionId: string; readonly path: string }; result: FileListing };
+  "sessions.files.read": { params: { readonly sessionId: string; readonly path: string }; result: FileDocument };
+  "sessions.files.save": { params: { readonly sessionId: string; readonly path: string; readonly text: string; readonly version: string }; result: FileDocument };
   "files.list": { params: { projectId: string; path: string }; result: FileListing };
   "files.read": { params: { projectId: string; path: string }; result: FileDocument };
   "files.save": { params: { projectId: string; path: string; text: string; version: string }; result: FileDocument };
-  "terminal.open": { params: { projectId: string; sessionId?: string; cols: number; rows: number }; result: TerminalSnapshot };
+  "terminal.open": { params: { projectId?: string; sessionId?: string; cols: number; rows: number }; result: TerminalSnapshot };
   "terminal.read": { params: { terminalId: string; after: number }; result: TerminalSnapshot };
   "terminal.write": { params: { terminalId: string; data: string }; result: null };
   "terminal.resize": { params: { terminalId: string; cols: number; rows: number }; result: null };
@@ -159,9 +165,12 @@ export interface HostCommandMap {
   /** Omit `projectId` to list sessions from every project. */
   "sessions.list": { params: { readonly projectId?: string }; result: readonly SessionSummaryView[] };
   "sessions.create": {
-    params: { readonly projectId: string; readonly title?: string };
+    params: { readonly projectId?: string; readonly title?: string };
     result: SessionView;
   };
+  "skills.list": { params: { readonly sessionId: string; readonly runtimeId: string; readonly accountId: string }; result: import("../../core/execution/types.js").SkillCatalog };
+  "sessions.attachProject": { params: { readonly sessionId: string; readonly projectId: string }; result: SessionView };
+  "sessions.directory": { params: { readonly sessionId: string; readonly chatFiles?: boolean }; result: string };
   "sessions.get": { params: { readonly sessionId: string }; result: SessionView };
   "sessions.attachFiles": { params: { readonly sessionId: string; readonly paths: readonly string[] }; result: readonly SessionAttachment[] };
   "sessions.remove": { params: { readonly sessionId: string; readonly force?: boolean }; result: null };
@@ -245,10 +254,13 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "reviews.sync": object({ projectId: id, remote: id, id: integer(1, 2147483647) }),
   "usage.report": object({ projectId: optional(id), days: integer(1, 365) }),
 
+  "sessions.files.list": object({ sessionId: id, path: text({ allowEmpty: true }) }),
+  "sessions.files.read": object({ sessionId: id, path: text() }),
+  "sessions.files.save": object({ sessionId: id, path: text(), text: text({ allowEmpty: true, maxLength: 1_048_576 }), version: text({ maxLength: 64 }) }),
   "files.list": object({ projectId: id, path: text({ allowEmpty: true }) }),
   "files.read": object({ projectId: id, path: text() }),
   "files.save": object({ projectId: id, path: text(), text: text({ allowEmpty: true, maxLength: 1_048_576 }), version: text({ maxLength: 64 }) }),
-  "terminal.open": object({ projectId: id, sessionId: optional(id), cols: integer(2, 500), rows: integer(1, 300) }),
+  "terminal.open": object({ projectId: optional(id), sessionId: optional(id), cols: integer(2, 500), rows: integer(1, 300) }),
   "terminal.read": object({ terminalId: id, after: integer(0, Number.MAX_SAFE_INTEGER) }),
   "terminal.write": object({ terminalId: id, data: text({ allowEmpty: true, maxLength: 65_536 }) }),
   "terminal.resize": object({ terminalId: id, cols: integer(2, 500), rows: integer(1, 300) }),
@@ -283,7 +295,10 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
     startingRevision: optional(id),
   }),
   "sessions.list": object({ projectId: optional(id) }),
-  "sessions.create": object({ projectId: id, title: optional(text({ maxLength: 256 })) }),
+  "sessions.create": object({ projectId: optional(id), title: optional(text({ maxLength: 256 })) }),
+  "skills.list": object({ sessionId: id, runtimeId: id, accountId: id }),
+  "sessions.attachProject": object({ sessionId: id, projectId: id }),
+  "sessions.directory": object({ sessionId: id, chatFiles: optional(boolean) }),
   "sessions.get": object({ sessionId: id }),
   "sessions.attachFiles": object({ sessionId: id, paths: array(text(), MAX_ATTACHMENTS) }),
   "sessions.remove": object({ sessionId: id, force: optional(boolean) }),
@@ -296,7 +311,10 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "runs.start": object({
     attachmentIds: optional(array(id, MAX_ATTACHMENTS)),
     sessionId: id,
-    projectId: id,
+    projectId: optional(id),
+    interactionMode: optional(oneOf(["normal", "plan"])),
+    skillIds: optional(array(id, 16)),
+    approvedPlanRunId: optional(id),
     providerId: id,
     runtimeId: id,
     accountId: optional(id),

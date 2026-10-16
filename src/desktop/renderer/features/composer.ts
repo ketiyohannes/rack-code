@@ -1,3 +1,4 @@
+import { createSkillsPicker } from "./skills-picker.js";
 /**
  * Run composer. Provider runtimes are implementation details: the only
  * provider-facing choice is a model from the unified catalog. The selected
@@ -36,6 +37,13 @@ const MODE_ICONS: Readonly<Record<PermissionMode, Parameters<typeof icon>[0]>> =
 export function mountComposer(root: HTMLElement, store: Store, controller: Controller): void {
   let mode: PermissionMode = "approve_for_me";
   let submitting = false;
+  let workflow: "normal" | "plan" = "normal";
+  let draftSession: string | undefined;
+  let workflowInitializedFor: string | undefined;
+  const drafts = new Map<string, { prompt: string; workflow: "normal" | "plan" }>();
+  const skills = createSkillsPicker(controller, () => refresh(store.get()));
+  const planToggle = h("button", { class: "dropdown dropdown-pill plan-toggle", type: "button", aria: { label: "Plan mode", pressed: "false" }, title: "Research and plan before implementing", onClick: () => { workflow = workflow === "plan" ? "normal" : "plan"; refresh(store.get()); } }, icon("list-checks"), "Plan");
+  const planCard = h("div", { class: "plan-ready", role: "region", aria: { label: "Plan ready for review" } });
   const attachments = createAttachmentPicker(controller, () => refresh(store.get()));
 
   const permission = createDropdown<PermissionMode>({
@@ -65,12 +73,14 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   } },
     createQuestionRequests(store, controller),
     guard,
+    planCard,
     h("div", { class: "composer-card" },
       attachments.list,
+      skills.chips,
       prompt,
       h("div", { class: "composer-toolbar" },
         attachments.trigger,
-        h("div", { class: "composer-pills" }, permission.element, account.element, connectPill, model.element),
+        h("div", { class: "composer-pills" }, planToggle, permission.element, skills.trigger, account.element, connectPill, model.element),
         send,
       ),
     ),
@@ -84,6 +94,9 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     }
   });
   prompt.addEventListener("input", () => { autoGrow(); refresh(store.get()); });
+  prompt.addEventListener("keydown", (event) => {
+    if (event.key === "/" && prompt.value === "" && !event.ctrlKey && !event.metaKey && !skills.trigger.disabled) { event.preventDefault(); skills.open(); }
+  });
 
   // Bubble-phase handling lets menus and dialogs consume Escape first. It
   // stops only this session's active run and never clears the draft prompt.
@@ -109,7 +122,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     return Object.values(state.live).find((live) => live.run.sessionId === state.session?.id && isActiveStatus(live.run.status))?.run.id;
   }
 
-  async function submitOrStop(): Promise<void> {
+  async function submitOrStop(approvedPlanRunId?: string): Promise<void> {
     const state = store.get();
     const active = activeRunId(state);
     if (active !== undefined) {
@@ -122,19 +135,21 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     const text = prompt.value.trim();
     const draft = session === undefined ? [] : attachments.files(session.id);
     const rawPrompt = prompt.value;
-    if (submitting || attachments.busy || session === undefined || selected === undefined || choice === undefined || (text === "" && draft.length === 0) || !canRun(state)) return;
+    if (submitting || attachments.busy || session === undefined || selected === undefined || choice === undefined || (text === "" && draft.length === 0 && !approvedPlanRunId) || !canRun(state)) return;
     submitting = true;
     refresh(state);
     const reasoningEffort = model.reasoningEffort;
     const chosenSpeed = model.speed;
     const ok = await controller.startRun({
-      sessionId: session.id, projectId: session.projectId,
+      sessionId: session.id, ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
       runtimeId: selected.runtimeId, providerId: selected.providerId,
       ...(choice.accountId === undefined ? {} : { accountId: choice.accountId }),
       ...(selected.id === "default" ? {} : { model: selected.id }),
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       ...(chosenSpeed === undefined ? {} : { speed: chosenSpeed }),
-      prompt: text, permissionMode: mode,
+      prompt: text, permissionMode: mode, interactionMode: approvedPlanRunId ? "normal" : workflow,
+      ...(approvedPlanRunId ? { approvedPlanRunId } : {}),
+      ...(skills.ids().length ? { skillIds: skills.ids() } : {}),
       ...(draft.length === 0 ? {} : { attachmentIds: draft.map((file) => file.id) }),
     });
     submitting = false;
@@ -187,8 +202,23 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   }
 
   function refresh(state: AppState): void {
+    if (draftSession !== state.selection.sessionId) {
+      if (draftSession && workflowInitializedFor === draftSession) drafts.set(draftSession, { prompt: prompt.value, workflow });
+      draftSession = state.selection.sessionId;
+      const draft = draftSession ? drafts.get(draftSession) : undefined;
+      prompt.value = draft?.prompt ?? "";
+      workflow = draft?.workflow ?? "normal";
+      workflowInitializedFor = draft ? draftSession : undefined;
+      autoGrow();
+    }
+    // Session metadata/history arrive after selection. Restore the persisted
+    // workflow only once they belong to this chat, without overwriting a draft.
+    if (draftSession && workflowInitializedFor !== draftSession && state.session?.id === draftSession) {
+      workflow = state.runs.at(-1)?.interactionMode ?? "normal";
+      workflowInitializedFor = draftSession;
+    }
     const activeId = activeRunId(state);
-    if (activeId !== undefined) mode = state.live[activeId]!.run.permissionMode;
+    if (activeId !== undefined) { mode = state.live[activeId]!.run.permissionMode; workflow = state.live[activeId]!.run.interactionMode ?? "normal"; }
     model.update(state.models, state.favoriteModelKeys);
     const selected = selectedModel();
     const targetProvider = selected?.providerId;
@@ -242,9 +272,22 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     guard.classList.toggle("approval-open", approvals.length > 0);
 
     const noSession = state.session === undefined || state.selection.sessionId !== state.session.id || state.host.status !== "ready";
+    const targetAccount = effectiveAccount(state);
+    skills.update(state.session && selected && targetAccount ? { sessionId: state.session.id, runtimeId: selected.runtimeId, accountId: targetAccount.id, ...(state.session.projectId === undefined ? {} : { projectId: state.session.projectId }) } : undefined, noSession || submitting || activeId !== undefined);
+    planToggle.disabled = noSession || submitting || activeId !== undefined;
+    planToggle.setAttribute("aria-pressed", String(workflow === "plan"));
+    planToggle.classList.toggle("active", workflow === "plan");
+    const latest = state.runs.at(-1);
+    const readyPlan = latest?.interactionMode === "plan" && latest.status === "completed" && latest.result?.trim() && activeId === undefined ? latest : undefined;
+    planCard.hidden = !readyPlan;
+    if (readyPlan) replace(planCard,
+      h("div", { class: "plan-ready-label" }, icon("list-checks"), h("span", {}, "Plan ready"), h("span", { class: "note" }, "Review the plan above before implementing.")),
+      h("div", { class: "plan-ready-actions" },
+        h("button", { class: "button button-small", type: "button", disabled: submitting, onClick: () => { workflow = "plan"; prompt.focus(); refresh(store.get()); } }, "Revise plan"),
+        h("button", { class: "button button-primary button-small", type: "button", disabled: submitting || !canRun(state), onClick: () => { workflow = "normal"; void submitOrStop(readyPlan.id); } }, "Implement")));
     prompt.disabled = noSession || submitting;
     attachments.update(state.session?.id, noSession || submitting);
-    prompt.placeholder = state.session === undefined ? "Open or start a session to run an agent" : "Ask the agent to do something";
+    prompt.placeholder = state.session === undefined ? "Open or start a session to run an agent" : workflow === "plan" ? "Describe what you want to plan…" : "Ask anything, or describe a task…";
     // The selection is sent when a run starts, not changed mid-turn. Keep
     // the picker truthful while active instead of showing a future setting.
     permission.setDisabled(noSession || activeId !== undefined);

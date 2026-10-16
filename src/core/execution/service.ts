@@ -33,7 +33,8 @@ import type { AppTool, RuntimeAppTool } from "./app-tools.js";
 export interface StartRunInput {
   readonly attachmentIds?: readonly string[];
   readonly sessionId: string;
-  readonly projectId: string;
+  /** Absent for a standalone chat. */
+  readonly projectId?: string;
   readonly providerId: string;
   readonly runtimeId: string;
   readonly accountId?: string;
@@ -44,6 +45,9 @@ export interface StartRunInput {
   /** Speed option from the model catalog; omit for the provider default. */
   readonly speed?: string;
   readonly permissionMode: PermissionMode;
+  readonly interactionMode?: "normal" | "plan";
+  readonly skillIds?: readonly string[];
+  readonly approvedPlanRunId?: string;
 }
 
 export interface ExecutionHandle {
@@ -79,6 +83,7 @@ export class ExecutionService {
   private readonly tools: ExecutionServiceOptions["tools"];
   private readonly cancelTimeoutMs: number;
   private initialization: Promise<void> | undefined;
+  private readonly activeSessions = new Set<string>();
   private readonly activeRunIds = new Set<string>();
 
   constructor(
@@ -103,28 +108,61 @@ export class ExecutionService {
     })();
   }
 
+  /** Discovers through the selected account; paths supplied by clients are never trusted. */
+  async listSkills(sessionId: string, runtimeId: string, accountId: string): Promise<import("./types.js").SkillCatalog> {
+    const session = await this.sessions.get(sessionId);
+    const account = await this.accounts.get(accountId);
+    const runtime = this.runtimes.get(runtimeId);
+    if (runtime.providerId !== undefined && runtime.providerId !== account.providerId) throw new AccountProviderMismatchError(accountId, runtime.providerId ?? runtimeId, account.providerId);
+    const projectPath = session.projectId === undefined ? await this.sessions.workspace(sessionId) : (await this.projects.getProject(session.projectId)).path;
+    return runtime.skills?.({ account: { accountId: account.id, providerId: account.providerId, credential: account.credential, runtimeContextId: account.runtimeContextId }, projectPath }) ?? { skills: [], errors: ["This runtime does not expose installed skills."] };
+  }
+
   async start(input: StartRunInput): Promise<ExecutionHandle> {
+    if (this.activeSessions.has(input.sessionId)) throw new InvalidSessionError("This conversation is already running.");
+    this.activeSessions.add(input.sessionId);
+    try { return await this.startReserved(input); }
+    catch (error) { this.activeSessions.delete(input.sessionId); throw error; }
+  }
+
+  private async startReserved(input: StartRunInput): Promise<ExecutionHandle> {
     await this.initialize();
-    // A session belongs to exactly one project. Reject mismatched references
-    // before creating a run or acquiring a writer, including headless callers.
     const session = await this.sessions.get(input.sessionId);
-    const project = await this.projects.getProject(input.projectId);
-    if (session.projectId !== project.id) {
-      throw new InvalidSessionError("The run's project must match its session's project.");
-    }
-    input = { ...input, projectId: project.id };
+    const project = input.projectId === undefined ? undefined : await this.projects.getProject(input.projectId);
+    if (session.projectId !== project?.id) throw new InvalidSessionError("The run's project must match its session's project.");
+    if (project) input = { ...input, projectId: project.id };
+    const projectPath = project?.path ?? await this.sessions.workspace(session.id);
     const attachments = await this.sessions.resolveAttachments(input.sessionId, input.attachmentIds ?? []);
-    if (input.prompt.trim() === "" && attachments.length === 0) throw new InvalidSessionError("A prompt or attachment is required.");
+    let approvedPlan: string | undefined;
+    if (input.approvedPlanRunId !== undefined) {
+      const plan = await this.getRun(input.approvedPlanRunId);
+      const runs = await this.store.listRuns(session.id);
+      const newest = [...runs].reverse().sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      if (plan.sessionId !== session.id || plan.interactionMode !== "plan" || plan.status !== "completed" || !plan.result?.trim()
+        || newest?.id !== plan.id || input.interactionMode === "plan") throw new InvalidSessionError("Choose the latest completed plan in this conversation.");
+      approvedPlan = plan.result;
+    }
+    if (input.prompt.trim() === "" && attachments.length === 0 && approvedPlan === undefined) throw new InvalidSessionError("A prompt or attachment is required.");
     const account = await this.resolveAccount(input);
     const runtime = this.runtimes.get(input.runtimeId);
+    if (runtime.providerId !== undefined && runtime.providerId !== account.providerId) throw new AccountProviderMismatchError(account.id, runtime.providerId, account.providerId);
+    const catalog = input.skillIds?.length ? await this.listSkills(input.sessionId, input.runtimeId, account.id) : { skills: [], errors: [] };
+    const skills = (input.skillIds ?? []).map((id) => {
+      const skill = catalog.skills.find((entry) => entry.id === id && entry.enabled);
+      if (!skill) throw new InvalidSessionError("A selected skill is no longer available for this account and conversation. Refresh skills.");
+      return skill;
+    });
+    if (skills.length > 16 || new Set(input.skillIds).size !== skills.length) throw new InvalidSessionError("Choose up to 16 distinct skills.");
+    const effectivePermission = input.interactionMode === "plan" ? "read_only" : input.permissionMode;
+    const runtimePrompt = approvedPlan === undefined ? input.prompt : `Implement this explicitly approved plan:\n\n${approvedPlan}\n\n${input.prompt}`;
     const runId = this.createId();
     const attemptId = this.createId();
     const timestamp = this.now().toISOString();
     const run: RunRecord = {
       id: runId,
       sessionId: input.sessionId,
-      projectId: input.projectId,
-      prompt: input.prompt,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      prompt: input.prompt.trim() || (approvedPlan ? "Implement the approved plan." : input.prompt),
       ...(attachments.length === 0 ? {} : { attachments }),
       providerId: input.providerId,
       accountId: account.id,
@@ -132,6 +170,9 @@ export class ExecutionService {
       ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
       ...(input.speed === undefined ? {} : { speed: input.speed }),
       permissionMode: input.permissionMode,
+      ...(input.interactionMode === undefined ? {} : { interactionMode: input.interactionMode }),
+      ...(input.approvedPlanRunId === undefined ? {} : { approvedPlanRunId: input.approvedPlanRunId }),
+      ...(skills.length === 0 ? {} : { skills }),
       status: "queued",
       attemptIds: [attemptId],
       createdAt: timestamp,
@@ -199,10 +240,11 @@ export class ExecutionService {
 
     this.activeRunIds.add(runId);
     const completed = this.consume({
-      input,
+      input: { ...input, prompt: runtimePrompt, permissionMode: effectivePermission },
+      skills,
       account,
       runtime,
-      projectPath: project.path,
+      projectPath,
       run: currentRun,
       attempt: currentAttempt,
       controller,
@@ -224,7 +266,8 @@ export class ExecutionService {
     });
     // Observe rejection immediately even if the host is still building the
     // start reply; callers can still await the original rejecting promise.
-    void completed.then(() => this.activeRunIds.delete(runId), () => this.activeRunIds.delete(runId));
+    const release = () => { this.activeRunIds.delete(runId); this.activeSessions.delete(input.sessionId); };
+    void completed.then(release, release);
 
     return {
       runId,
@@ -322,14 +365,15 @@ export class ExecutionService {
 
     try {
       const attachedPrompt = promptWithAttachments(input.prompt, run.attachments ?? []);
-      await this.projects.acquireWriter(input.projectId, attempt.id);
+      const workflowPrompt = `${input.projectId === undefined ? "This is a general conversation. Help with questions, research and documents as well as code. Your working folder is this chat’s private file workspace. Save generated files there.\n\n" : ""}${input.interactionMode === "plan" ? "PLAN MODE: Research and propose a complete actionable plan. Do not implement or modify files, execute mutating commands, or perform external mutations. End with the plan for the user to review. Only the user can authorize a later implementation turn.\n\n" : ""}${attachedPrompt}`;
+      if (input.projectId !== undefined) await this.projects.acquireWriter(input.projectId, attempt.id);
       currentRun = await this.updateRun(currentRun, "running");
       currentAttempt = await this.updateAttempt(currentAttempt, "running");
       onRun(currentRun);
       onAttempt(currentAttempt);
       await this.sessions.appendMessage(input.sessionId, {
         role: "user",
-        content: attachedPrompt,
+        content: promptWithAttachments(run.prompt, run.attachments ?? []),
         metadata: { runId: currentRun.id, attemptId: currentAttempt.id },
       });
       await this.accounts.markUsed(account.id);
@@ -363,7 +407,9 @@ export class ExecutionService {
           runtimeContextId: account.runtimeContextId,
         },
         projectPath,
-        prompt: attachedPrompt,
+        prompt: workflowPrompt,
+        interactionMode: input.interactionMode ?? "normal",
+        ...(context.skills.length === 0 ? {} : { skills: context.skills }),
         ...(input.model === undefined ? {} : { model: input.model }),
         ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
         ...(input.speed === undefined ? {} : { speed: input.speed }),
@@ -386,15 +432,15 @@ export class ExecutionService {
         runtime.runtimeId,
         account.runtimeContextId,
       );
-      // An external snapshot has no resumable state in Rack's isolated account
-      // context. Give a fresh native thread the recent visible conversation,
+      // Imports, account handoffs and project attachment can need a fresh native
+      // thread. Seed it with the recent visible conversation,
       // quoted as historical context; do not replay tool calls or copy secrets.
       if (continuation === undefined) {
         const session = await this.sessions.get(input.sessionId);
-        if (session.importSource !== undefined) {
+        if (session.messages.length > 1) {
           const context = importedConversationContext(session.messages.filter((message) =>
             message.metadata?.["runId"] !== currentRun.id));
-          runtimeInput = { ...runtimeInput, prompt: `${context}\n\nCurrent request:\n${attachedPrompt}` };
+          runtimeInput = { ...runtimeInput, prompt: `${context}\n\nCurrent request:\n${workflowPrompt}` };
         }
       }
       if (controller.signal.aborted) throw new Error("Execution was interrupted.");
@@ -498,14 +544,15 @@ export class ExecutionService {
           // Final run persistence below still reports its own storage failures.
         }
         try {
-          await this.projects.releaseWriter(input.projectId, currentAttempt.id);
+          if (input.projectId !== undefined) await this.projects.releaseWriter(input.projectId, currentAttempt.id);
         } catch {
           // Preserve the original run outcome; a stale lock is recoverable from
           // the project record and is surfaced by the next start attempt.
         }
         currentAttempt = await this.updateAttempt(currentAttempt, terminalStatus);
+        if (!terminalResult?.trim() && getAssistantText().trim()) terminalResult = getAssistantText();
         currentRun = await this.updateRun(currentRun, terminalStatus, {
-          ...(terminalResult === undefined ? {} : { result: terminalResult }),
+          ...((terminalResult ?? getAssistantText()).trim() === "" ? {} : { result: terminalResult ?? getAssistantText() }),
           ...(terminalError === undefined ? {} : { error: terminalError }),
         });
         onAttempt(currentAttempt);
@@ -558,6 +605,7 @@ export class ExecutionService {
 
 interface ConsumeContext {
   readonly input: StartRunInput;
+  readonly skills: readonly import("./types.js").RuntimeSkill[];
   readonly account: AccountRecord;
   readonly runtime: ReturnType<RuntimeRegistry["get"]>;
   readonly projectPath: string;

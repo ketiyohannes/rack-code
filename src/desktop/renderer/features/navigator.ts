@@ -1,14 +1,13 @@
 /**
  * Unified project navigator.
  *
- * A project is the only selectable folder entity in the desktop. Sessions
- * attach directly to it in both the UI and the application model.
+ * Chats stand alone; project sessions attach directly to a selected folder.
  *
  * Adding a project uses the native folder picker, and a session is created
  * directly from a project row. There are deliberately no editable
  * setup fields here: paths and names come from the folder the user chooses.
  */
-import type { ProjectView } from "../../../contracts/desktop/index.js";
+import type { ProjectView, SessionSummaryView } from "../../../contracts/desktop/index.js";
 import type { Controller } from "../controller.js";
 import { h, label, replace, relativeTime, shortId } from "../dom.js";
 import { icon } from "../icons.js";
@@ -126,10 +125,13 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
   }
 
   const tree = h("div", { class: "tree" });
+  const chats = h("div", { class: "tree chat-tree" });
   const add = iconButton("folder-simple-plus", "Add project", () => void addProject());
 
   root.append(
     h("div", { class: "sidebar-sessions sidebar-projects-unified" },
+      h("button", { class: "button new-chat-button", type: "button", onClick: () => void controller.createSession() }, icon("plus"), "New chat"),
+      h("div", { class: "nav-heading" }, label("Chats")), chats,
       h("div", { class: "nav-heading" }, label("Projects"), add),
       tree,
     ),
@@ -150,6 +152,10 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
   function renderTree(state: AppState): void {
     const running = new Set(runningKey(state).split("|"));
     const waiting = new Set(waitingKey(state).split("|"));
+    const chatSessions = state.sessions.filter((session) => session.projectId === undefined);
+    const chatIds = order("chats", chatSessions.map((session) => session.id));
+    replace(chats, ...chatIds.map((id) => renderSession(chatSessions.find((session) => session.id === id)!, state, running, waiting, "chats", chatIds)),
+      chatIds.length === 0 ? h("p", { class: "empty tree-empty" }, "Questions, research, or a fresh idea.") : null);
     if (state.projects.length === 0) {
       replace(tree, h("button", { class: "empty-card empty-action", onClick: () => void addProject() },
         icon("folder-simple-plus"), h("span", {}, "Add a project folder")));
@@ -215,7 +221,17 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
 
     if (isOpen) {
       const children = h("div", { class: "tree-children" },
-        ...sessions.map((session) => {
+        ...sessions.map((session) => renderSession(session, state, running, waiting, `sessions.${project.id}`, sessionIds)),
+        sessions.length === 0
+          ? h("p", { class: "empty tree-empty" }, "No sessions yet. Use + to start one.")
+          : null,
+      );
+      group.append(children);
+    }
+    return group;
+  }
+
+  function renderSession(session: SessionSummaryView, state: AppState, running: Set<string>, waiting: Set<string>, scope: string, sessionIds: string[]): HTMLElement {
           const isRunning = running.has(session.id);
           const isWaiting = waiting.has(session.id);
           const row = h("button", {
@@ -231,35 +247,27 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
                 className: isRunning ? "nav-icon spin" : "nav-icon",
                 ...(isRunning ? { label: "Agent running" } : {}),
               }),
-            h("span", { class: "nav-title" }, session.title ?? `Session ${shortId(session.id)}`),
+            h("span", { class: "nav-title" }, session.title ?? (session.projectId === undefined ? "New chat" : `Session ${shortId(session.id)}`)),
             // Status is an icon plus a word: the age gives way to the request.
             isWaiting
               ? h("span", { class: "nav-age approval-flag" }, "Needs input")
               : h("span", { class: "nav-age" }, relativeTime(session.updatedAt)),
           );
-          const title = session.title ?? `Session ${shortId(session.id)}`;
+          const title = session.title ?? (session.projectId === undefined ? "New chat" : `Session ${shortId(session.id)}`);
           const remove = iconButton("trash-simple", `Remove session: ${title}`, () => removeSession(session.id, title), "tree-remove");
           if (isRunning) remove.title = "Stop and delete this running session";
           // Separate sibling buttons keep navigation and removal accessible
           // without nesting interactive elements or selecting on removal.
           const container = h("div", { class: "tree-session-row" }, row, remove);
-          draggable(container, `sessions.${project.id}`, session.id, sessionIds);
+          draggable(container, scope, session.id, sessionIds);
           return container;
-        }),
-        sessions.length === 0
-          ? h("p", { class: "empty tree-empty" }, "No sessions yet. Use + to start one.")
-          : null,
-      );
-      group.append(children);
-    }
-    return group;
   }
 
   store.watch(
     (state) => [state.projects, state.sessions, state.selection.projectId, state.selection.sessionId, runningKey(state), waitingKey(state)],
     (_slice, state) => {
       const selectedSession = state.sessions.find((session) => session.id === state.selection.sessionId);
-      if (selectedSession !== undefined && !expanded.has(selectedSession.projectId)) {
+      if (selectedSession?.projectId !== undefined && !expanded.has(selectedSession.projectId)) {
         expanded.add(selectedSession.projectId);
         saveExpanded(expanded);
       }

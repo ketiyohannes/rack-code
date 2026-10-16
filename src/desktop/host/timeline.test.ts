@@ -76,7 +76,7 @@ async function setup(options: { timeline?: boolean; snapshots?: SnapshotReposito
       project: async (projectId) => ({ projectPath: (await projects.getProject(projectId)).path }),
       session: async (sessionId) => {
         const session = await sessions.get(sessionId);
-        const project = await projects.getProject(session.projectId);
+        const project = await projects.getProject(session.projectId!);
         return { sessionId, projectId: project.id, projectPath: project.path };
       },
       projectBusy: async (projectId) => (await projects.getProject(projectId)).activeWriterAttemptId !== undefined,

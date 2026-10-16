@@ -385,3 +385,31 @@ test("only explicitly confirmed deletion sends force and cancellation errors res
   await controller.cancelRun(run.id);
   assert.equal(store.get().live[run.id]?.cancelRequested, false);
 });
+
+test("switching from a project to chat clears project selection and discards a late project model catalog", async () => {
+  const store = new ImmediateStore();
+  const chat = { id: "chat", messages: [], continuations: [], createdAt: stamp, updatedAt: stamp };
+  store.update((state) => ({ ...state, host: { status: "ready" }, sessions: [
+    { ...session, messageCount: 0 }, { ...chat, messageCount: 0 },
+  ] }));
+  let finish!: (value: unknown) => void;
+  const catalogs: unknown[] = [];
+  const host = { call: async (command: string, params: any) => {
+    if (command === "sessions.get") return params.sessionId === "chat" ? chat : session;
+    if (command === "models.list") {
+      catalogs.push(params);
+      if (catalogs.length === 1) return new Promise((resolve) => { finish = resolve; });
+      return { models: [], failures: [] };
+    }
+    return [];
+  } } as unknown as HostClient;
+  const controller = new Controller(host, store);
+  const projectSelection = controller.selectSession("session");
+  const chatSelection = controller.selectSession("chat");
+  finish({ models: [{ id: "stale-project-model" }], failures: [] });
+  await Promise.all([projectSelection, chatSelection]);
+  assert.equal(store.get().selection.projectId, undefined);
+  assert.equal(store.get().selection.sessionId, "chat");
+  assert.deepEqual(catalogs, [{ projectId: "project" }, {}]);
+  assert.deepEqual(store.get().models, []);
+});

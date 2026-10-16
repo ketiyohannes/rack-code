@@ -177,7 +177,7 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
 
   async function load(): Promise<void> {
     const selected = scope === "project" ? projectId : sessionId;
-    if (!active || !isVisible() || document.visibilityState === "hidden" || selected === undefined || store.get().host.status !== "ready") return;
+    if (projectId === undefined || !active || !isVisible() || document.visibilityState === "hidden" || selected === undefined || store.get().host.status !== "ready") return;
     if (inFlight) { stale = true; return; }
     inFlight = true;
     stale = false;

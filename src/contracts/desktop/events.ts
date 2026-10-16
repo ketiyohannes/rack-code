@@ -36,9 +36,9 @@ export type HostEvent =
   /** Project records changed, for example a new folder or writer lock. */
   | { readonly type: "projects.changed" }
   /** A project's sessions changed (new session, new message). */
-  | { readonly type: "sessions.changed"; readonly projectId: string; readonly sessionId: string }
+  | { readonly type: "sessions.changed"; readonly projectId?: string | undefined; readonly sessionId: string }
   /** A saved conversation was removed; clients must evict its cached history. */
-  | { readonly type: "sessions.removed"; readonly projectId: string; readonly sessionId: string }
+  | { readonly type: "sessions.removed"; readonly projectId?: string | undefined; readonly sessionId: string }
   /**
    * A session's Timeline checkpoints or settings changed (optional feature).
    * A freshness signal: clients re-read with `timeline.checkpoints`.

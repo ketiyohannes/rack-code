@@ -181,12 +181,16 @@ export class HostApi {
         if (p.projectId) await projects.getProject(p.projectId);
         return this.app.usage.report(p);
       },
+      "sessions.files.list": async (p) => this.files().forSession().list(p.sessionId, p.path),
+      "sessions.files.read": async (p) => this.files().forSession().read(p.sessionId, p.path),
+      "sessions.files.save": async (p) => this.files().forSession().save(p.sessionId, p.path, p.text, p.version),
       "files.list": async (params) => this.files().list(params.projectId, params.path),
       "files.read": async (params) => this.files().read(params.projectId, params.path),
       "files.save": async (params) => this.files().save(params.projectId, params.path, params.text, params.version),
       "terminal.open": async (params) => this.mutateSession(params.sessionId ?? `project:${params.projectId}`, async () => {
-        const project = await projects.getProject(params.projectId);
-        if (params.sessionId !== undefined && (await sessions.get(params.sessionId)).projectId !== project.id) throw new HostOperationError("invalid_input", "Terminal project does not match the selected session.");
+        const project = params.projectId === undefined ? undefined : await projects.getProject(params.projectId);
+        if (!project && !params.sessionId) throw new HostOperationError("invalid_input", "Choose a session or project for the terminal.");
+        if (params.sessionId !== undefined && (await sessions.get(params.sessionId)).projectId !== project?.id) throw new HostOperationError("invalid_input", "Terminal project does not match the selected session.");
         let native: TerminalBackend | undefined;
         if (params.sessionId !== undefined) {
           const run = [...await execution.listRuns(params.sessionId)].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -203,7 +207,7 @@ export class HostApi {
             } catch { /* Missing historical runtime/account can use the local shell. */ }
           }
         }
-        return this.terminals().open(params.sessionId === undefined ? `project:${project.id}` : `session:${params.sessionId}`, project.path, params.cols, params.rows, native);
+        return this.terminals().open(params.sessionId === undefined ? `project:${project!.id}` : `session:${params.sessionId}`, project?.path ?? await sessions.workspace(params.sessionId!), params.cols, params.rows, native);
       }),
       "terminal.read": async (params) => this.terminals().read(params.terminalId, params.after),
       "terminal.write": async (params) => { await this.terminals().write(params.terminalId, params.data); return null; },
@@ -269,7 +273,7 @@ export class HostApi {
         return (await sessions.list(projectId)).map(
         (session): SessionSummaryView => ({
           id: session.id,
-          projectId: session.projectId,
+          ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
           ...(session.title === undefined ? {} : { title: session.title }),
           messageCount: session.messages.length,
           createdAt: session.createdAt,
@@ -279,10 +283,23 @@ export class HostApi {
       },
       "sessions.create": async (params) => {
         // Validate the project before persisting the session.
-        const project = await projects.getProject(params.projectId);
-        const session = await sessions.create({ ...params, projectId: project.id });
+        const project = params.projectId === undefined ? undefined : await projects.getProject(params.projectId);
+        const session = await sessions.create({ ...params, ...(project === undefined ? {} : { projectId: project.id }) });
         this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId: session.id });
         return session;
+      },
+      "skills.list": async (p) => execution.listSkills(p.sessionId, p.runtimeId, p.accountId),
+      "sessions.attachProject": async (p) => this.mutateSession(p.sessionId, async () => {
+        if (this.activeRuns.list().some((active) => active.run.sessionId === p.sessionId)) throw new HostOperationError("session_busy", "Stop the conversation before attaching a project.");
+        const project = await projects.getProject(p.projectId);
+        await this.app.terminal?.closeContext(`session:${p.sessionId}`);
+        const session = await sessions.attachProject(p.sessionId, project.id);
+        this.emit({ type: "sessions.changed", projectId: project.id, sessionId: session.id });
+        return session;
+      }),
+      "sessions.directory": async (p) => {
+        const session = await sessions.get(p.sessionId);
+        return p.chatFiles || session.projectId === undefined ? sessions.workspace(session.id) : (await projects.getProject(session.projectId)).path;
       },
       "sessions.get": async (params) => sessions.get(params.sessionId),
       "sessions.attachFiles": async (params) => this.mutateSession(params.sessionId, () => sessions.attachFiles(params.sessionId, params.paths)),
@@ -377,14 +394,15 @@ export class HostApi {
 
       "runs.start": async (params) => this.mutateSession(params.sessionId, async () => {
         if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
-        const project = await projects.getProject(params.projectId);
-        if (project.activeWriterAttemptId !== undefined) {
+        const project = params.projectId === undefined ? undefined : await projects.getProject(params.projectId);
+        if (project?.activeWriterAttemptId !== undefined) {
           throw new HostOperationError(
             "project_busy",
             `Project '${project.id}' is already being edited by attempt '${project.activeWriterAttemptId}'.`,
             { projectId: project.id, attemptId: project.activeWriterAttemptId },
           );
         }
+        if (this.activeRuns.list().some((active) => active.run.sessionId === params.sessionId)) throw new HostOperationError("session_busy", "This conversation is already running.");
         // Read the selection before starting so a fallback can be reported.
         const selected = params.accountId === undefined
           ? await accounts.selected(params.providerId)
@@ -392,7 +410,7 @@ export class HostApi {
         // Timeline (optional) records the run-start state before the runtime
         // can edit files. It resolves to undefined when the session has not
         // opted in, and never rejects, so it cannot prevent the run.
-        const observer = await this.app.timeline?.beginRun({ sessionId: params.sessionId });
+        const observer = project === undefined ? undefined : await this.app.timeline?.beginRun({ sessionId: params.sessionId });
         let handle: Awaited<ReturnType<typeof execution.start>>;
         try {
           if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");

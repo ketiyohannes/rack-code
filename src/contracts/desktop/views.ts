@@ -85,7 +85,8 @@ export type ProjectView = ProjectRecord;
 /** Navigator row for a session; messages are loaded separately. */
 export interface SessionSummaryView {
   readonly id: string;
-  readonly projectId: string;
+  /** Absent for a standalone chat. */
+  readonly projectId?: string;
   readonly title?: string;
   readonly messageCount: number;
   readonly createdAt: string;

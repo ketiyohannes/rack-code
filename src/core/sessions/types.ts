@@ -24,8 +24,11 @@ export interface NativeContinuationReference {
 }
 
 export interface SessionRecord {
+  /** Retains access to the original file workspace after project attachment. */
+  readonly originatedAsChat?: boolean;
   readonly id: SessionId;
-  readonly projectId: string;
+  /** Absent for a standalone chat. */
+  readonly projectId?: string;
   readonly title?: string;
   readonly messages: readonly SessionMessage[];
   readonly continuations: readonly NativeContinuationReference[];
@@ -42,7 +45,8 @@ export interface SessionRecord {
 
 export interface CreateSessionInput {
   readonly id?: SessionId;
-  readonly projectId: string;
+  /** Absent for a standalone chat. */
+  readonly projectId?: string;
   readonly title?: string;
 }
 

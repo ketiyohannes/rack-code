@@ -4,7 +4,7 @@ import type { ExecutionStore } from "../../core/execution/ports.js";
 import type { AttemptId, AttemptRecord, JournalEntry, RunId, RunRecord, RunUsage } from "../../core/execution/types.js";
 
 interface ExecutionDocument {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly runs: RunRecord[];
   readonly attempts: AttemptRecord[];
   readonly journal: JournalEntry[];
@@ -12,26 +12,27 @@ interface ExecutionDocument {
 
 type LegacyRun = Omit<RunRecord, "projectId"> & { projectId?: string; workspaceId?: string };
 
-/** Durable snapshots and journal; schema 3 resolves duplicate project IDs. */
+/** Durable snapshots and journal; schema 4 admits chats and retains project migrations. */
 export class JsonExecutionStore implements ExecutionStore {
   private readonly document: JsonFileDocument<ExecutionDocument>;
 
   constructor(filePath: string, resolveProjectId: (id: string) => Promise<string> = async (id) => id) {
     this.document = new JsonFileDocument<ExecutionDocument>(filePath, {
-      schemaVersion: 3,
+      schemaVersion: 4,
       runs: [],
       attempts: [],
       journal: [],
     }, async (stored) => {
       const current = stored as ExecutionDocument;
       const version = (stored as { schemaVersion: number }).schemaVersion;
-      if (version === 3) return current;
+      if (version === 4) return current;
+      if (version === 3) return { ...current, schemaVersion: 4 };
       if (version !== 1 && version !== 2) {
         throw new Error("Unsupported execution schema version.");
       }
       return {
         ...current,
-        schemaVersion: 3,
+        schemaVersion: 4,
         // Preserve the journal, attempt IDs and outcomes exactly. Only the
         // run's folder reference changes to the canonical project name.
         runs: await Promise.all(current.runs.map(async (run) => {
@@ -57,7 +58,7 @@ export class JsonExecutionStore implements ExecutionStore {
         const entries = byRun.get(entry.runId) ?? [];
         entries.push(entry); byRun.set(entry.runId, entries);
       }
-      return value.runs.map((run) => ({ run: { id: run.id, projectId: run.projectId, providerId: run.providerId, status: run.status, createdAt: run.createdAt, ...(run.model === undefined ? {} : { model: run.model }) }, usage: byRun.get(run.id) ?? [] }));
+      return value.runs.map((run) => ({ run: { id: run.id, ...(run.projectId === undefined ? {} : { projectId: run.projectId }), providerId: run.providerId, status: run.status, createdAt: run.createdAt, ...(run.model === undefined ? {} : { model: run.model }) }, usage: byRun.get(run.id) ?? [] }));
     });
   }
 
