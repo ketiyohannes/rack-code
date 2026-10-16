@@ -1,10 +1,12 @@
+import { createApplication } from "../src/composition/application.js";
+import { HostApi } from "../src/desktop/host/host-api.js";
 /** Native smoke check for the shared Chromium view and fallback PTY.
  * Run with npm run test:desktop-features. It uses only temporary project
  * files and a loopback website; no provider login or model turn is started.
  */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { app, BrowserWindow } from "electron";
@@ -110,6 +112,42 @@ async function verify(): Promise<void> {
     await until(() => terminals.read(native.id).output.includes(`RACK_CODEX_PTY:${directory}`));
     await terminals.close(native.id);
     console.log("PASS: real Codex standalone terminal without provider login or model turn");
+
+    // Exercise the public host boundary with no Project record at all. This
+    // catches accidental project-only resolution in Files, Terminal or Browser.
+    const application = createApplication({ dataDirectory: join(directory, "application"), timeline: false, browser });
+    const host = new HostApi(application, () => {});
+    const call = async (command: string, params: unknown = {}) => {
+      const response = await host.dispatch(command, params);
+      assert.ok(response.ok, response.ok ? "" : response.error.message);
+      return response.value as any;
+    };
+    try {
+      const chat = await call("sessions.create");
+      assert.equal(chat.projectId, undefined);
+      assert.equal((await call("projects.list")).length, 0);
+      const cwd = await call("sessions.directory", { sessionId: chat.id });
+      assert.ok(cwd.includes("chat-files")); assert.ok(!cwd.includes("runtime-contexts"));
+      await writeFile(join(cwd, "report.md"), "# Generated report");
+      assert.equal((await call("sessions.files.list", { sessionId: chat.id, path: "" })).entries[0].name, "report.md");
+      const document = await call("sessions.files.read", { sessionId: chat.id, path: "report.md" });
+      await call("sessions.files.save", { sessionId: chat.id, path: "report.md", text: "# Reviewed report", version: document.version });
+      const escaped = await host.dispatch("sessions.files.read", { sessionId: chat.id, path: "../accounts.json" });
+      assert.equal(escaped.ok, false);
+      const terminal = await call("terminal.open", { sessionId: chat.id, cols: 80, rows: 24 });
+      await call("terminal.write", { terminalId: terminal.id, data: "printf '\\nRACK_CHAT_PTY:%s\\n' \"$PWD\"\n" });
+      await until(async () => (await call("terminal.read", { terminalId: terminal.id, after: 0 })).output.includes(`RACK_CHAT_PTY:${cwd}`));
+      await call("browser.control", { sessionId: chat.id, request: { action: "navigate", url } });
+      await until(async () => !(await call("browser.control", { sessionId: chat.id, request: { action: "state" } })).loading);
+      const reopened = createApplication({ dataDirectory: application.dataDirectory, timeline: false });
+      assert.equal((await reopened.sessions.get(chat.id)).originatedAsChat, true);
+      assert.equal(await reopened.sessions.workspace(chat.id), cwd);
+      await call("sessions.remove", { sessionId: chat.id });
+      assert.equal((await call("sessions.list")).length, 0);
+      assert.equal((await host.dispatch("terminal.read", { terminalId: terminal.id, after: 0 })).ok, false);
+      console.log("PASS: project-free chat persistence, safe Files read/save, private PTY cwd, Browser and deletion cleanup");
+    } finally { await host.shutdown(); }
+
   } catch (error) {
     console.error(error);
     process.exitCode = 1;

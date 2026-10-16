@@ -3,29 +3,30 @@ import type { SessionStore } from "../../core/sessions/ports.js";
 import type { SessionId, SessionRecord } from "../../core/sessions/types.js";
 
 interface SessionDocument {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly sessions: SessionRecord[];
 }
 
 type LegacySession = Omit<SessionRecord, "projectId"> & { projectId?: string; workspaceId?: string };
 
-/** Durable sessions; schema 3 folds duplicate folder IDs into one project. */
+/** Durable sessions; schema 4 admits standalone chats and retains project migrations. */
 export class JsonSessionStore implements SessionStore {
   private readonly document: JsonFileDocument<SessionDocument>;
 
   constructor(filePath: string, resolveProjectId: (id: string) => Promise<string> = async (id) => id) {
     this.document = new JsonFileDocument<SessionDocument>(filePath, {
-      schemaVersion: 3,
+      schemaVersion: 4,
       sessions: [],
     }, async (stored) => {
       const current = stored as SessionDocument;
       const version = (stored as { schemaVersion: number }).schemaVersion;
-      if (version === 3) return current;
+      if (version === 4) return current;
+      if (version === 3) return { ...current, schemaVersion: 4 };
       if (version !== 1 && version !== 2) {
         throw new Error("Unsupported sessions schema version.");
       }
       return {
-        schemaVersion: 3,
+        schemaVersion: 4,
         // Both older formats identify the actual folder with workspaceId.
         // It takes precedence over the obsolete parent projectId. Native
         // continuations and messages stay untouched for provider resume.

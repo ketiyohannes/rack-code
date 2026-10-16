@@ -3857,3 +3857,30 @@ html.resizing * {
   .theme-choices { grid-template-columns: 1fr; }
   .connect-buttons { grid-template-columns: 1fr; }
 }
+
+/* General conversations share Rack's session rows and compact composer. */
+.new-chat-button { margin: 10px 12px 4px; justify-content: flex-start; width: calc(100% - 24px); gap: 9px; }
+.chat-tree { padding: 0 8px 10px; }
+.attach-project-list { display: flex; flex-direction: column; gap: 10px; }
+.attach-project-list > button { justify-content: flex-start; overflow-wrap: anywhere; }
+.plan-toggle[aria-pressed="true"] { color: var(--primary); background: var(--inset); border-color: var(--primary); }
+.plan-ready { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; background: var(--card); }
+.plan-ready[hidden], .skill-chips[hidden] { display: none; }
+.plan-ready-label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.plan-ready-label .note { flex-basis: 100%; margin: 0; }
+.plan-ready-actions { display: flex; flex-shrink: 0; gap: 6px; }
+.skill-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
+.skill-chip { display: inline-flex; align-items: center; gap: 7px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--card); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.skill-chip svg { width: 12px; height: 12px; }
+.skills-modal { max-width: 600px; }
+.skills-list { display: flex; flex-direction: column; gap: 4px; max-height: 48vh; overflow-y: auto; margin: 12px 0; }
+.skill-option { display: flex; flex-direction: column; align-items: stretch; text-align: left; gap: 5px; padding: 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.skill-option:hover { background: var(--overlay); }
+.skill-option[aria-pressed="true"] { border-color: var(--primary); background: var(--inset); }
+.skill-option:disabled { opacity: .5; cursor: default; }
+.skill-option-title { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.skill-option .note { margin: 0; line-height: 1.5; }
+.composer-pills { flex-wrap: wrap; }
+@media (max-width: 760px) { .plan-ready { flex-direction: column; align-items: flex-start; } }
+
+.turn-workflow { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; font-size: 12px; }

@@ -11,6 +11,7 @@ import type { TerminalSnapshot } from "../../../features/terminal/types.js";
 interface Client { terminal: Terminal; fit: FitAddon; element: HTMLElement; id: string; offset: number; exited: boolean; backend: string; writes: Promise<unknown>; opened: boolean; exitCode?: number }
 export function createTerminalPanel(store: Store, controller: Controller, isVisible: () => boolean) {
   let active = false; let generation = 0; let loading = false; let reading = false;
+  let selectedProjectId: string | undefined;
   let selected: string | undefined; let current: Client | undefined;
   const clients = new Map<string, Client>();
   const status = h("span", { class: "terminal-status" });
@@ -21,7 +22,7 @@ export function createTerminalPanel(store: Store, controller: Controller, isVisi
   const close = h("button", { class: "button button-small", type: "button", onClick: () => void closeCurrent() }, "Close");
   const element = h("div", { class: "terminal-panel" }, h("div", { class: "terminal-toolbar" }, status, restart, close), error, viewport);
 
-  function renderStatus(): void { status.textContent = loading ? "Opening shell…" : current === undefined ? "Project terminal" : `${current.backend}${current.exited ? ` · Exited${current.exitCode === undefined ? "" : ` (${current.exitCode})`}` : ""}`; restart.disabled = loading || store.get().selection.projectId === undefined; close.disabled = loading || current === undefined; }
+  function renderStatus(): void { status.textContent = loading ? "Opening shell…" : current === undefined ? "Project terminal" : `${current.backend}${current.exited ? ` · Exited${current.exitCode === undefined ? "" : ` (${current.exitCode})`}` : ""}`; restart.disabled = loading || (store.get().selection.projectId === undefined && store.get().selection.sessionId === undefined); close.disabled = loading || current === undefined; }
   function fit(): void {
     if (!active || !isVisible() || current === undefined || viewport.clientWidth === 0 || viewport.clientHeight === 0) return;
     const client = current;
@@ -45,7 +46,7 @@ export function createTerminalPanel(store: Store, controller: Controller, isVisi
   }
   async function open(fresh = false): Promise<void> {
     const state = store.get(); const projectId = state.selection.projectId;
-    if (!active || !isVisible() || projectId === undefined || loading || selected === undefined || state.host.status !== "ready") return;
+    if (!active || !isVisible() || (projectId === undefined && state.selection.sessionId === undefined) || loading || selected === undefined || state.host.status !== "ready") return;
     const context = selected; const version = generation;
     if (!fresh && clients.has(context)) { attach(clients.get(context)!); return; }
     loading = true; renderStatus(); error.textContent = "";
@@ -102,7 +103,14 @@ export function createTerminalPanel(store: Store, controller: Controller, isVisi
     catch (failure) { error.textContent = message(failure); }
   }
   store.watch((state) => [state.selection.projectId, state.selection.sessionId, state.host.status, state.sessions], () => {
-    const state = store.get(); const next = state.selection.projectId === undefined ? undefined : state.selection.sessionId === undefined ? `project:${state.selection.projectId}` : `session:${state.selection.sessionId}`;
+    const state = store.get(); const next = state.selection.sessionId !== undefined ? `session:${state.selection.sessionId}` : state.selection.projectId === undefined ? undefined : `project:${state.selection.projectId}`;
+    // Attaching a chat changes cwd but retains session identity. The host
+    // closes its old shell; discard the matching xterm before reconnecting.
+    if (next !== undefined && next === selected && state.selection.projectId !== selectedProjectId) {
+      clients.get(next)?.terminal.dispose(); clients.delete(next); current = undefined;
+      generation++; viewport.replaceChildren();
+    }
+    selectedProjectId = state.selection.projectId;
     const retained = new Set(state.sessions.map((session) => `session:${session.id}`));
     for (const [context, client] of clients) {
       if (context.startsWith("session:") && !retained.has(context)) { client.terminal.dispose(); clients.delete(context); }

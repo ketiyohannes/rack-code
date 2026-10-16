@@ -16,7 +16,7 @@ export class InMemoryExecutionStore implements ExecutionStore {
   }
 
   async listRunUsage(): Promise<readonly RunUsage[]> {
-    return structuredClone([...this.runs.values()].map((run) => ({ run: { id: run.id, projectId: run.projectId, providerId: run.providerId, status: run.status, createdAt: run.createdAt, ...(run.model === undefined ? {} : { model: run.model }) }, usage: this.journal.filter((entry) => entry.runId === run.id && entry.type === "usage") })));
+    return structuredClone([...this.runs.values()].map((run) => ({ run: { id: run.id, ...(run.projectId === undefined ? {} : { projectId: run.projectId }), providerId: run.providerId, status: run.status, createdAt: run.createdAt, ...(run.model === undefined ? {} : { model: run.model }) }, usage: this.journal.filter((entry) => entry.runId === run.id && entry.type === "usage") })));
   }
 
   async getRun(runId: RunId): Promise<RunRecord | undefined> {

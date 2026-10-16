@@ -14,6 +14,8 @@ import type {
 
 export interface SessionsServiceOptions {
   readonly attachments?: AttachmentStore;
+  /** Creates/resolves a private conversation workspace, separate from credentials. */
+  readonly workspace?: (sessionId: string) => Promise<string>;
   readonly now?: () => Date;
   readonly createId?: () => string;
 }
@@ -26,7 +28,7 @@ export class SessionsService {
 
   constructor(
     private readonly store: SessionStore,
-    options: SessionsServiceOptions = {},
+    private readonly options: SessionsServiceOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? randomUUID;
@@ -34,13 +36,13 @@ export class SessionsService {
   }
 
   async create(input: CreateSessionInput): Promise<SessionRecord> {
-    if (input.projectId.trim() === "") {
+    if (input.projectId !== undefined && input.projectId.trim() === "") {
       throw new InvalidSessionError("Project ID is required.");
     }
     const timestamp = this.now().toISOString();
     const session: SessionRecord = {
       id: input.id ?? this.createId(),
-      projectId: input.projectId,
+      ...(input.projectId === undefined ? { originatedAsChat: true } : { projectId: input.projectId }),
       messages: [],
       continuations: [],
       createdAt: timestamp,
@@ -49,6 +51,23 @@ export class SessionsService {
     };
     await this.store.save(session);
     return session;
+  }
+
+  /** Resolves only persisted session IDs; the adapter controls directory names. */
+  async workspace(sessionId: SessionId): Promise<string> {
+    await this.get(sessionId);
+    if (!this.options.workspace) throw new InvalidSessionError("Chat workspaces are unavailable.");
+    return this.options.workspace(sessionId);
+  }
+
+  /** Attaching retains visible history, but starts native threads in the new cwd. */
+  async attachProject(sessionId: SessionId, projectId: string): Promise<SessionRecord> {
+    const session = await this.get(sessionId);
+    if (!projectId.trim()) throw new InvalidSessionError("Project ID is required.");
+    if (session.projectId !== undefined) throw new InvalidSessionError("This session already belongs to a project.");
+    const updated = { ...session, projectId, continuations: [], updatedAt: this.now().toISOString() };
+    await this.store.save(updated);
+    return updated;
   }
 
   async get(sessionId: SessionId): Promise<SessionRecord> {
@@ -143,6 +162,7 @@ export class SessionsService {
     const updated: SessionRecord = {
       ...session,
       messages: [...session.messages, message],
+      ...(session.title === undefined && input.role === "user" ? { title: input.content.replace(/\s+/g, " ").slice(0, 80) } : {}),
       updatedAt: this.now().toISOString(),
     };
     await this.store.save(updated);

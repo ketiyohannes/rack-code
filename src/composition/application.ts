@@ -3,6 +3,8 @@ import { GitHubInbox } from "../adapters/code-hosts/github-inbox.js";
 import { PullRequestsService } from "../features/pull-requests/index.js";
 import { RestCodeHosts } from "../adapters/code-hosts/rest.js";
 import { UsageService } from "../features/usage/index.js";
+import { mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -109,6 +111,11 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
   const resolveProjectId = async (id: string): Promise<string> => (await projects.getProject(id)).id;
   const sessions = new SessionsService(new JsonSessionStore(join(dataDirectory, "sessions.json"), resolveProjectId), {
     attachments: new DirectoryAttachmentStore(join(dataDirectory, "attachments")),
+    workspace: async (id) => {
+      const path = join(dataDirectory, "chat-files", createHash("sha256").update(id).digest("hex"));
+      await mkdir(path, { recursive: true, mode: 0o700 });
+      return path;
+    },
   });
   const executionStore = new JsonExecutionStore(join(dataDirectory, "execution.json"), resolveProjectId);
   const codexSource = new CodexLocalSessionSource();
@@ -117,7 +124,10 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
   const runtimes = new RuntimeRegistry();
   runtimes.register(new CodexRuntimeAdapter(credentials, runtimeContexts));
   runtimes.register(new ClaudeRuntimeAdapter(credentials, runtimeContexts));
-  const files = new FilesService((id) => projects.getProject(id), new LocalProjectFiles());
+  const files = new FilesService((id) => projects.getProject(id), new LocalProjectFiles(), async (id) => {
+    const session = await sessions.get(id);
+    return { path: session.projectId === undefined ? await sessions.workspace(id) : (await projects.getProject(session.projectId)).path };
+  });
   const terminal = new TerminalService(new LocalPtyBackend());
   const browser = options.browser === undefined ? undefined : new BrowserService((id) => sessions.get(id), options.browser);
   const execution = new ExecutionService(
@@ -158,6 +168,7 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
       project: async (projectId) => ({ projectPath: (await projects.getProject(projectId)).path }),
       session: async (sessionId) => {
         const session = await sessions.get(sessionId);
+        if (session.projectId === undefined) throw new Error("Attach a project to use Timeline.");
         const project = await projects.getProject(session.projectId);
         return {
           sessionId: session.id,

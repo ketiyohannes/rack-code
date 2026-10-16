@@ -334,3 +334,33 @@ test("Codex can forcibly close a provider stalled before thread initialization",
   assert.equal((await pending).value?.type, "interrupted");
   await iterator.return?.(); assert.ok(closed > 0);
 });
+
+test("Codex sends native Plan/default collaboration modes and explicit skill input", async () => {
+  const requests: { method: string; params: any }[] = [];
+  const adapter = new CodexRuntimeAdapter({ resolve: async () => ({ environment: {} }) }, { resolve: async () => ({ directory: "/account" }) }, { createProcess: () => ({
+    request: async (method, params) => { requests.push({ method, params }); return method.startsWith("thread/") ? { thread: { id: "thread" }, model: "native-model" } : method === "turn/start" ? { turn: { id: "turn" } } : {}; },
+    notify: () => {}, respond: () => {}, respondError: () => {}, close: async () => {}, nextMessage: async () => ({ done: false, value: { method: "turn/completed", params: { turn: { status: "completed" } } } }),
+  }) });
+  for (const interactionMode of ["plan", "normal"] as const) {
+    for await (const _ of adapter.startRun({ runId: "run", attemptId: "attempt", sessionId: "session", projectPath: "/chat", prompt: "Draft a plan", interactionMode, permissionMode: "read_only",
+      skills: [{ id: "known", name: "writing", path: "/skills/writing/SKILL.md", description: "Write", source: "Personal", enabled: true }],
+      account: { accountId: "account", providerId: "codex", credential: { id: "credential", providerId: "codex", method: "test" }, runtimeContextId: "account" }, signal: new AbortController().signal, requestApproval: async () => "deny" })) {}
+  }
+  const turns = requests.filter((request) => request.method === "turn/start");
+  assert.deepEqual(turns.map((turn) => turn.params.collaborationMode.mode), ["plan", "default"]);
+  assert.equal(turns[0]!.params.collaborationMode.settings.developer_instructions, null);
+  assert.equal(turns[0]!.params.collaborationMode.settings.model, "native-model");
+  assert.deepEqual(turns[0]!.params.input[1], { type: "skill", name: "writing", path: "/skills/writing/SKILL.md" });
+  assert.ok(requests.some((request) => request.method === "skills/extraRoots/set"));
+});
+
+test("Codex skill discovery preserves disabled entries and diagnostics without a model turn", async () => {
+  const methods: string[] = []; let closed = false;
+  const adapter = new CodexRuntimeAdapter({ resolve: async () => ({ environment: {} }) }, { resolve: async () => ({ directory: "/account" }) }, { createProcess: () => ({
+    request: async (method) => { methods.push(method); return method === "skills/list" ? { data: [{ skills: [{ name: "writing", description: "Write", path: "/skills/writing/SKILL.md", scope: "user", enabled: false }], errors: [{ message: "Malformed other skill" }] }] } : {}; },
+    notify: () => {}, respond: () => {}, respondError: () => {}, close: async () => { closed = true; }, nextMessage: async () => ({ done: true, value: undefined }),
+  }) });
+  const catalog = await adapter.skills({ account: { accountId: "account", providerId: "codex", credential: { id: "credential", providerId: "codex", method: "test" }, runtimeContextId: "account" }, projectPath: "/project" });
+  assert.equal(catalog.skills[0]!.enabled, false); assert.deepEqual(catalog.errors, ["Malformed other skill"]);
+  assert.equal(closed, true); assert.ok(!methods.includes("turn/start"));
+});

@@ -51,3 +51,10 @@ test("question answers have a bounded explicit shape and cancellation is distinc
     assert.throws(() => validateCommandParams("runs.respondToQuestions", { ...base, response }), ContractValidationError);
   }
 });
+
+test("standalone chats and workflow/skills fields are validated without granting arbitrary skill paths", () => {
+  assert.deepEqual(validateCommandParams("sessions.create", {}), {});
+  assert.deepEqual(validateCommandParams("runs.start", { sessionId: "chat", providerId: "codex", runtimeId: "codex-app-server", prompt: "Help", permissionMode: "ask", interactionMode: "plan", skillIds: ["known"] }), { sessionId: "chat", providerId: "codex", runtimeId: "codex-app-server", prompt: "Help", permissionMode: "ask", interactionMode: "plan", skillIds: ["known"] });
+  assert.throws(() => validateCommandParams("skills.list", { sessionId: "chat", runtimeId: "codex-app-server", accountId: "account", path: "/forged" }), ContractValidationError);
+  assert.throws(() => validateCommandParams("runs.start", { sessionId: "chat", providerId: "codex", runtimeId: "codex-app-server", prompt: "Help", permissionMode: "ask", interactionMode: "invalid" }), ContractValidationError);
+});

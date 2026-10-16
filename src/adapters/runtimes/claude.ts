@@ -1,3 +1,4 @@
+import { claudeSkills, claudeSkillPlugins } from "./installed-skills.js";
 import {
   query,
   type EffortLevel,
@@ -94,6 +95,12 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
+  /** Read skill metadata without loading user auth/settings into this account. */
+  async skills(input: RuntimeModelInput): Promise<import("../../core/execution/types.js").SkillCatalog> {
+    const context = await this.contexts.resolve(input.account.runtimeContextId);
+    return claudeSkills(input.projectPath ?? context.directory, context.directory);
+  }
+
   async capabilities(_account: RuntimeAccountContext): Promise<RuntimeCapabilities> {
     return {
       resume: true,
@@ -140,6 +147,7 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
   }
 
   private async *run(input: RuntimeRunInput): AsyncIterable<RuntimeEvent> {
+    if (input.interactionMode === "plan") input = { ...input, permissionMode: "read_only" };
     const credential = await this.credentials.resolve(input.account.credential);
     const context = await this.contexts.resolve(input.account.runtimeContextId);
     const environment = {
@@ -166,8 +174,11 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
     const eventState: ClaudeEventState = { messageId: "", nextMessage: 0, streamed: new Map(), tools: new Map() };
     let activeQuery: ReturnType<typeof query> | undefined;
     let appTools: Awaited<ReturnType<typeof startAppToolServer>>;
+    let skillPlugins: Awaited<ReturnType<typeof claudeSkillPlugins>> | undefined;
     try {
       const options = this.options(input, environment, sdkAbort);
+      skillPlugins = await claudeSkillPlugins(input.skills ?? []);
+      if (skillPlugins.plugins.length) options.plugins = skillPlugins.plugins;
       appTools = await startAppToolServer(input.tools ?? [], input.signal);
       if (appTools !== undefined) {
         options.mcpServers = { ...options.mcpServers, rack: { type: "http", url: appTools.url, headers: { Authorization: `Bearer ${appTools.token}` } } };
@@ -179,7 +190,12 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
         }
       }
       input.signal.throwIfAborted();
-      activeQuery = this.createQuery({ prompt: input.prompt, options });
+      // A single explicit selection is a native user slash command, which also
+      // supports skills marked disable-model-invocation. Multiple selections
+      // ask the native Skill tool to load each named skill in the same turn.
+      const prompt = skillPlugins.names.length === 1 ? `/${skillPlugins.names[0]} ${input.prompt}`
+        : skillPlugins.names.length ? `Use the native Skill tool to invoke these explicitly selected skills for this request: ${skillPlugins.names.join(", ")}.\n\n${input.prompt}` : input.prompt;
+      activeQuery = this.createQuery({ prompt, options });
       this.activeQueries.set(input.attemptId, activeQuery);
       for await (const rawMessage of activeQuery) {
         const message: unknown = rawMessage;
@@ -207,6 +223,7 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
       // child process and any MCP transports held by the query.
       activeQuery?.close();
       await appTools?.close();
+      await skillPlugins?.close();
       this.activeQueries.delete(input.attemptId);
     }
   }
@@ -257,6 +274,7 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
     // Question answers are independent of action permissions. Even native
     // auto-review/bypass modes must collect the user's own answer here.
     options.canUseTool = async (toolName, toolInput, callbackOptions): Promise<PermissionResult> => {
+      if (input.interactionMode === "plan" && toolName === "ExitPlanMode") return { behavior: "deny", message: "Finish the plan in your response. The user must click Implement in Rack to leave Plan mode." };
       if (toolName !== "AskUserQuestion") return permissionHandler === undefined
         ? { behavior: "deny", message: "Native permission policy did not authorize this action." }
         : (await permissionHandler(toolName, toolInput, callbackOptions)) ?? { behavior: "deny", message: "This action was not authorized." };
