@@ -19,6 +19,7 @@ import { nativeQuestions } from "./user-questions.js";
 import type { NativeTerminalInput, TerminalProcess } from "../../core/execution/terminal.js";
 import { startAppToolServer } from "./app-tool-server.js";
 import { StringDecoder } from "node:string_decoder";
+import { resolveCodexCommand } from "./codex-command.js";
 
 type CodexProcessFactory = (options: {
   readonly cwd: string;
@@ -58,7 +59,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     const command = options.command ?? "codex";
     const args = options.args ?? ["app-server", "--stdio"];
     this.createProcess = options.createProcess ?? ((processOptions) =>
-      JsonRpcProcess.start(command, args, processOptions));
+      JsonRpcProcess.start(resolveCodexCommand(command, { environment: processOptions.environment }), args, processOptions));
   }
 
   /**
@@ -89,7 +90,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     await child.request("initialize", {
       clientInfo: { name: "thinking-and-code", title: "Thinking and Code", version: "0.1.0" },
       capabilities: {},
-    });
+    }, 10_000);
     child.notify("initialized", {});
     const models = new Map<string, RuntimeModel>();
     const cursors = new Set<string>();
@@ -179,7 +180,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     let closed = false;
     const decoder = new StringDecoder("utf8");
     try {
-      await child.request("initialize", { clientInfo: { name: "thinking-and-code", title: "Rack Terminal", version: "0.1.0" }, capabilities: { experimentalApi: true } });
+      await child.request("initialize", { clientInfo: { name: "thinking-and-code", title: "Rack Terminal", version: "0.1.0" }, capabilities: { experimentalApi: true } }, 10_000);
       child.notify("initialized", {});
       const processId = "rack-terminal";
       let ready!: () => void;
@@ -262,7 +263,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
           version: "0.1.0",
         },
         capabilities: { experimentalApi: true },
-      });
+      }, 10_000);
       childProcess.notify("initialized", {});
 
       appTools = await startAppToolServer(input.tools ?? [], input.signal);

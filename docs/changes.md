@@ -1,3 +1,9 @@
+# Integration with current main (2026-10-16)
+
+- Merge the PR/Usage/session-recovery work with main through `d3e00f6`, preserving the provider diagnostics, Windows Codex executable resolution, native window controls, diagnostics drawer and desktop spacing/splitter improvements from the recent PR.
+- Combine provider control-request deadlines and stdin error handling with bounded process-group shutdown; keep single-instance startup alongside the new native window IPC handlers. Retain both stylesheet additions, with main's UI rules last.
+- Validation: `npm run check` passed (250 tests, both TypeScript configurations, headless build and desktop bundle). Twelve focused diagnostics/resolver/shutdown tests passed, including the new deadline/cleanup regression. `npm run test:desktop-features` passed on retry (the first attempt timed out on native form input during the full-suite run). Verified all 22 upstream-only files are byte-identical to main; all other additions from recent main commits remain verbatim except the deliberately combined transport shutdown. Live authenticated providers and a packaged Windows build remain untested.
+
 # Account-wide GitHub PR inbox (2026-10-16)
 
 - Keep work on `feature/pr-support`. Replace the project-required PR landing page with a compact inbox inspired by T3's involvement filters and review tabs. Aggregate all connected GitHub CLI/environment/session-token identities, including multiple users on the same host; show account, involvement and status filters, search, deduplicated rows and load-more results.
@@ -21,6 +27,34 @@
 - Validation: `npm run check` passed (216 tests, type checks, headless build and desktop bundle). Targeted provider/Git/Usage/Codex tests passed. Electron checks covered footer navigation, empty Usage/PR states and the offline toast position; populated renderer fixtures covered PR details, file presentation, draft retention, pagination, creation/publishing inputs, Timeline targeting and Usage filters/metrics. Live remote mutations, enterprise deployments and packaged distribution remain untested.
 
 # Change log
+
+## 2026-10-16 - Restore sidebar app name
+
+- Restored the `thinking & code` wordmark and its original header spacing below the menu bar. The duplicate native window title remains hidden.
+- Validation: type checks and desktop build passed; no new native-window visual check performed.
+
+## 2026-10-16 - Changes spacing and panel resize follow-up
+
+- Inset Changes empty/loading/error messages by 16px. Splitters now start from the displayed width rather than an oversized saved preference after window shrinking. Fit both panels together, widen the grab area to 10px, and clear drag state on lost pointer capture.
+- Validation: type checks, desktop build and whitespace checks passed. Browser checks at 980px confirmed a 20px drag changes panel width by 20px after shrinking from 1400px with a saved 700px panel; keyboard resizing, message inset, released cursor and absence of horizontal overflow passed. Native OS pointer interruptions were not tested.
+
+## 2026-10-16 - UI spacing, connection drawer and themed menus
+
+- Moved connection tests and results into an on-demand drawer sliding in from the right. Quiet Connection details actions keep the account list compact. Escape closes only the top modal, including while its focused action is disabled; focus returns to the trigger. Reduced motion disables the slide animation.
+- Adjusted settings, account cards, dialog headers, buttons and tool-panel padding, gaps and borders. Hid the duplicate Windows/Linux window title while retaining the sidebar wordmark. File/Edit/View/Help now follows the app palette while keeping native caption controls. Main validates the narrow action/color bridge; macOS keeps its existing native chrome.
+- Validation: type checks and desktop build passed. Browser checks with a simulated host covered dark/light palettes, 980px layouts, long diagnostic paths, pending/results states, drawer focus/Escape, reduced motion, menu keyboard navigation and theme/action bridge calls. Screenshots reviewed. The native Electron smoke attempt did not complete and was stopped; native caption rendering and menu effects, macOS/Linux and packaged execution remain unverified. Earlier full-suite baseline failures are recorded below.
+
+## 2026-10-16 - Provider setup and account diagnostics
+
+- Added explicit Test connection actions in Settings > Accounts. Connections validates provider/account ownership and coalesces checks; adapters report executable location, parsed version, startup status and optional local sign-in state through the provider-neutral `auth.diagnose` command. Installation-only probes use disposable configuration, account checks use isolated saved contexts, and results never change selection or availability or start model turns. Raw CLI output and credentials are excluded from diagnostic results.
+- Added native Windows Claude discovery through PATH and the standard user install location. Codex startup/control requests have bounded deadlines, and transport close settles pending requests. CLI probes bound output and process lifetime; long-running model work is unaffected. Reconnects invalidate old UI observations and reject stale in-flight results.
+- Validation: type checks, headless/desktop builds, 34 focused adapter/core/controller/host tests and whitespace checks passed. Real installed Codex and Claude setup checks passed; both reported signed-out state against disposable empty account contexts. Browser checks with actual renderer/controller modules and a simulated host covered success, failure, disabled pending actions, correct account routing, long executable paths and narrow/light/dark layouts; screenshots reviewed.
+- Full-suite run: 198 passed, 20 failed out of 218. A clean export of the pre-feature commit reproduced 20 failures (190 passed out of 210), involving existing Windows filename/path/permission assumptions and repository/Timeline fixtures. These unrelated failures were not changed. Authenticated account checks, model turns, macOS/Linux execution and packaged Electron verification were not performed.
+
+## 2026-10-16 - Codex account launch on Windows
+
+- Fixed bare-command executable discovery behind `spawn codex ENOENT`. Sign-in, model discovery, runs and Codex terminals now share native Windows CLI discovery through PATH and the standard per-user npm prefix, supporting nested/hoisted platform packages and bundled vendor layouts without a shell. Missing installations produce an actionable error; explicit commands and non-Windows behavior are preserved.
+- Validation performed: type checks, 13 focused resolver/runtime tests, desktop build and whitespace checks passed. A real installed Codex server initialized successfully with a stripped-down PATH and disposable isolated CODEX_HOME. Full browser sign-in, an authenticated model turn, packaged Electron launch and the complete test suite were not performed.
 
 ## 2026-10-15 - Complete Terminal, Browser and Files
 

@@ -11,6 +11,11 @@ export interface JsonRpcMessage {
   readonly error?: { readonly code?: number; readonly message: string; readonly data?: unknown };
 }
 
+/** Typed deadline failure lets callers explain a timeout without exposing RPC output. */
+export class ProviderRequestTimeoutError extends Error {
+  constructor(method: string) { super(`Provider ${method} timed out. Restart the provider and try again.`); }
+}
+
 /**
  * Line-delimited JSON-RPC transport for local provider runtimes.
  *
@@ -35,6 +40,7 @@ export class JsonRpcProcess {
     // verbose provider cannot fill the pipe and deadlock the run.
     child.stderr.on("data", () => undefined);
     child.on("error", (error) => this.fail(error));
+    child.stdin.on("error", (error) => this.fail(error));
     child.on("close", (code, signal) => {
       this.fail(new Error(`Provider process exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}.`));
     });
@@ -50,18 +56,31 @@ export class JsonRpcProcess {
       // Give each owned provider a process group so shutdown also stops its tools.
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     return new JsonRpcProcess(child);
   }
 
-  async request(method: string, params: unknown): Promise<unknown> {
+  /** Optional deadline is for bounded control requests, never long-running turns
+   * or commands. Expiry closes the transport because its state is uncertain.
+   */
+  async request(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
     if (this.closed) throw new Error("Provider process is closed.");
     const id = this.nextId++;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const result = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
-    this.write({ id, method, params });
-    return result;
+    if (timeoutMs !== undefined) timer = setTimeout(() => {
+      this.fail(new ProviderRequestTimeoutError(method));
+      // Preserve the control-request deadline and close the owned process group,
+      // even though fail() already marked this transport closed.
+      void this.close();
+    }, timeoutMs);
+    try { this.write({ id, method, params }); } catch (error) {
+      this.fail(error instanceof Error ? error : new Error("Provider write failed."));
+    }
+    try { return await result; } finally { clearTimeout(timer); }
   }
 
   notify(method: string, params: unknown): void {
@@ -82,25 +101,31 @@ export class JsonRpcProcess {
 
   close(): Promise<void> {
     return this.closing ??= (async () => {
+      // A deadline can close the transport before the OS process exits. Always
+      // complete bounded native cleanup, including any owned descendant tools.
       // Reject requests *before* marking closed. In particular, initialize or
       // turn/interrupt may be awaiting an acknowledgment that will never arrive.
-      this.fail(new Error("Provider process was stopped."));
+      this.fail(new Error("Provider process was closed."));
       const signal = (kind: NodeJS.Signals) => {
         if (process.platform !== "win32" && this.child.pid !== undefined) {
           try { process.kill(-this.child.pid, kind); return; } catch { /* The group may already be gone. */ }
         }
         this.child.kill(kind);
       };
-      signal("SIGTERM");
-      if (this.child.exitCode === null && this.child.signalCode === null) {
+      const waitForExit = async () => {
+        if (this.child.exitCode !== null || this.child.signalCode !== null) return;
         await new Promise<void>((resolve) => {
           const done = () => { clearTimeout(timer); this.child.off("close", done); resolve(); };
           const timer = setTimeout(done, 500);
           this.child.once("close", done);
         });
-      }
+      };
+      signal("SIGTERM");
+      await waitForExit();
       // Even if the parent exited promptly, tools in its group can ignore TERM.
       signal("SIGKILL");
+      // Retain main's wait-before-config-cleanup guarantee after forced shutdown.
+      await waitForExit();
     })();
   }
 

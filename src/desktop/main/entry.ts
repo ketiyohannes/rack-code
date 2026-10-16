@@ -30,6 +30,8 @@ import { HostProcess } from "./host-process.js";
 import { classifyOpenPath } from "./open-path.js";
 import { createMainWindow } from "./window.js";
 import { SharedBrowser } from "./shared-browser.js";
+import { WINDOW_ACTIONS } from "../../contracts/desktop/transport.js";
+import { performWindowAction } from "./window-actions.js";
 
 /** How long quitting waits for cancelled runs to record a terminal state. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -279,6 +281,18 @@ app.on("activate", () => {
 
 void app.whenReady().then(() => {
   if (!ownsInstance) { app.quit(); return; }
+  ipcMain.handle(IPC_CHANNELS.windowAction, (event, action: unknown) => {
+    if (!isTrustedSender(event)) return;
+    const parsed = oneOf(WINDOW_ACTIONS)(action, "action");
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    if (owner !== null) performWindowAction(owner, parsed);
+  });
+  ipcMain.handle(IPC_CHANNELS.windowTheme, (event, colors: unknown) => {
+    if (!isTrustedSender(event) || process.platform === "darwin") return;
+    const parsed = object({ background: text({ maxLength: 7 }), foreground: text({ maxLength: 7 }) })(colors, "colors");
+    if (![parsed.background, parsed.foreground].every((color) => /^#[0-9a-f]{6}$/i.test(color))) return;
+    BrowserWindow.fromWebContents(event.sender)?.setTitleBarOverlay({ color: parsed.background, symbolColor: parsed.foreground, height: 36 });
+  });
   ipcMain.handle(IPC_CHANNELS.invoke, handleInvoke);
   ipcMain.handle(IPC_CHANNELS.selectDirectory, handleSelectDirectory);
   ipcMain.handle(IPC_CHANNELS.selectFiles, handleSelectFiles);

@@ -1,12 +1,15 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { AsyncQueue } from "../../core/shared/async-queue.js";
+import { resolveClaudeCommand } from "./claude-command.js";
+import { diagnosticContext, diagnosticExecutable, diagnosticVersion, probeProcess, DiagnosticProcessError } from "./diagnostic-process.js";
 import type {
   AccountConnector,
   ConnectAttempt,
   ConnectContext,
   ConnectEvent,
   ConnectedIdentity,
+  ProviderDiagnostic,
 } from "../../core/connections/ports.js";
 
 /** Variables that would override the account's subscription login. */
@@ -36,15 +39,60 @@ export class ClaudeConnector implements AccountConnector {
   readonly providerId = "claude";
   readonly displayName = "Claude";
 
-  constructor(private readonly command = "claude") {}
+  constructor(private readonly command = "claude", private readonly probe: typeof probeProcess = probeProcess) {}
+
+  /** Local CLI/status check; never launches interactive login or a model turn.
+   * An installation-only check uses disposable config, not the default account.
+   */
+  async diagnose(context?: ConnectContext): Promise<ProviderDiagnostic> {
+    let stage: ProviderDiagnostic["stage"] = "discovery";
+    let executable: string | undefined;
+    let version: string | undefined;
+    const result = (status: ProviderDiagnostic["status"], message: string,
+      authentication: ProviderDiagnostic["authentication"] = "not_checked"): ProviderDiagnostic => ({
+      status, stage, message, authentication, checkedAt: new Date().toISOString(),
+      ...(executable === undefined ? {} : { executable }), ...(version === undefined ? {} : { version }),
+    });
+    try {
+      return await diagnosticContext(context, async (scoped) => {
+        const environment = claudeEnvironment(scoped);
+        executable = diagnosticExecutable(resolveClaudeCommand(this.command, environment), environment, scoped.directory);
+        stage = "version";
+        const probe = await this.probe(executable, ["--version"], scoped.directory, environment);
+        version = diagnosticVersion(probe.stdout);
+        if (probe.code !== 0 || version === undefined) return result("failed", "Claude Code did not report a valid version. Update or reinstall the CLI.");
+        stage = "startup";
+        if (context === undefined) return result("ready", "Claude Code started successfully. Connect an account to sign in.");
+        stage = "authentication";
+        const status = await this.probe(executable, ["auth", "status", "--json"], scoped.directory, environment);
+        const parsed: unknown = JSON.parse(status.stdout);
+        if (typeof parsed !== "object" || parsed === null || !("loggedIn" in parsed) || typeof parsed.loggedIn !== "boolean") {
+          return result("failed", "Claude Code returned an unreadable account status. Update the CLI and retry.");
+        }
+        // Claude may exit nonzero for a valid signed-out status. A signed-in
+        // result still requires a successful process exit.
+        if (parsed.loggedIn && status.code !== 0) return result("failed", "Claude Code account check failed. Retry or reconnect the account.");
+        return result(parsed.loggedIn ? "ready" : "failed", parsed.loggedIn
+          ? "Claude Code reports a saved sign-in. Subscription and network access were not tested."
+          : "Claude Code started, but this account is signed out. Reconnect the account.", parsed.loggedIn ? "signed_in" : "signed_out");
+      });
+    } catch (error) {
+      return result("failed", error instanceof DiagnosticProcessError && error.reason === "timeout"
+        ? "Claude Code did not respond within 10 seconds. Close stalled Claude processes and retry."
+        : stage === "discovery" ? "Claude Code was not found. Install the native CLI and restart Rack, then retry."
+        : `Claude Code ${stage} check failed. Verify the CLI installation, update it if needed, and retry.`);
+    }
+  }
 
   connect(context: ConnectContext): ConnectAttempt {
     const events = new AsyncQueue<ConnectEvent>();
     const environment = claudeEnvironment(context);
-    const child = spawn(this.command, ["auth", "login", "--claudeai"], {
+    const command = resolveClaudeCommand(this.command, environment);
+    const child = spawn(command, ["auth", "login", "--claudeai"], {
       cwd: context.directory,
       env: environment,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     let stopped = false;
     let announcedUrl = false;
@@ -83,7 +131,7 @@ export class ClaudeConnector implements AccountConnector {
         events.complete();
         return;
       }
-      void readIdentity(this.command, context.directory, environment).then(
+      void readIdentity(command, context.directory, environment).then(
         (identity) => events.push({ type: "completed", identity }),
         (error: unknown) => events.push({ type: "failed", error: error instanceof Error ? error.message : String(error) }),
       ).finally(() => events.complete());

@@ -468,6 +468,19 @@ test("connecting an account signs in, registers it as available, and selects it"
   assert.deepEqual(await call("auth.active"), []);
 });
 
+test("diagnostic commands validate inputs and return unsupported checks without account mutation", async () => {
+  const { api, call, accounts, account, connector } = await setup();
+  const before = await accounts.get(account.id);
+  const result = await call<{ status: string; authentication: string }>("auth.diagnose", { providerId: "fake", accountId: account.id });
+  assert.equal(result.status, "failed"); assert.equal(result.authentication, "not_checked");
+  assert.deepEqual(await accounts.get(account.id), before);
+  assert.equal(connector.contexts.length, 0);
+  const invalid = await api.dispatch("auth.diagnose", { providerId: "fake", directory: "/arbitrary" });
+  assert.equal(invalid.ok, false);
+  const missing = await api.dispatch("auth.diagnose", { providerId: "unknown" });
+  assert.equal(!missing.ok && missing.error.code, "connector_not_found");
+});
+
 test("reconnecting the same identity re-authenticates onto a fresh context", async () => {
   const { call, events, accounts, connector } = await setup();
   const first = await call<{ connectId: string }>("auth.connect", { providerId: "fake" });

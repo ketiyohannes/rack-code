@@ -77,6 +77,31 @@ The first six rows describe the implemented foundational modules. Timeline is th
 
 Connected accounts use the `native_login` credential method: the provider keeps the credential in its own login store scoped to the account's private runtime-context directory (`auth.json` under `CODEX_HOME`, or the macOS Keychain entry keyed to `CLAUDE_CONFIG_DIR`). The app records only the opaque reference, and `NativeLoginCredentialResolver` resolves it to an empty environment because the runtime adapters already point the provider at that directory. Credential material therefore never passes through application code or records. Timeline, retrospective, and orchestration are optional modules maintained and shipped by the product owner, with on/off controls in settings. Third-party installation is not the intended meaning of optional. Specific adapter boundaries may emerge as integrations are validated.
 
+### Provider diagnostics (2026-10-16)
+
+Connections owns the optional `AccountConnector.diagnose` interface and its
+provider-neutral `ProviderDiagnostic` result. `ConnectionsService.diagnose`
+validates account/provider ownership, resolves only that account's runtime
+context, and coalesces concurrent checks for the same provider/context.
+The existing startup composition supplies the connectors; no provider SDK or
+protocol enters core. `auth.diagnose` exposes this through validated host IPC.
+
+Provider adapters own executable discovery, bounded local probes and protocol
+interpretation. Installation checks create and remove a disposable context;
+saved-account checks use the existing private context. No model turn, login,
+selection change or availability update is performed. Results contain only
+an executable path, parsed version, stage, normalized status/message and time;
+raw process output and credentials are excluded. Native providers may maintain
+their own runtime files while running these checks. Observations do not establish
+network access, subscription entitlement or remaining quota.
+
+The renderer owns transient pending/results state, offers explicit checks in
+Accounts settings, and drops saved-account observations after reconnects,
+including late replies. No persistence schema changes are required. Codex's
+JSON-RPC transport supports opt-in deadlines for startup/control requests;
+expiration stops that process and settles pending requests. Long-running
+commands and turns have no new deadline.
+
 ### Concrete runtime contract
 
 "Provider-neutral" has a strict meaning: core modules may import only application-owned contracts and data types. They must not import Codex app-server protocol names, Claude Agent SDK classes, provider transcript types, provider credential objects, or provider-specific event names. Those imports belong only inside `adapters/runtimes/codex` and `adapters/runtimes/claude`.
@@ -274,6 +299,14 @@ The implemented desktop process layout, contracts, and renderer structure are de
 The graphical conversation view and terminal presentation must invoke the same application operations. Account switching, session persistence, and recovery are not UI responsibilities. The user's current direction is a terminal presentation of this harness inside the desktop window, not embedding an independent provider CLI. Rendering and terminal libraries remain undecided.
 
 Keep Electron main responsible for lifecycle and desktop integration. Use a narrow preload API with context isolation and validate incoming IPC requests at the privileged boundary. The renderer receives serializable data and explicit operations, not raw IPC access, SDK objects, credentials, or arbitrary privileged execution capabilities.
+
+Implemented 2026-10-16: Windows/Linux menu presentation belongs to the renderer
+so it follows the app palette. An allowlisted `windowAction` bridge delegates
+native menu effects to main; `windowTheme` accepts validated hex caption colors.
+Both require a trusted bundled-page sender. Native caption controls remain owned
+by Electron, and macOS retains its system menu. No application rules or host
+services depend on this presentation feature. Connection diagnostics are exposed
+in an on-demand drawer rather than persistent account cards.
 
 Application modules must run headlessly for testing. Heavy or blocking work must not freeze the interface or main event loop. External agent processes remain behind runtime adapters, with explicit startup, cancellation, exit, and cleanup behavior.
 
