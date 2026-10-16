@@ -18,6 +18,39 @@ const run: RunView = { id: "run", sessionId: "session", projectId: "project", pr
   permissionMode: "ask", status: "completed", attemptIds: [], attempts: [], createdAt: stamp, updatedAt: stamp };
 const session = { id: "session", projectId: "project", messages: [], continuations: [], createdAt: stamp, updatedAt: stamp };
 
+test("provider diagnostics suppress duplicate clicks and clear stale successes on retry failure", async () => {
+  const store = new ImmediateStore();
+  let calls = 0;
+  let finish!: (value: unknown) => void;
+  const host = { call: async (command: string, params: unknown) => {
+    assert.equal(command, "auth.diagnose");
+    assert.deepEqual(params, { providerId: "fake", accountId: "account" });
+    calls++;
+    if (calls === 2) throw new Error("secret provider output");
+    return new Promise((resolve) => { finish = resolve; });
+  } } as unknown as HostClient;
+  const controller = new Controller(host, store);
+  const first = controller.diagnoseProvider("fake", "account");
+  await controller.diagnoseProvider("fake", "account");
+  assert.equal(calls, 1);
+  const key = JSON.stringify(["fake", "account"]);
+  assert.equal(store.get().providerDiagnostics[key]?.pending, true);
+  finish({ status: "ready", stage: "startup", authentication: "not_checked", checkedAt: stamp, message: "Ready" });
+  await first;
+  assert.equal(store.get().providerDiagnostics[key]?.result?.status, "ready");
+  await controller.diagnoseProvider("fake", "account");
+  assert.equal(store.get().providerDiagnostics[key]?.result, undefined);
+  assert.equal(store.get().providerDiagnostics[key]?.pending, false);
+  assert.ok(!JSON.stringify(store.get().providerDiagnostics).includes("secret provider output"));
+  const stale = controller.diagnoseProvider("fake", "account");
+  // A completed reconnect drops the old context's observation while a check
+  // can still be in flight. Its late result must not revive that observation.
+  store.update((state) => ({ ...state, providerDiagnostics: {} }));
+  finish({ status: "ready" });
+  await stale;
+  assert.equal(store.get().providerDiagnostics[key], undefined);
+});
+
 test("live thinking and response chunks update view state before run completion", async () => {
   const store = new ImmediateStore();
   let emit!: (event: HostEvent) => void;

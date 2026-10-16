@@ -5,6 +5,37 @@ import { ClaudeLocalSessionSource } from "./claude.js";
 
 const thread = { id: "native", cwd: "/tmp/project", name: "Existing Codex work", createdAt: 100, updatedAt: 200 };
 
+test("Windows Codex discovery filters normalized paths locally and reads matching history", { skip: process.platform !== "win32" }, async () => {
+  const native = { ...thread, cwd: "e:/CODE/My Project" };
+  const source = new CodexLocalSessionSource({ createProcess: () => ({
+    request: async (method, params) => {
+      if (method === "initialize") return {};
+      if (method === "thread/list") {
+        assert.equal(Object.hasOwn(params as object, "cwd"), false);
+        return { data: [native, { ...native, id: "child", cwd: `${native.cwd}/child` }] };
+      }
+      return { thread: { ...native, turns: [{ items: [{ type: "agentMessage", text: "History" }] }] } };
+    }, notify: () => {}, close: async () => {},
+  }) });
+  assert.equal((await source.list("E:\\Code\\My Project")).length, 1);
+  assert.equal((await source.read("E:\\Code\\My Project", "native")).messages[0]?.content, "History");
+});
+
+test("Windows Claude reads the recorded folder after case-insensitive discovery", { skip: process.platform !== "win32" }, async () => {
+  const native = { sessionId: "native", cwd: "e:/CODE/My Project", summary: "History", lastModified: 1000 };
+  const source = new ClaudeLocalSessionSource({
+    listSessions: async (options) => {
+      assert.equal(options?.dir, undefined);
+      return [native, { ...native, sessionId: "other", cwd: "E:/Other" }];
+    },
+    getSessionInfo: async (_id, options) => { assert.equal(options?.dir, undefined); return native; },
+    getSessionMessages: async (_id, options) => { assert.equal(options?.dir, native.cwd); return []; },
+  });
+  assert.equal((await source.list("E:\\Code\\My Project")).length, 1);
+  await source.read("E:\\Code\\My Project", "native");
+  await assert.rejects(source.read("E:\\Other", "native"), /not in/);
+});
+
 test("Codex discovery pages, filters folders and active sessions, and only reads native history", async () => {
   const requests: { method: string; params: unknown }[] = [];
   let closed = 0;
@@ -60,7 +91,7 @@ test("Claude history uses exact-folder SDK reads and labels uncopied media and t
   const info = { sessionId: "native", cwd: "/tmp/project", summary: "Existing Claude work", lastModified: 1000 };
   const source = new ClaudeLocalSessionSource({
     listSessions: async (options) => {
-      assert.deepEqual(options, { dir: "/tmp/project", includeWorktrees: false });
+      assert.deepEqual(options, { ...(process.platform === "win32" ? {} : { dir: "/tmp/project" }), includeWorktrees: false });
       return [info, { ...info, sessionId: "other", cwd: "/another" }];
     },
     getSessionInfo: async () => info,

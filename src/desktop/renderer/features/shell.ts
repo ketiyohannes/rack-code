@@ -137,15 +137,19 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
 
   // --- Panel widths -----------------------------------------------------------
   const widths = loadWidths();
+  // Saved preferences can exceed the space in a smaller window. Interactions
+  // must start from the rendered width, otherwise the splitter jumps on drag.
+  const visibleWidths = { ...widths };
   const cssVariable = { left: "--sidebar-width", right: "--workbench-width" } as const;
   /** Largest width for `side` that keeps the main column at its minimum. */
   const maxWidth = (side: "left" | "right") => {
     const other = side === "left" ? "right" : "left";
-    const otherWidth = layout[other] ? 0 : widths[other];
+    const otherWidth = layout[other] ? 0 : visibleWidths[other];
     return Math.min(MAX_WIDTHS[side], window.innerWidth - otherWidth - MIN_MAIN_WIDTH);
   };
   const setWidth = (side: "left" | "right", width: number) => {
     widths[side] = width;
+    visibleWidths[side] = width;
     root.style.setProperty(cssVariable[side], `${width}px`);
   };
   for (const side of ["left", "right"] as const) {
@@ -156,7 +160,7 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
       min: MIN_WIDTHS[side],
       max: () => maxWidth(side),
       defaultWidth: DEFAULT_WIDTHS[side],
-      width: () => widths[side],
+      width: () => visibleWidths[side],
       onResize: (width) => setWidth(side, width),
       onCommit: () => saveWidths(widths),
     });
@@ -165,9 +169,15 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
   // Shrinking the window can leave saved widths too large for the space.
   // Clamp what is shown, but keep the saved preference for larger windows.
   const fitWidths = () => {
+    // Fit both panels together, reserving the other panel's minimum first.
+    // Independent clamps against stale preferences can overfill the window.
+    let available = Math.max(0, window.innerWidth - MIN_MAIN_WIDTH);
     for (const side of ["left", "right"] as const) {
-      const fitted = Math.max(MIN_WIDTHS[side], Math.min(widths[side], maxWidth(side)));
+      const reserve = side === "left" && !layout.right ? MIN_WIDTHS.right : 0;
+      const fitted = Math.max(MIN_WIDTHS[side], Math.min(widths[side], MAX_WIDTHS[side], available - reserve));
+      visibleWidths[side] = fitted;
       root.style.setProperty(cssVariable[side], `${fitted}px`);
+      if (!layout[side]) available -= fitted;
     }
   };
   window.addEventListener("resize", fitWidths);

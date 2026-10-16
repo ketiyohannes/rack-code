@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { sameImportProject } from "./project-path.js";
 
 import { InvalidSessionError } from "../sessions/errors.js";
 import type { ProjectsService } from "../projects/service.js";
@@ -33,7 +33,7 @@ export class SessionImportsService {
     await Promise.all([...this.sources.values()].map(async (source) => {
       try {
         for (const candidate of await source.list(project.path)) {
-          if (resolve(candidate.projectPath) !== resolve(project.path)) continue;
+          if (!sameImportProject(candidate.projectPath, project.path)) continue;
           const imported = existing.find((session) => session.importSource?.sourceId === source.sourceId
             && session.importSource.nativeSessionId === candidate.nativeSessionId);
           sessions.push({ ...candidate, ...(imported === undefined ? {} : { importedSessionId: imported.id }) });
@@ -53,7 +53,7 @@ export class SessionImportsService {
     if (source === undefined) throw new InvalidSessionError("Unknown session import source.");
     const snapshot = await source.read(project.path, nativeSessionId);
     if (snapshot.session.sourceId !== sourceId || snapshot.session.nativeSessionId !== nativeSessionId
-        || resolve(snapshot.session.projectPath) !== resolve(project.path)) {
+        || !sameImportProject(snapshot.session.projectPath, project.path)) {
       throw new InvalidSessionError("The external session does not belong to this project folder.");
     }
     return snapshot;

@@ -301,6 +301,8 @@ export function parseInline(text: string): Inline[] {
 export interface MarkdownActions {
   readonly openLink: (href: string) => void;
   readonly openPath?: (path: string) => void;
+  /** Supplied by the transcript UI so parsing remains independent of SVG assets. */
+  readonly copyControl?: (text: string, label: string) => HTMLElement;
 }
 
 export function renderMarkdown(source: string, actions: MarkdownActions | ((href: string) => void)): DocumentFragment {
@@ -327,7 +329,12 @@ function renderBlock(block: Block, actions: MarkdownActions): HTMLElement {
       const code = document.createElement("code");
       code.textContent = block.text;
       pre.append(code);
-      return pre;
+      const wrapper = document.createElement("div");
+      wrapper.className = "copyable-code";
+      const control = actions.copyControl?.(block.text, "Copy code");
+      if (control === undefined) return pre;
+      wrapper.append(control, pre);
+      return wrapper;
     }
     case "list": {
       const list = document.createElement(block.ordered ? "ol" : "ul");

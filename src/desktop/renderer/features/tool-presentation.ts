@@ -10,7 +10,7 @@ export interface ToolPresentation {
   readonly title: string;
   readonly subtitle?: string;
   readonly icon: "terminal-window" | "files" | "pencil-simple" | "globe" | "wrench";
-  readonly status: "Running" | "Completed" | "Failed" | "Stopped" | "Incomplete";
+  readonly status: "Running" | "Completed" | "No matches" | "Failed" | "Stopped" | "Incomplete";
   readonly duration?: string;
   readonly exitCode?: number;
   readonly sections: readonly ToolSection[];
@@ -37,6 +37,9 @@ export function presentTool(item: Extract<TranscriptItem, { kind: "tool" }>, act
   const isError = item.isError === true || (exitCode !== undefined && exitCode !== 0)
     || output.status === "failed" || output.status === "declined" || output.is_error === true;
   const stopped = ["interrupted", "cancelled", "canceled"].includes(String(output.status));
+  const noMatches = command !== undefined && item.hasOutput && exitCode === 1
+    && !stopped && output.status !== "declined"
+    && isEmptyRipgrepResult(command, output);
   const sections: ToolSection[] = [];
   if (command !== undefined) {
     sections.push({ label: "Command", text: command, format: "code" });
@@ -51,7 +54,7 @@ export function presentTool(item: Extract<TranscriptItem, { kind: "tool" }>, act
     const text = string(output.aggregatedOutput) ?? string(output.stdout) ?? string(output.output)
       ?? textContent(output.content ?? object(output.result).content ?? item.output);
     if (text !== "") sections.push({ label: "Output", text, format: command === undefined ? "text" : "code" });
-    else if (command !== undefined) sections.push({ label: "Output", text: "No output", format: "text" });
+    else if (command !== undefined) sections.push({ label: "Output", text: noMatches ? "No matches" : "No output", format: "text" });
     else if (changes.length === 0 && command === undefined) sections.push({ label: "Result", text: formatValue(item.output), format: "json" });
     const error = output.error ?? output.stderr;
     if (error !== undefined && error !== null && error !== "") sections.push({ label: "Error", text: formatValue(error), format: "text" });
@@ -60,9 +63,32 @@ export function presentTool(item: Extract<TranscriptItem, { kind: "tool" }>, act
   return { title, ...(subtitle === undefined ? {} : { subtitle }),
     ...(command === undefined && changes.length === 0 && path !== undefined ? { path } : changes.length === 1 && string(object(changes[0]).path) !== undefined ? { path: string(object(changes[0]).path)! } : {}),
     icon: command !== undefined ? "terminal-window" : changes.length > 0 ? "pencil-simple" : path !== undefined ? "files" : query !== undefined ? "globe" : "wrench",
-    status: item.finished ? isError ? "Failed" : stopped ? "Stopped" : "Completed" : active ? "Running" : "Incomplete",
+    status: item.finished ? noMatches ? "No matches" : isError ? "Failed" : stopped ? "Stopped" : "Completed" : active ? "Running" : "Incomplete",
     ...(durationMs === undefined ? {} : { duration: durationMs < 1000 ? `${Math.round(durationMs)} ms` : `${(durationMs / 1000).toFixed(1)} s` }),
     ...(exitCode === undefined ? {} : { exitCode }), sections };
+}
+
+/** A display-only interpretation of ripgrep's documented no-match exit status.
+ * Require an explicit empty output and a single recognizable invocation. Shell
+ * batches, pipelines, substitutions and diagnostics remain failures because a
+ * batch's status/output cannot establish which individual operation failed.
+ * Never alter the journal, provider result, exit code or execution outcome.
+ */
+function isEmptyRipgrepResult(command: string, output: Record<string, unknown>): boolean {
+  const captured = [output.aggregatedOutput, output.stdout, output.output];
+  if (!captured.some((value) => typeof value === "string")
+    || captured.some((value) => value !== undefined && (typeof value !== "string" || value.trim() !== ""))
+    || [output.stderr, output.error].some((value) => value !== undefined && value !== null && value !== "")
+    || output.content !== undefined || output.result !== undefined) return false;
+  let invocation = command.trim();
+  // Providers commonly show the shell executable around a simple search.
+  const wrapped = invocation.match(/^(?:"[^"\r\n]*[\\/](?:powershell|pwsh)(?:\.exe)?"|(?:powershell|pwsh)(?:\.exe)?)\s+-Command\s+"([^"\r\n]*)"$/i)
+    ?? invocation.match(/^(?:\/(?:[^\s]+\/)*(?:bash|zsh|sh)|bash|zsh|sh)\s+-(?:l?c)\s+(['"])(.*?)\1$/);
+  if (wrapped) invocation = wrapped.length === 3 ? wrapped[2]! : wrapped[1]!;
+  // Conservative even inside quotes: false negatives are preferable to hiding
+  // a real error. More complex commands need structured per-command outcomes.
+  if (/[;&|<>`$\r\n]/.test(invocation)) return false;
+  return /^(?:rg(?:\.exe)?|"[^"\r\n]*[\\/]rg(?:\.exe)?"|(?:[^\s"']+[\\/])+rg(?:\.exe)?)\s+\S/i.test(invocation);
 }
 
 /** Imported native activities keep their provenance while using the same readable layout. */

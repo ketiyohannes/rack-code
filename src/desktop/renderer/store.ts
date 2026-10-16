@@ -18,6 +18,7 @@ import type {
   ApprovalRequest,
   ConnectProviderView,
   ConnectView,
+  ProviderDiagnostic,
   HostErrorCode,
   RunView,
   RuntimeCapabilities,
@@ -88,6 +89,8 @@ export interface AppState {
   readonly connectProviders: readonly ConnectProviderView[];
   /** Sign-ins by connect ID: in progress, or finished and not yet dismissed. */
   readonly connects: Readonly<Record<string, ConnectView>>;
+  /** Explicit connection checks, held only for this window. Keys encode provider/account. */
+  readonly providerDiagnostics: Readonly<Record<string, { readonly pending: boolean; readonly result?: ProviderDiagnostic; readonly error?: string }>>;
   /** Plugin surfaces enabled in Settings > Plugins (see surfaces.ts). */
   readonly enabledPlugins: readonly string[];
   /** Account to scroll to and outline, e.g. after a duplicate-account error. */
@@ -115,6 +118,7 @@ export const INITIAL_STATE: AppState = {
   enabledPlugins: [],
   connectProviders: [],
   connects: {},
+  providerDiagnostics: {},
   acknowledgedUnknown: {},
 };
 

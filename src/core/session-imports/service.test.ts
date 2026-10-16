@@ -6,6 +6,17 @@ import { SessionImportsService } from "./service.js";
 import type { LocalSessionSource } from "./ports.js";
 
 const date = "2026-10-14T00:00:00.000Z";
+
+test("Windows folder validation accepts equivalent source paths through import", { skip: process.platform !== "win32" }, async () => {
+  const projects = new ProjectsService(new InMemoryProjectStore());
+  const project = await projects.createProject({ path: "E:\\Code\\My Project" });
+  const sessions = new SessionsService(new InMemorySessionStore());
+  const imports = new SessionImportsService(projects, sessions, [source("e:/CODE/My Project")]);
+  assert.equal((await imports.discover(project.id)).sessions.length, 1);
+  const result = await imports.import(project.id, "fake", "native-1");
+  assert.equal(result.session.projectId, project.id);
+  assert.equal(result.session.messages.length, 3);
+});
 function source(path: string): LocalSessionSource {
   const session = { sourceId: "fake", providerName: "Fake", nativeSessionId: "native-1", projectPath: path,
     title: "Imported task", createdAt: date, updatedAt: date };

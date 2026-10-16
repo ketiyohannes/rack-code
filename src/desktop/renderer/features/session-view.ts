@@ -1,3 +1,4 @@
+import { copyButton } from "../components/copy-button.js";
 /**
  * Center column: the open session as a simple chat transcript.
  *
@@ -88,7 +89,32 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   };
   transcript.addEventListener("scroll", updateChrome, { passive: true });
 
+  let selecting = false;
+  let pendingDraw = false;
+  const hasSelection = () => {
+    const selection = window.getSelection();
+    return selection !== null && !selection.isCollapsed
+      && selection.containsNode(transcript, true);
+  };
+  // Store updates keep arriving while selection is held. Preserve the DOM and
+  // flush the newest state on release/collapse rather than losing selected text.
+  transcript.addEventListener("pointerdown", (event) => {
+    if (event.button === 0) selecting = true;
+  });
+  const flushSelection = () => {
+    if (pendingDraw && !selecting && !hasSelection() && current !== undefined) draw(current, false);
+  };
+  window.addEventListener("pointerup", () => { selecting = false; flushSelection(); });
+  window.addEventListener("pointercancel", () => { selecting = false; flushSelection(); });
+  window.addEventListener("blur", () => { selecting = false; flushSelection(); });
+  document.addEventListener("selectionchange", flushSelection);
+
   function draw(state: AppState, jumpToEnd: boolean): void {
+    if (!jumpToEnd && (selecting || hasSelection())) {
+      pendingDraw = true;
+      return;
+    }
+    pendingDraw = false;
     // Keep following streamed output only when the user is already at the end.
     const follow = jumpToEnd || isAtEnd();
     const scrollTop = transcript.scrollTop;
@@ -155,7 +181,7 @@ function renderTranscript(
     return [placeholder("terminal-window", "What should we work on?", "Describe a task below. The agent works in this session's project.")];
   }
   return [
-    ...(session.importSource === undefined ? [] : [h("div", { class: "import-history-note note" }, icon("database"),
+    ...(session.importSource === undefined ? [] : [h("div", { class: "import-history-note note" }, icon("tray-arrow-down"),
       `Imported from ${session.importSource.providerName}. Continuing uses recent conversation context in a new runtime session; the original remains unchanged.`)]),
     ...renderImportedHistory(imported, memory, rerender, markdownActions(controller)),
     ...runs.map((run) => renderTurn(run, state, controller, fold, memory, rerender)),
@@ -258,6 +284,7 @@ function renderTurn(
     h("span", { class: "progress-dots", aria: { hidden: "true" } }, h("span"), h("span"), h("span")),
   ) : h("div", { class: "turn-meta" },
     h("time", { class: "meta-time", title: run.createdAt }, formatTime(run.createdAt)),
+    copyText === "" ? null : copyButton(copyText, "Copy response"),
   );
   if (active) {
     // Streaming redraws rebuild the turn. Phase dots against the run timestamp
@@ -330,7 +357,7 @@ function renderActivityGroup(key: string, entries: readonly { key: string; item:
   const running = views.filter((view) => view.status === "Running").length;
   const thinking = active && running === 0 && entries.at(-1)?.item.kind === "thinking";
   const status = running > 0 ? `${running} running` : thinking ? "Thinking" : failed > 0 ? `${failed} failed`
-    : views.some((view) => view.status === "Stopped") ? "Stopped" : views.every((view) => view.status === "Completed") ? "Completed" : "Recorded";
+    : views.some((view) => view.status === "Stopped") ? "Stopped" : views.every((view) => view.status === "Completed" || view.status === "No matches") ? "Completed" : "Recorded";
   const title = [
     `${tools.length} tool ${tools.length === 1 ? "call" : "calls"}`,
     thoughts === 0 ? null : `${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}`,
@@ -373,7 +400,7 @@ function activityLine(key: string, memory: ViewMemory, item: Extract<TranscriptI
       h("span", { class: "activity-icon" }, icon(view.icon)),
       h("span", { class: "activity-heading" },
         h("span", { class: "activity-title" }, view.title === "Run command"
-          ? `${running ? "Running" : view.status === "Completed" ? "Ran" : view.status} command`
+          ? view.status === "No matches" ? "Search · No matches" : `${running ? "Running" : view.status === "Completed" ? "Ran" : view.status} command`
           : `${view.status} · ${view.title}`),
         view.subtitle === undefined ? null
           // File activity targets are clickable; the click must not also
@@ -388,10 +415,10 @@ function activityLine(key: string, memory: ViewMemory, item: Extract<TranscriptI
       h("span", { class: "activity-meta" },
         view.duration === undefined ? null : h("span", {}, view.duration),
         view.exitCode === undefined ? null : h("span", {}, `exit ${view.exitCode}`),
-        h("span", { class: "activity-status", title: view.status, aria: { label: view.status } }, icon(running ? "circle-notch" : view.status === "Failed" ? "x-circle" : view.status === "Stopped" ? "stop-circle" : view.status === "Completed" ? "check" : "question", { className: running ? "spin" : "" }))),
+        h("span", { class: "activity-status", title: view.status, aria: { label: view.status } }, icon(running ? "circle-notch" : view.status === "Failed" ? "x-circle" : view.status === "Stopped" ? "stop-circle" : view.status === "Completed" || view.status === "No matches" ? "check" : "question", { className: running ? "spin" : "" }))),
       icon("caret-right", { className: "activity-caret" })),
     h("div", { class: "activity-body" }, ...view.sections.map((section) => h("section", { class: "activity-section" },
-      h("span", { class: "activity-section-label" }, section.label),
+      h("div", { class: "activity-section-heading" }, h("span", { class: "activity-section-label" }, section.label), copyButton(section.text, `Copy ${section.label.toLowerCase()}`)),
       section.format === "diff" ? h("pre", { class: "activity-diff" }, h("code", {}, ...section.text.split("\n").map((line) =>
         h("span", { class: /^(@@|---|\+\+\+)/.test(line) ? "diff-header" : line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-remove" : "diff-context" }, line || " "))))
         : h("pre", { class: `activity-code activity-${section.format}` }, section.text),
@@ -436,7 +463,7 @@ function thinkingLine(key: string, memory: ViewMemory, text: string, format: "tr
 
 /** Links open in the browser; paths open through main, relative to the session's project. */
 function markdownActions(controller: Controller): MarkdownActions {
-  return { openLink: (href) => controller.openExternal(href), openPath: (path) => void controller.openPath(path) };
+  return { openLink: (href) => controller.openExternal(href), openPath: (path) => void controller.openPath(path), copyControl: copyButton };
 }
 
 function errorLine(text: string): HTMLElement {

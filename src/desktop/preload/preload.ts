@@ -13,6 +13,8 @@ import type { HostEvent } from "../../contracts/desktop/events.js";
 import { IPC_CHANNELS, type HarnessBridge } from "../../contracts/desktop/transport.js";
 
 const bridge: HarnessBridge = {
+  windowAction: (action) => ipcRenderer.invoke(IPC_CHANNELS.windowAction, action),
+  windowTheme: (colors) => ipcRenderer.invoke(IPC_CHANNELS.windowTheme, colors),
   invoke: (command, params) => ipcRenderer.invoke(IPC_CHANNELS.invoke, command, params),
   selectDirectory: (options) => ipcRenderer.invoke(IPC_CHANNELS.selectDirectory, options),
   selectFiles: (kind) => ipcRenderer.invoke(IPC_CHANNELS.selectFiles, kind),

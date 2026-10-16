@@ -77,6 +77,31 @@ The first six rows describe the implemented foundational modules. Timeline is th
 
 Connected accounts use the `native_login` credential method: the provider keeps the credential in its own login store scoped to the account's private runtime-context directory (`auth.json` under `CODEX_HOME`, or the macOS Keychain entry keyed to `CLAUDE_CONFIG_DIR`). The app records only the opaque reference, and `NativeLoginCredentialResolver` resolves it to an empty environment because the runtime adapters already point the provider at that directory. Credential material therefore never passes through application code or records. Timeline, retrospective, and orchestration are optional modules maintained and shipped by the product owner, with on/off controls in settings. Third-party installation is not the intended meaning of optional. Specific adapter boundaries may emerge as integrations are validated.
 
+### Provider diagnostics (2026-10-16)
+
+Connections owns the optional `AccountConnector.diagnose` interface and its
+provider-neutral `ProviderDiagnostic` result. `ConnectionsService.diagnose`
+validates account/provider ownership, resolves only that account's runtime
+context, and coalesces concurrent checks for the same provider/context.
+The existing startup composition supplies the connectors; no provider SDK or
+protocol enters core. `auth.diagnose` exposes this through validated host IPC.
+
+Provider adapters own executable discovery, bounded local probes and protocol
+interpretation. Installation checks create and remove a disposable context;
+saved-account checks use the existing private context. No model turn, login,
+selection change or availability update is performed. Results contain only
+an executable path, parsed version, stage, normalized status/message and time;
+raw process output and credentials are excluded. Native providers may maintain
+their own runtime files while running these checks. Observations do not establish
+network access, subscription entitlement or remaining quota.
+
+The renderer owns transient pending/results state, offers explicit checks in
+Accounts settings, and drops saved-account observations after reconnects,
+including late replies. No persistence schema changes are required. Codex's
+JSON-RPC transport supports opt-in deadlines for startup/control requests;
+expiration stops that process and settles pending requests. Long-running
+commands and turns have no new deadline.
+
 ### Concrete runtime contract
 
 "Provider-neutral" has a strict meaning: core modules may import only application-owned contracts and data types. They must not import Codex app-server protocol names, Claude Agent SDK classes, provider transcript types, provider credential objects, or provider-specific event names. Those imports belong only inside `adapters/runtimes/codex` and `adapters/runtimes/claude`.
@@ -265,6 +290,14 @@ The graphical conversation view and terminal presentation must invoke the same a
 
 Keep Electron main responsible for lifecycle and desktop integration. Use a narrow preload API with context isolation and validate incoming IPC requests at the privileged boundary. The renderer receives serializable data and explicit operations, not raw IPC access, SDK objects, credentials, or arbitrary privileged execution capabilities.
 
+Implemented 2026-10-16: Windows/Linux menu presentation belongs to the renderer
+so it follows the app palette. An allowlisted `windowAction` bridge delegates
+native menu effects to main; `windowTheme` accepts validated hex caption colors.
+Both require a trusted bundled-page sender. Native caption controls remain owned
+by Electron, and macOS retains its system menu. No application rules or host
+services depend on this presentation feature. Connection diagnostics are exposed
+in an on-demand drawer rather than persistent account cards.
+
 Application modules must run headlessly for testing. Heavy or blocking work must not freeze the interface or main event loop. External agent processes remain behind runtime adapters, with explicit startup, cancellation, exit, and cleanup behavior.
 
 ### Execution lifetime and optional background work
@@ -345,6 +378,13 @@ Record the requested action, its runtime and account attempt, confirmed outcomes
 
 Keep native runtime transcripts and identifiers separately for provider-supported resume. Store large outputs, screenshots, and diffs as referenced artifacts instead of loading them with ordinary session history. Keep credentials in protected storage outside conversation and execution records. Retention, backup, encryption, and artifact storage formats remain open.
 
+JSON document replacement (2026-10-16) stages each write in a uniquely named
+same-directory file and retries transient EPERM/EACCES/EBUSY replacement errors
+with bounded backoff. Readers see the new in-memory snapshot only after replacement
+succeeds. Failed writes preserve the previous cached value and attempt cleanup of
+their staging file; permanent failures still propagate. This remains single-host
+persistence, not cross-process locking or a transaction across several documents.
+
 Version persisted sessions and records, and supply explicit migrations as their schemas evolve. Projects now use `projects.json` schema 4; sessions and execution use schema 3. The project store imports the old project/child-workspace document and `workspaces.json` before its first write, retaining folder IDs as project IDs or aliases to the canonical project when duplicate paths exist. Session and run migrations prefer the old `workspaceId` over any obsolete parent `projectId`, then resolve duplicate folder aliases to the canonical project. Both histories remain under the one folder row. Messages, continuations, attempts, journal entries, outcomes, revisions, and writer ownership remain intact. After migration the canonical documents are authoritative; the legacy `workspaces.json` file is left unchanged, while older projects, sessions, and execution documents are upgraded in place. Keep credentials out of conversation and execution logs. Provider-native payloads should remain scoped and versioned rather than silently becoming universal application data.
 
 Optional features are bundled, first-party modules with settings toggles. They declare their required core capabilities and any optional relationships. Composition validates those dependencies and registers their UI contributions and subscriptions. Disabling a feature removes its contributions and stops its workers without deleting its stored data or breaking basic execution. The behavior of a toggle during active work must be defined per feature. Downloadable plugins, arbitrary third-party code, and runtime code unloading are outside the current scope. Themes and fonts are settings, not a reason to create a plugin system.
@@ -398,7 +438,7 @@ The renderer retains current-session activity after live runs finish and rebuild
 
 Updated 2026-10-14. Projects exposes `getChanges(projectId)` through the desktop command `projects.changes`. It resolves the saved project folder and delegates to a `ProjectChangesReader` port. Startup composes the read-only `GitProjectChangesReader`; project identity, execution and persistence do not depend on Git preview availability. The adapter reads staged/unstaged differences against HEAD and bounded untracked text previews, scoped to that folder. Repositories without commits use staged plus unstaged patches. Results report ready, non-Git, or unavailable; read errors propagate to the panel. No project files or index entries are mutated.
 
-The Changes surface polls at two-second intervals while visible, serializes reads and rejects replies for a different selected project. It shows current working-tree changes, including edits made before or outside a run; it does not claim agent attribution or persist a diff artifact. Non-Git diffs, filesystem watchers, per-run baselines and large artifact storage remain unimplemented. Response footers contain only timestamps; diagnostic run details move to a separate right-panel surface.
+The Changes surface polls at two-second intervals while visible, serializes reads and rejects replies for a different selected project. It shows current working-tree changes, including edits made before or outside a run; it does not claim agent attribution or persist a diff artifact. Non-Git diffs, filesystem watchers, per-run baselines and large artifact storage remain unimplemented. Response footers contain timestamps and a compact copy-response control; diagnostic run details live in a separate right-panel surface.
 
 Native permission parameter verification (2026-10-14): Codex CLI 0.162.1 generated protocol bindings expose `approvalsReviewer` on thread start/resume and turn start, with `auto_review` supported. An isolated ephemeral thread-start check returned the requested reviewer and sandbox; no model turn was started. Claude Agent SDK’s installed declarations support `auto`. Provider availability and managed restrictions still govern whether automatic review can execute an action. See [Codex app-server permission parameters](https://developers.openai.com/codex/app-server/) and [Claude SDK permission modes](https://code.claude.com/docs/en/agent-sdk/permissions).
 

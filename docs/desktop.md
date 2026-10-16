@@ -4,6 +4,20 @@ Status: first desktop UI implemented, updated 2026-10-14. It presents the headle
 
 ## Process layout
 
+Command activity labels distinguish an empty standalone ripgrep search from a
+failed command. A finished `rg` invocation with exit code 1, explicitly empty
+output and no diagnostics displays **Search · No matches**, without a failure
+badge or failed group count. Simple PowerShell and POSIX shell wrappers are
+recognized. Compound commands, pipelines, diagnostics and unknown result shapes
+retain their existing failure labels; the renderer does not infer the success of
+each step in a batch. Raw exit codes and persisted provider outcomes are unchanged.
+
+Settings > Accounts includes **Connection details** actions opening a right-side
+drawer with an explicit **Test connection** button (2026-10-16). These report local executable,
+version, startup and sign-in observations with pending/error states and a
+timestamp. They do not start login or model work, and results are cleared on
+window reload or account reconnect. See [account connection checks](accounts.md#connection-checks-2026-10-16).
+
 ```mermaid
 flowchart LR
     Renderer[Renderer: vanilla TypeScript + CSS] -- window.harness --> Preload[Preload bridge]
@@ -16,10 +30,36 @@ flowchart LR
 | --- | --- | --- |
 | Execution host | `src/desktop/host/` | The composed application, every in-flight `ExecutionHandle`, pending approvals, and the command dispatcher. Started with `utilityProcess.fork`. |
 | Electron main | `src/desktop/main/` | App lifecycle, the window, request validation at the privileged boundary, relaying commands to the host, broadcasting host events, native dialogs (the folder picker), and stop-on-exit. Holds no application state. |
-| Preload | `src/desktop/preload/` | Exposes `window.harness` with `invoke`, `onEvent`, `selectDirectory`, and `openPath` only. Raw `ipcRenderer` is never exposed. |
+| Preload | `src/desktop/preload/` | Exposes the typed `window.harness` bridge, including host commands and narrow desktop operations. Raw `ipcRenderer` is never exposed. |
 | Renderer | `src/desktop/renderer/` | Presentation. A view cache of host data that can be rebuilt from host queries at any time. |
 
 The host runs outside main so provider processes and JSON persistence never block the window event loop, and so the future background mode can decouple the host's lifetime from windows without moving application code. This follows the architecture's recommendation of an execution host independent of renderer windows. The host is not yet supervised: if it exits, main reports `host.status: exited`, pending requests fail with `host_unavailable`, and the renderer shows a banner. Restarting a crashed host and recovering runs it left in `running` need a recovery policy first.
+
+## Window chrome and spacing (2026-10-16)
+
+Windows/Linux use a theme-colored File/Edit/View/Help strip without a visible
+application title. Native minimize/maximize/close controls remain OS-owned and
+receive the resolved palette colors. macOS retains its native menu and title-bar
+behavior. Menus support arrows, Escape, F10 and Alt+F/E/V/H; existing edit actions
+return focus to the editor before invoking the native operation.
+
+The sidebar retains the `thinking & code` wordmark below the menu strip to
+identify the app; only the duplicate native window title is hidden.
+
+The preload exposes only allowlisted `windowAction` operations and validated hex
+colors through `windowTheme`. Main verifies the bundled-page sender and owns all
+native effects. Closing and quitting retain the active-run exit policy.
+
+Account cards, settings, dialogs and tool panels have more consistent padding,
+button spacing and quieter borders. Connection details use a right-side drawer
+with focus containment, focus restoration and reduced-motion support. Closing a
+drawer hides it without cancelling an already requested bounded check.
+
+Changes status and empty-state copy have a 16px horizontal inset. Panel splitters
+use a 10px grab area and start from the visible width after window fitting, while
+saved preferences remain available when the window grows. Fitting reserves room
+for both visible panels and the main column; interrupted drags clear the resize
+cursor. Arrow keys and double-click reset remain supported.
 
 ## Contracts
 
@@ -164,3 +204,12 @@ Git status/diff reads are read-only and scoped to the saved project folder. Stat
 ### Native permission choices
 
 Approve for me uses the provider’s own automatic reviewer: Codex `auto_review` with the workspace-write sandbox, and Claude SDK `auto`. The provider can approve or deny an action; Rack does not open its manual tool-approval dialog for this mode. Ask me forwards native permission requests to Allow/Deny. Full access uses native bypass controls. Read only uses the native read-only sandbox/planning mode and denies requested mutations. The permission picker shows the active run’s selected mode and stays disabled until it ends, so it cannot imply that a setting changed mid-run.
+
+## Copying transcript content (2026-10-16)
+
+Code blocks, tool sections (including commands and output), and completed run
+responses have small copy buttons. They copy original text without UI labels;
+response copying preserves Markdown. The control briefly reports success or
+clipboard failure. Text can also be selected normally. Transcript redraws wait
+while a selection is being dragged or held, then catch up when it clears;
+switching sessions still renders the destination immediately.

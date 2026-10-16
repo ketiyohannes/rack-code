@@ -156,6 +156,7 @@ export class HostApi {
       "projects.changes": async (params) => projects.getChanges(params.projectId, params.repositoryPath),
       "projects.repositories": async ({ projectId, ...options }) => projects.discoverRepositories(projectId, options),
       "auth.providers": async () => connections.providers(),
+      "auth.diagnose": async (params) => connections.diagnose(params),
       "auth.connect": async (params) => connections.connect(params),
       "auth.submitCode": async (params) => {
         connections.submitCode(params.connectId, params.code);

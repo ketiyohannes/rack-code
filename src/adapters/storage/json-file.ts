@@ -1,4 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { dirname } from "node:path";
 
 /**
@@ -69,8 +71,11 @@ export class JsonFileDocument<T> {
     const operation = this.writeChain.then(async () => {
       const current = await this.read();
       const next = await mutator(current);
-      this.loaded = structuredClone(next);
-      await this.write(this.loaded);
+      // Publish only after the atomic replacement succeeds. A failed save must
+      // not become visible to readers or leak into the next queued mutation.
+      const committed = structuredClone(next);
+      await this.write(committed);
+      this.loaded = committed;
       return structuredClone(this.loaded);
     });
     this.writeChain = operation.then(
@@ -82,12 +87,41 @@ export class JsonFileDocument<T> {
 
   private async write(value: T): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await rename(temporaryPath, this.filePath);
+    const temporaryPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
+        encoding: "utf8", mode: 0o600, flag: "wx",
+      });
+      await replaceFileWithRetry(temporaryPath, this.filePath);
+    } finally {
+      // Remove only this write's staging file, never the canonical document.
+      // Cleanup failure must not turn a successful commit into a failed update
+      // or mask the original write error. A failed cleanup can leave an orphan.
+      await unlink(temporaryPath).catch(() => undefined);
+    }
+  }
+}
+
+/** Retry transient replacement failures without re-running the domain mutator.
+ * Windows readers/indexers can briefly prevent replacement; EBUSY can also
+ * occur on other hosts. Permanent failures still surface after 620ms of waits.
+ * Never unlink the destination as a workaround: readers must see a whole old
+ * or new document. Injectable operations let tests exercise failures reliably.
+ */
+export async function replaceFileWithRetry(
+  source: string, destination: string,
+  replace: typeof rename = rename,
+  wait: (milliseconds: number) => Promise<void> = delay,
+): Promise<void> {
+  const pauses = [20, 40, 80, 160, 320];
+  for (let attempt = 0; ; attempt += 1) {
+    try { await replace(source, destination); return; }
+    catch (error) {
+      const code = error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
+      const pause = pauses[attempt];
+      if (pause === undefined || !["EPERM", "EACCES", "EBUSY"].includes(String(code))) throw error;
+      await wait(pause);
+    }
   }
 }
 

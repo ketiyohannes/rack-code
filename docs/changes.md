@@ -1,5 +1,55 @@
 # Change log
 
+## 2026-10-16 - Non-alarming empty search results
+
+- Standalone ripgrep searches with exit code 1, explicit empty output and no diagnostics now display No matches instead of Failed, including simple PowerShell/POSIX shell wrappers and imported activities. Tool groups treat that display outcome as completed; raw exit codes and journal events remain intact. Ambiguous compound commands and genuine errors remain failures, following [ripgrep exit-status semantics](https://github.com/BurntSushi/ripgrep/blob/master/crates/core/flags/doc/template.rg.1).
+- Validation: type checks and all five tool-presentation tests passed, covering empty searches, wrappers, imported history, incomplete activities, errors and compound commands. No native UI interaction check performed.
+
+## 2026-10-16 - Recover transient JSON save failures
+
+- Investigated a real failed run reporting EPERM while replacing execution.json. Shared JSON persistence now retries transient EPERM/EACCES/EBUSY replacements up to five times with 620ms total backoff, without replaying the mutation or deleting the destination. Unique staging filenames avoid same-process temporary-name collisions, and abandoned staging files are cleaned up where possible.
+- Fixed cache publication before successful persistence: failed writes leave readers and subsequent updates on the last committed value. This consistency fix applies across operating systems; no macOS-specific settings change. It does not establish the cause of earlier generic provider exit-code failures.
+- Validation: type checks, desktop build and four targeted persistence regressions passed on Windows, covering transient/permanent failure, bounded retries, failed-save cache isolation, cleanup, queued updates and disk reload. Broader storage/execution/import checks: 20 passed, four project-migration tests failed on existing POSIX-versus-Windows path expectations. No macOS execution or live failure injection into user data was performed.
+
+## 2026-10-16 - Transcript selection and copy controls
+
+- Preserve transcript DOM while dragging or holding a text selection so live updates do not erase it. Add compact copy controls for code blocks, tool sections, and completed responses, with inline success/failure feedback.
+- Validation: type checks, desktop build, all 11 focused Markdown/tool-presentation tests, and git diff --check passed. Native clipboard and interactive selection checks have not been performed.
+
+
+## 2026-10-16 - Windows session import and clearer import icon
+
+- Fixed the session importer's bare Codex launch to use native Windows CLI discovery. Windows Codex/Claude history enumeration now matches folder identity locally across drive casing, separators and extended paths, with the same validation before saving. Claude reads the recorded directory spelling. Replaced the database icon with a tray/down-arrow import icon in the project action and imported-history label.
+- Validation: type checks, desktop build and 17 focused resolver/source/path/service/host tests passed, including durable import reload and Windows folder matching. Real Windows Codex history discovery/read and import into an in-memory Rack store succeeded, including duplicate detection; real Claude discovery returned no sessions for this project. Claude transcript import used fixtures. No model turn, original transcript mutation, WSL discovery or packaged-app UI test was performed.
+
+## 2026-10-16 - Restore sidebar app name
+
+- Restored the `thinking & code` wordmark and its original header spacing below the menu bar. The duplicate native window title remains hidden.
+- Validation: type checks and desktop build passed; no new native-window visual check performed.
+
+## 2026-10-16 - Changes spacing and panel resize follow-up
+
+- Inset Changes empty/loading/error messages by 16px. Splitters now start from the displayed width rather than an oversized saved preference after window shrinking. Fit both panels together, widen the grab area to 10px, and clear drag state on lost pointer capture.
+- Validation: type checks, desktop build and whitespace checks passed. Browser checks at 980px confirmed a 20px drag changes panel width by 20px after shrinking from 1400px with a saved 700px panel; keyboard resizing, message inset, released cursor and absence of horizontal overflow passed. Native OS pointer interruptions were not tested.
+
+## 2026-10-16 - UI spacing, connection drawer and themed menus
+
+- Moved connection tests and results into an on-demand drawer sliding in from the right. Quiet Connection details actions keep the account list compact. Escape closes only the top modal, including while its focused action is disabled; focus returns to the trigger. Reduced motion disables the slide animation.
+- Adjusted settings, account cards, dialog headers, buttons and tool-panel padding, gaps and borders. Hid the duplicate Windows/Linux window title while retaining the sidebar wordmark. File/Edit/View/Help now follows the app palette while keeping native caption controls. Main validates the narrow action/color bridge; macOS keeps its existing native chrome.
+- Validation: type checks and desktop build passed. Browser checks with a simulated host covered dark/light palettes, 980px layouts, long diagnostic paths, pending/results states, drawer focus/Escape, reduced motion, menu keyboard navigation and theme/action bridge calls. Screenshots reviewed. The native Electron smoke attempt did not complete and was stopped; native caption rendering and menu effects, macOS/Linux and packaged execution remain unverified. Earlier full-suite baseline failures are recorded below.
+
+## 2026-10-16 - Provider setup and account diagnostics
+
+- Added explicit Test connection actions in Settings > Accounts. Connections validates provider/account ownership and coalesces checks; adapters report executable location, parsed version, startup status and optional local sign-in state through the provider-neutral `auth.diagnose` command. Installation-only probes use disposable configuration, account checks use isolated saved contexts, and results never change selection or availability or start model turns. Raw CLI output and credentials are excluded from diagnostic results.
+- Added native Windows Claude discovery through PATH and the standard user install location. Codex startup/control requests have bounded deadlines, and transport close settles pending requests. CLI probes bound output and process lifetime; long-running model work is unaffected. Reconnects invalidate old UI observations and reject stale in-flight results.
+- Validation: type checks, headless/desktop builds, 34 focused adapter/core/controller/host tests and whitespace checks passed. Real installed Codex and Claude setup checks passed; both reported signed-out state against disposable empty account contexts. Browser checks with actual renderer/controller modules and a simulated host covered success, failure, disabled pending actions, correct account routing, long executable paths and narrow/light/dark layouts; screenshots reviewed.
+- Full-suite run: 198 passed, 20 failed out of 218. A clean export of the pre-feature commit reproduced 20 failures (190 passed out of 210), involving existing Windows filename/path/permission assumptions and repository/Timeline fixtures. These unrelated failures were not changed. Authenticated account checks, model turns, macOS/Linux execution and packaged Electron verification were not performed.
+
+## 2026-10-16 - Codex account launch on Windows
+
+- Fixed bare-command executable discovery behind `spawn codex ENOENT`. Sign-in, model discovery, runs and Codex terminals now share native Windows CLI discovery through PATH and the standard per-user npm prefix, supporting nested/hoisted platform packages and bundled vendor layouts without a shell. Missing installations produce an actionable error; explicit commands and non-Windows behavior are preserved.
+- Validation performed: type checks, 13 focused resolver/runtime tests, desktop build and whitespace checks passed. A real installed Codex server initialized successfully with a stripped-down PATH and disposable isolated CODEX_HOME. Full browser sign-in, an authenticated model turn, packaged Electron launch and the complete test suite were not performed.
+
 ## 2026-10-15 - Complete Terminal, Browser and Files
 
 - Finished the three interactive surfaces and their host/runtime wiring. Terminal reconnects to context-owned PTYs, prefers Codex's standalone command API when available, falls back to a local PTY, orders input, resizes and exposes exit status. Fixed xterm initialization before DOM attachment, pending-start cleanup, session-removal retention, cancelled-unload cleanup and native Unicode chunk decoding.
