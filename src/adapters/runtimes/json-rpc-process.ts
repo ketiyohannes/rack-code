@@ -53,6 +53,8 @@ export class JsonRpcProcess {
     const child = spawn(command, [...args], {
       cwd: options.cwd,
       env: options.environment,
+      // Give each owned provider a process group so shutdown also stops its tools.
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -71,7 +73,9 @@ export class JsonRpcProcess {
     });
     if (timeoutMs !== undefined) timer = setTimeout(() => {
       this.fail(new ProviderRequestTimeoutError(method));
-      this.child.kill();
+      // Preserve the control-request deadline and close the owned process group,
+      // even though fail() already marked this transport closed.
+      void this.close();
     }, timeoutMs);
     try { this.write({ id, method, params }); } catch (error) {
       this.fail(error instanceof Error ? error : new Error("Provider write failed."));
@@ -95,20 +99,34 @@ export class JsonRpcProcess {
     return this.messages.next();
   }
 
-  async close(): Promise<void> {
-    if (this.closing !== undefined) return this.closing;
-    // Closing must also settle outstanding requests, including startup/cancel.
-    this.fail(new Error("Provider process was closed."));
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
-    // A timeout can mark the transport closed before the OS process exits.
-    // Still wait for termination so disposable config can be removed safely.
-    this.closing = new Promise<void>((resolve) => {
-      const done = () => { clearTimeout(timer); resolve(); };
-      const timer = setTimeout(done, 1000);
-      this.child.once("close", done);
-      this.child.kill();
-    });
-    return this.closing;
+  close(): Promise<void> {
+    return this.closing ??= (async () => {
+      // A deadline can close the transport before the OS process exits. Always
+      // complete bounded native cleanup, including any owned descendant tools.
+      // Reject requests *before* marking closed. In particular, initialize or
+      // turn/interrupt may be awaiting an acknowledgment that will never arrive.
+      this.fail(new Error("Provider process was closed."));
+      const signal = (kind: NodeJS.Signals) => {
+        if (process.platform !== "win32" && this.child.pid !== undefined) {
+          try { process.kill(-this.child.pid, kind); return; } catch { /* The group may already be gone. */ }
+        }
+        this.child.kill(kind);
+      };
+      const waitForExit = async () => {
+        if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+        await new Promise<void>((resolve) => {
+          const done = () => { clearTimeout(timer); this.child.off("close", done); resolve(); };
+          const timer = setTimeout(done, 500);
+          this.child.once("close", done);
+        });
+      };
+      signal("SIGTERM");
+      await waitForExit();
+      // Even if the parent exited promptly, tools in its group can ignore TERM.
+      signal("SIGKILL");
+      // Retain main's wait-before-config-cleanup guarantee after forced shutdown.
+      await waitForExit();
+    })();
   }
 
   private write(message: JsonRpcMessage): void {

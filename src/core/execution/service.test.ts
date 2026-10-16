@@ -425,3 +425,21 @@ test("records the requested reasoning effort and speed and passes them to the ru
   assert.equal(run.speed, "fast");
   assert.equal(fixture.runtime.started[0]?.speed, "fast");
 });
+
+test("a failed terminal save closes events and relinquishes live ownership instead of hanging", async () => {
+  const fixture = await createFixture();
+  class FailedFinalStore extends InMemoryExecutionStore {
+    override async saveRun(run: import("./types.js").RunRecord): Promise<void> {
+      if (run.status === "completed") throw new Error("Final write failed");
+      await super.saveRun(run);
+    }
+  }
+  const runtimes = new RuntimeRegistry(); runtimes.register(fixture.runtime);
+  const execution = new ExecutionService(new FailedFinalStore(), fixture.accounts, fixture.sessions, fixture.projects, runtimes);
+  const handle = await execution.start({ sessionId: fixture.session.id, projectId: fixture.project.id, providerId: "fake", runtimeId: fixture.runtime.runtimeId, prompt: "work", permissionMode: "read_only" });
+  const drained = (async () => { for await (const _event of handle.events) { /* Consume until the failure closes the queue. */ } })();
+  await assert.rejects(handle.completed, /Final write failed/);
+  await drained;
+  assert.equal(execution.isActive(handle.runId), false);
+  assert.equal((await fixture.projects.getProject(fixture.project.id)).activeWriterAttemptId, undefined);
+});

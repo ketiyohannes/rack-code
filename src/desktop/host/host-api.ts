@@ -1,3 +1,6 @@
+import type { ReviewInboxService } from "../../features/pull-requests/index.js";
+import type { PullRequestsService } from "../../features/pull-requests/index.js";
+import type { UsageService } from "../../features/usage/index.js";
 /**
  * Transport-independent command dispatcher for the execution host.
  *
@@ -52,6 +55,9 @@ import type { BrowserService } from "../../features/browser/index.js";
 
 /** The application services the host needs; satisfied by `createApplication`. */
 export interface HostApplication {
+  readonly pullRequests?: PullRequestsService;
+  readonly reviewInbox?: ReviewInboxService;
+  readonly usage?: UsageService;
   readonly accounts: AccountsService;
   readonly projects: ProjectsService;
   readonly sessions: SessionsService;
@@ -72,6 +78,8 @@ type Handlers = {
 
 export class HostApi {
   private readonly activeRuns: ActiveRuns;
+  private readonly ready: Promise<void>;
+  private stopping = false;
   private readonly handlers: Handlers;
   /** Prevent removal from racing a run start before its handle is tracked. */
   private readonly sessionMutations = new Map<string, Promise<unknown>>();
@@ -80,6 +88,8 @@ export class HostApi {
     private readonly app: HostApplication,
     private readonly emit: (event: HostEvent) => void,
   ) {
+    this.ready = app.execution.initialize();
+    void this.ready.catch(() => {});
     this.activeRuns = new ActiveRuns({ emit, loadRun: (runId) => this.loadRun(runId) });
     this.handlers = this.createHandlers();
     // Sign-in progress is pushed to every client; a completed sign-in also
@@ -101,6 +111,7 @@ export class HostApi {
         throw new HostOperationError("unknown_command", `Unknown command '${String(command)}'.`);
       }
       const validated = validateCommandParams(command, params);
+      await this.ready;
       const handler = this.handlers[command] as (input: typeof validated) => Promise<unknown>;
       return { ok: true, value: await handler(validated) };
     } catch (error) {
@@ -110,9 +121,13 @@ export class HostApi {
 
   /** Stop-on-exit: cancels sign-ins, then runs (see `ActiveRuns.cancelAll`). */
   async shutdown(timeoutMs: number): Promise<number> {
+    this.stopping = true;
+    // Start cancellation before optional cleanup or queued mutations can stall it.
+    const stoppingRuns = this.activeRuns.cancelAll(timeoutMs);
     const stoppingTracking = this.app.timeline?.stopProjectTracking();
     await this.app.connections.cancelAll();
-    const remaining = await this.activeRuns.cancelAll(timeoutMs);
+    await Promise.allSettled([...this.sessionMutations.values()]);
+    const remaining = await stoppingRuns;
     await stoppingTracking;
     await this.app.terminal?.shutdown();
     return remaining;
@@ -120,7 +135,52 @@ export class HostApi {
 
   private createHandlers(): Handlers {
     const { accounts, projects, sessions, sessionImports, execution, runtimes, connections } = this.app;
+    const reviews = () => {
+      if (!this.app.pullRequests) throw new HostOperationError("feature_unavailable", "Pull requests are unavailable in this host.");
+      return this.app.pullRequests;
+    };
+    const inbox = () => {
+      if (!this.app.reviewInbox) throw new HostOperationError("feature_unavailable", "The account review inbox is unavailable in this host.");
+      return this.app.reviewInbox;
+    };
     return {
+      "reviews.accounts": async (p) => inbox().accounts(p.refresh),
+      "reviews.accountConnect": async (p) => inbox().connect(p.host, p.token),
+      "reviews.inbox": async (p) => inbox().list(p),
+      "reviews.inboxRepository": async (p) => inbox().repositoryList(p, p.query, p.state, p.page),
+      "reviews.inboxCreate": async (p) => inbox().create(p, p.input),
+      "reviews.inboxDetail": async (p) => {
+        const detail = await inbox().detail(p);
+        if (detail.timelineCheckpointId) this.emit({ type: "timeline.changed", sessionId: "" });
+        return detail;
+      },
+      "reviews.inboxAct": async (p) => { await inbox().act(p, p.action, p.body, p.head); return null; },
+      "reviews.inboxSync": async (p) => {
+        const result = await inbox().sync(p, p.projectId);
+        this.emit({ type: "timeline.changed", sessionId: "" });
+        return result;
+      },
+      "reviews.repositories": async (p) => reviews().repositories(p.projectId),
+      "reviews.connect": async (p) => { await reviews().connect(p.projectId, p.remote, p.token); return null; },
+      "reviews.list": async (p) => reviews().list(p.projectId, p.remote, p.query, p.state, p.page),
+      "reviews.detail": async (p) => {
+        const detail = await reviews().detail(p.projectId, p.remote, p.id);
+        if (detail.timelineCheckpointId) this.emit({ type: "timeline.changed", sessionId: "" });
+        return detail;
+      },
+      "reviews.create": async (p) => reviews().create(p.projectId, p.remote, p.input),
+      "reviews.act": async (p) => { await reviews().act(p.projectId, p.remote, p.id, p.action, p.body, p.head); this.emit({ type: "timeline.changed", sessionId: "" }); return null; },
+      "reviews.publish": async (p) => { await reviews().publish(p.projectId, p.remote, p.branch); return null; },
+      "reviews.sync": async (p) => {
+        const checkpointId = await reviews().sync(p.projectId, p.remote, p.id);
+        this.emit({ type: "timeline.changed", sessionId: "" });
+        return { checkpointId };
+      },
+      "usage.report": async (p) => {
+        if (!this.app.usage) throw new HostOperationError("feature_unavailable", "Usage is unavailable in this host.");
+        if (p.projectId) await projects.getProject(p.projectId);
+        return this.app.usage.report(p);
+      },
       "files.list": async (params) => this.files().list(params.projectId, params.path),
       "files.read": async (params) => this.files().read(params.projectId, params.path),
       "files.save": async (params) => this.files().save(params.projectId, params.path, params.text, params.version),
@@ -226,8 +286,9 @@ export class HostApi {
       },
       "sessions.get": async (params) => sessions.get(params.sessionId),
       "sessions.attachFiles": async (params) => this.mutateSession(params.sessionId, () => sessions.attachFiles(params.sessionId, params.paths)),
-      "sessions.remove": async ({ sessionId }) => this.mutateSession(sessionId, async () => {
+      "sessions.remove": async ({ sessionId, force }) => this.mutateSession(sessionId, async () => {
         const session = await sessions.get(sessionId);
+        if (force === true) await this.activeRuns.cancelSession(sessionId, 8000);
         const runs = await execution.listRuns(sessionId);
         if (this.activeRuns.list().some((active) => active.run.sessionId === sessionId) ||
           runs.some((run) => run.status === "queued" || run.status === "running")) {
@@ -315,6 +376,7 @@ export class HostApi {
       },
 
       "runs.start": async (params) => this.mutateSession(params.sessionId, async () => {
+        if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
         const project = await projects.getProject(params.projectId);
         if (project.activeWriterAttemptId !== undefined) {
           throw new HostOperationError(
@@ -333,13 +395,23 @@ export class HostApi {
         const observer = await this.app.timeline?.beginRun({ sessionId: params.sessionId });
         let handle: Awaited<ReturnType<typeof execution.start>>;
         try {
+          if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
           handle = await execution.start(params);
         } catch (error) {
           observer?.abandon();
           throw error;
         }
         observer?.bindRun(handle.runId);
-        const run = await this.loadRun(handle.runId);
+        let run: RunView;
+        try {
+          if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+          run = await this.loadRun(handle.runId);
+          if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+        } catch (error) {
+          // A failed start reply must not strand an untracked provider process.
+          try { await handle.cancel(); await handle.completed; } finally { observer?.abandon(); }
+          throw error;
+        }
         const fallbackFromAccountId = selected !== undefined && selected.id !== run.accountId
           ? selected.id
           : undefined;
@@ -432,7 +504,10 @@ export class HostApi {
 
   private async runView(run: RunRecord): Promise<RunView> {
     const attempts = await Promise.all(run.attemptIds.map((id) => this.app.execution.getAttempt(id)));
-    return { ...run, attempts };
+    // A failed terminal save can leave a pending durable status even after
+    // the handle ended. Never render that orphan as actionable live work.
+    const orphan = (run.status === "queued" || run.status === "running") && !this.app.execution.isActive(run.id);
+    return { ...run, attempts, ...(orphan ? { status: "unknown" as const, error: "Run ended without a saved final outcome. Review the activity before continuing." } : {}) };
   }
 }
 

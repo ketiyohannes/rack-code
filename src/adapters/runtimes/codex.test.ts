@@ -295,3 +295,42 @@ test("Codex reports service tiers as speeds with a standard option and sends ser
     if (speed !== undefined) assert.equal(turn.params.serviceTierForTurn, speed);
   }
 });
+
+test("Codex nested usage excludes earlier resumed turns and duplicate notifications stay cumulative", async () => {
+  const messages = [
+    { method: "thread/tokenUsage/updated", params: { threadId: "thread", turnId: "old-turn", tokenUsage: { total: { inputTokens: 990, outputTokens: 100 }, last: { inputTokens: 900, outputTokens: 90 } } } },
+    ...[20, 20, 50].map((delta) => ({ method: "thread/tokenUsage/updated", params: { threadId: "thread", turnId: "turn", tokenUsage: { total: { inputTokens: 1000 + delta, outputTokens: 100 + delta / 10 }, last: { inputTokens: delta === 50 ? 30 : 20, outputTokens: delta === 50 ? 3 : 2 } } } })),
+    { method: "turn/completed", params: { turn: { status: "completed" } } },
+  ];
+  const adapter = new CodexRuntimeAdapter({ resolve: async () => ({ environment: {} }) }, { resolve: async () => ({ directory: "/context" }) }, { createProcess: () => ({
+    request: async (method) => method.startsWith("thread/") ? { thread: { id: "thread" } } : method === "turn/start" ? { turn: { id: "turn" } } : {},
+    notify: () => {}, respond: () => {}, respondError: () => {}, close: async () => {},
+    nextMessage: async () => ({ done: false, value: messages.shift()! }),
+  }) });
+  const events = [];
+  for await (const event of adapter.resumeRun({ runId: "run", attemptId: "attempt", sessionId: "session", projectPath: "/project", prompt: "test", permissionMode: "ask",
+    continuation: { nativeSessionId: "thread" }, account: { accountId: "account", providerId: "codex", credential: { id: "credential", providerId: "codex", method: "native_login" }, runtimeContextId: "context" },
+    signal: new AbortController().signal, requestApproval: async () => "deny" })) if (event.type === "usage") events.push(event);
+  assert.deepEqual(events.map((event) => event.inputTokens), [20, 20, 50]);
+  assert.deepEqual(events.map((event) => event.outputTokens), [2, 2, 5]);
+});
+
+test("Codex can forcibly close a provider stalled before thread initialization", async () => {
+  let rejectStartup!: (reason: Error) => void;
+  const startup = new Promise<never>((_resolve, reject) => { rejectStartup = reject; });
+  let created!: () => void;
+  const ready = new Promise<void>((resolve) => { created = resolve; });
+  let closed = 0;
+  const adapter = new CodexRuntimeAdapter({ resolve: async () => ({ environment: {} }) }, { resolve: async () => ({ directory: "/context" }) }, { createProcess: () => {
+    created();
+    return { request: async () => startup, notify: () => {}, respond: () => {}, respondError: () => {}, nextMessage: async () => new Promise(() => {}),
+      close: async () => { closed++; rejectStartup(new Error("Provider stopped")); } };
+  } });
+  const controller = new AbortController();
+  const iterator = adapter.startRun({ runId: "run", attemptId: "attempt", sessionId: "session", projectPath: "/project", prompt: "test", permissionMode: "ask",
+    account: { accountId: "account", providerId: "codex", credential: { id: "credential", providerId: "codex", method: "native_login" }, runtimeContextId: "context" }, signal: controller.signal, requestApproval: async () => "deny" })[Symbol.asyncIterator]();
+  const pending = iterator.next(); await ready;
+  controller.abort(); await adapter.forceCancel({ attemptId: "attempt", signal: controller.signal });
+  assert.equal((await pending).value?.type, "interrupted");
+  await iterator.return?.(); assert.ok(closed > 0);
+});

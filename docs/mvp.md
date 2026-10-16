@@ -51,3 +51,7 @@ The public API and host contracts use the new names only: `projects.list`/`proje
 ## Read-only project changes
 
 `projects.getChanges(projectId)` resolves the saved folder and reads current Git changes through an injected `ProjectChangesReader` port. `createApplication` supplies the bounded Git reader; the desktop exposes it as `projects.changes` for the right-side Changes surface. Execution does not depend on this preview. It includes pre-existing edits and does not record per-run attribution. See [desktop application](desktop.md) for refresh behavior and preview limits.
+
+## Interrupted-host recovery
+
+Execution startup now reconciles durable queued/running records from a prior host to unknown outcomes, records the recovery in the journal and clears previous-host project writers before accepting new work. Cancellation has bounded native cleanup, including optional force closure of the owned runtime, and ignores late provider output. Explicitly confirmed running-session removal stops and settles the run before deleting the conversation. See [desktop recovery](desktop.md#recovering-after-an-interrupted-app-exit) and [architecture](architecture.md#execution-recovery-and-bounded-shutdown-2026-10-16).

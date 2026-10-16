@@ -1,6 +1,7 @@
+import { recoverExecutionState } from "../../core/execution/recovery.js";
 import { JsonFileDocument } from "./json-file.js";
 import type { ExecutionStore } from "../../core/execution/ports.js";
-import type { AttemptId, AttemptRecord, JournalEntry, RunId, RunRecord } from "../../core/execution/types.js";
+import type { AttemptId, AttemptRecord, JournalEntry, RunId, RunRecord, RunUsage } from "../../core/execution/types.js";
 
 interface ExecutionDocument {
   readonly schemaVersion: 3;
@@ -42,6 +43,21 @@ export class JsonExecutionStore implements ExecutionStore {
           return { ...rest, projectId: await resolveProjectId(projectId) };
         })),
       };
+    });
+  }
+
+  async recoverInterruptedRuns(observedAt: string): Promise<void> {
+    await this.document.update((current) => ({ ...current, ...recoverExecutionState(current, observedAt) }));
+  }
+
+  async listRunUsage(): Promise<readonly RunUsage[]> {
+    return this.document.select((value) => {
+      const byRun = new Map<string, JournalEntry[]>();
+      for (const entry of value.journal) if (entry.type === "usage") {
+        const entries = byRun.get(entry.runId) ?? [];
+        entries.push(entry); byRun.set(entry.runId, entries);
+      }
+      return value.runs.map((run) => ({ run: { id: run.id, projectId: run.projectId, providerId: run.providerId, status: run.status, createdAt: run.createdAt, ...(run.model === undefined ? {} : { model: run.model }) }, usage: byRun.get(run.id) ?? [] }));
     });
   }
 

@@ -56,6 +56,8 @@ export interface Notice {
 export type SettingsSection = "general" | "accounts" | "models" | "permissions" | "plugins" | "shortcuts" | "notifications" | "about";
 
 export interface AppState {
+  readonly page: "chat" | "usage" | "pull-requests";
+  readonly reviewProjectId?: string;
   readonly host: { readonly status: "connecting" | "ready" | "exited"; readonly detail?: string };
   readonly accounts: readonly AccountView[];
   readonly runtimes: readonly RuntimeView[];
@@ -101,6 +103,7 @@ export interface AppState {
 }
 
 export const INITIAL_STATE: AppState = {
+  page: "chat",
   host: { status: "connecting" },
   accounts: [],
   runtimes: [],

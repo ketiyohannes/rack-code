@@ -353,3 +353,35 @@ test("a removal broadcast excludes late journals and stale session-list replies"
   assert.deepEqual(store.get().transcripts, {});
   assert.equal(store.get().notice, undefined);
 });
+
+test("host exit replaces loading runs with unknown history and preserves streamed output", async () => {
+  const store = new ImmediateStore();
+  let emit!: (event: HostEvent) => void;
+  const host = { onEvent: (listener: typeof emit) => { emit = listener; return () => {}; }, call: async (command: string) => command === "models.list" ? { models: [], failures: [] } : [] } as unknown as HostClient;
+  await new Controller(host, store).start();
+  store.update((state) => ({ ...state, session, selection: { projectId: "project", sessionId: "session" } }));
+  emit({ type: "run.started", run: { ...run, status: "running" } });
+  emit({ type: "run.event", runId: run.id, index: 0, event: { type: "message_delta", text: "Partial work" } });
+  emit({ type: "host.status", status: "exited", detail: "Host stopped" });
+  assert.deepEqual(store.get().live, {});
+  assert.equal(store.get().runs[0]?.status, "unknown");
+  assert.equal(store.get().transcripts[run.id]?.[0]?.type, "message_delta");
+  assert.match(store.get().runs[0]?.error ?? "", /host stopped/);
+  emit({ type: "run.started", run: { ...run, status: "running" } });
+  assert.deepEqual(store.get().live, {}, "late IPC must not resurrect a dead host run");
+});
+
+test("only explicitly confirmed deletion sends force and cancellation errors restore retry", async () => {
+  const store = new ImmediateStore();
+  const calls: unknown[] = [];
+  const host = { call: async (command: string, params: unknown) => {
+    calls.push(params); if (command === "runs.cancel") throw new Error("Transport failed"); return null;
+  } } as unknown as HostClient;
+  const controller = new Controller(host, store);
+  assert.equal(await controller.removeSession("ordinary"), true);
+  assert.equal(await controller.removeSession("running", true), true);
+  assert.deepEqual(calls.slice(0, 2), [{ sessionId: "ordinary" }, { sessionId: "running", force: true }]);
+  store.update((state) => ({ ...state, live: { [run.id]: { run: { ...run, status: "running" }, events: [], pendingApprovals: [], decisions: {}, cancelRequested: false } } }));
+  await controller.cancelRun(run.id);
+  assert.equal(store.get().live[run.id]?.cancelRequested, false);
+});

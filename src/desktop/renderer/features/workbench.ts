@@ -113,10 +113,10 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
               : surface.id === "terminal" ? terminalPanel.element
                 : surface.id === "browser" ? browserPanel.element : undefined));
     }
-    timelinePanel.setActive(surface?.id === "timeline");
-    filesPanel.setActive(surface?.id === "files");
-    terminalPanel.setActive(surface?.id === "terminal");
-    browserPanel.setActive(surface?.id === "browser");
+    timelinePanel.setActive(store.get().page === "chat" && surface?.id === "timeline");
+    filesPanel.setActive(store.get().page === "chat" && surface?.id === "files");
+    terminalPanel.setActive(store.get().page === "chat" && surface?.id === "terminal");
+    browserPanel.setActive(store.get().page === "chat" && surface?.id === "browser");
     if (focused instanceof HTMLInputElement && focused.isConnected && document.activeElement !== focused) {
       focused.focus({ preventScroll: true });
       if (caret !== undefined && caret.start !== null && caret.end !== null) focused.setSelectionRange(caret.start, caret.end);
@@ -350,7 +350,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     }
   });
 
-  store.watch((state) => state.enabledPlugins, () => render());
+  store.watch((state) => [state.enabledPlugins, state.page], () => { render(); void refresh(); });
   store.watch((state) => [state.selection.runId, state.journal, state.live, state.runs, state.session], () => {
     if (openSurface === "run-details") render();
   });

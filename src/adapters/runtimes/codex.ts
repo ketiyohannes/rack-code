@@ -43,6 +43,8 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
   readonly runtimeId = "codex-app-server";
   readonly providerId = "codex";
   private readonly active = new Map<string, ActiveCodexRun>();
+  /** Includes startup, before a thread/turn exists and graceful interruption is possible. */
+  private readonly processes = new Map<string, ReturnType<CodexProcessFactory>>();
   private readonly createProcess: CodexProcessFactory;
 
   constructor(
@@ -227,6 +229,13 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     } catch (error) { closed = true; await child.close(); throw error; }
   }
 
+  async forceCancel(input: Pick<RuntimeRunInput, "attemptId" | "signal">): Promise<void> {
+    const child = this.processes.get(input.attemptId);
+    await child?.close();
+    this.active.delete(input.attemptId);
+    this.processes.delete(input.attemptId);
+  }
+
   private async *run(input: RuntimeRunInput, resume: boolean): AsyncIterable<RuntimeEvent> {
     const credential = await this.credentials.resolve(input.account.credential);
     const context = await this.contexts.resolve(input.account.runtimeContextId);
@@ -236,11 +245,13 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       ...credential.environment,
       CODEX_HOME: context.directory,
     };
+    input.signal.throwIfAborted();
     const childProcess = this.createProcess({ cwd: input.projectPath, environment });
+    this.processes.set(input.attemptId, childProcess);
     let threadId: string | undefined;
     let turnId: string | undefined;
     let assistantText = "";
-    const eventState = { thinking: new Map<string, string>(), messages: new Map<string, string>() };
+    const eventState: CodexEventState = { thinking: new Map<string, string>(), messages: new Map<string, string>(), ...(resume ? {} : { usageBaseline: { inputTokens: 0, outputTokens: 0 } }) };
     const questionRequests = new Map<string, AbortController>();
     let appTools: Awaited<ReturnType<typeof startAppToolServer>>;
 
@@ -331,6 +342,12 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
           questionRequests.get(key)?.abort();
           questionRequests.delete(key);
         }
+        if (message.method === "thread/tokenUsage/updated") {
+          const params = asRecord(message.params);
+          // A resumed server can replay another turn's counters. Only this
+          // thread/turn contributes observations to the current attempt.
+          if ((params.threadId !== undefined && params.threadId !== threadId) || (params.turnId !== undefined && params.turnId !== turnId)) continue;
+        }
         const events = mapCodexNotification(message.method, message.params, eventState);
         for (const event of events) {
           if (event.type === "message_delta") {
@@ -360,6 +377,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       for (const request of questionRequests.values()) request.abort();
       questionRequests.clear();
       this.active.delete(input.attemptId);
+      this.processes.delete(input.attemptId);
       await childProcess.close();
       await appTools?.close();
     }
@@ -457,6 +475,7 @@ function codexApprovalResponse(
 interface CodexEventState {
   readonly thinking: Map<string, string>;
   readonly messages: Map<string, string>;
+  usageBaseline?: { inputTokens: number; outputTokens: number };
 }
 
 /** Correlate native items and keep summaries separate from exposed trace text. */
@@ -520,8 +539,19 @@ function mapCodexNotification(method: string, rawParams: unknown, state: CodexEv
     case "thread/tokenUsage/updated": {
       const usage = asRecord(params.tokenUsage ?? params);
       const event: Extract<RuntimeEvent, { type: "usage" }> = { type: "usage" };
-      const inputTokens = numberValue(usage.inputTokens);
-      const outputTokens = numberValue(usage.outputTokens);
+      const total = asRecord(usage.total);
+      const last = asRecord(usage.last);
+      const nested = numberValue(total.inputTokens) !== undefined && numberValue(total.outputTokens) !== undefined;
+      // Current app-server totals are thread-wide. On resume the first active
+      // turn increment establishes the pre-turn baseline (total minus last).
+      // All following notifications become cumulative *attempt* counters,
+      // including duplicate notifications, rather than re-billing the thread.
+      if (nested && state.usageBaseline === undefined) state.usageBaseline = {
+        inputTokens: Math.max(0, Number(total.inputTokens) - (numberValue(last.inputTokens) ?? 0)),
+        outputTokens: Math.max(0, Number(total.outputTokens) - (numberValue(last.outputTokens) ?? 0)),
+      };
+      const inputTokens = nested ? Math.max(0, Number(total.inputTokens) - state.usageBaseline!.inputTokens) : numberValue(usage.inputTokens);
+      const outputTokens = nested ? Math.max(0, Number(total.outputTokens) - state.usageBaseline!.outputTokens) : numberValue(usage.outputTokens);
       const costUsd = numberValue(usage.totalCostUsd);
       return [{
         ...event,

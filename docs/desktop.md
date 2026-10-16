@@ -138,7 +138,7 @@ The composer starts with **Approve for me** as its permission mode. Choosing ano
 
 Hover or keyboard-focus a session row to reveal its trash button, then choose **Remove session** in the confirmation dialog. Cancel is focused first. Sessions with an active run cannot be removed; stop the run and wait for it to finish. Failed removals keep the conversation and allow retry.
 
-Removal deletes the saved Rack conversation and continuation associations and updates every connected window. Removing the selected session returns chat to its project; removing another session keeps the current conversation open. The recent-history cache is evicted and late loads cannot restore the removed row. Project files and provider originals stay unchanged. Execution audit records, attachments and Timeline snapshots remain retained locally; this action is not a data purge. Imported provider history can be imported again as a new Rack session.
+Removal deletes the saved Rack conversation and continuation associations and updates every connected window. A running session can also be removed: its button opens an explicit “Are you sure?” warning with **Stop and delete session**. Confirmation stops the owned run and waits for durable settlement before removing the conversation. If work starts after the ordinary modal opens, a busy response changes the warning and requires another explicit confirmation; the app never forces deletion automatically. Removing the selected session returns chat to its project; removing another session keeps the current conversation open. The recent-history cache is evicted and late loads cannot restore the removed row. Project files and provider originals stay unchanged. Execution audit records, attachments and Timeline snapshots remain retained locally; this action is not a data purge. Imported provider history can be imported again as a new Rack session.
 
 ### Session loading and agent questions
 
@@ -196,3 +196,15 @@ Git status/diff reads are read-only and scoped to the saved project folder. Stat
 ### Native permission choices
 
 Approve for me uses the provider’s own automatic reviewer: Codex `auto_review` with the workspace-write sandbox, and Claude SDK `auto`. The provider can approve or deny an action; Rack does not open its manual tool-approval dialog for this mode. Ask me forwards native permission requests to Allow/Deny. Full access uses native bypass controls. Read only uses the native read-only sandbox/planning mode and denies requested mutations. The permission picker shows the active run’s selected mode and stays disabled until it ends, so it cannot imply that a setting changed mid-run.
+
+## Pull Requests, Usage and notices
+
+The sidebar footer now has icon-only Settings, Usage and Pull Requests controls with accessible labels and tooltips. Usage and Pull Requests open full main-area pages and retain the selected conversation for return. Workbench panels pause while these pages are open. Notices appear at bottom left above the footer.
+
+The PR page opens a compact GitHub inbox across every connected account, independent of saved projects. It provides account/involvement/status filters and a focused Overview/Code/Activity review. Repositories retains GitHub, GitLab and Bitbucket Cloud browsing, creation and publishing; GitHub reads and writes use an explicitly chosen identity. View in Timeline imports an isolated full-PR comparison into project history; Timeline links back to the inbox with its project retained for repository actions. Usage shows recorded run activity and reported token/cost coverage. See [Pull requests and Usage](pull-requests.md) for connections, synchronization, limits and validation.
+
+## Recovering after an interrupted app exit
+
+Saved queued/running records from a previous host are reconciled before the next window receives session data. They become unknown outcomes, their old writer locks are released, and their saved activity remains available for review. They no longer display perpetual progress dots with no live Stop control. If the execution host exits while a window remains open, the window immediately removes live loading states and shows uncertain history instead.
+
+Stop waits briefly for the provider, then closes the owned runtime if graceful cancellation stalls. Quitting has a separate finite host deadline, including cancellation and cleanup, and prevents queued starts from creating new work during shutdown. Recovery does not claim to undo work already performed; review uncertain activity before continuing.

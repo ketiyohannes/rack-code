@@ -89,6 +89,17 @@ export class ProjectsService {
     return this.changes.discover(project.path, options);
   }
 
+  /** Called once before a new host accepts work. Old process-owned locks cannot be live here. */
+  async recoverAbandonedWriters(): Promise<void> {
+    await this.mutate(async () => {
+      for (const project of await this.store.listProjects()) {
+        if (project.activeWriterAttemptId === undefined) continue;
+        const { activeWriterAttemptId: _oldOwner, ...rest } = project;
+        await this.store.saveProject({ ...rest, updatedAt: this.now().toISOString() });
+      }
+    });
+  }
+
   async acquireWriter(projectId: ProjectId, attemptId: string): Promise<ProjectRecord> {
     return this.mutate(async () => {
       const project = await this.getProject(projectId);

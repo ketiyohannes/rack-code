@@ -126,6 +126,7 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
   const tabs = h("div", { class: "timeline-scopes" },
     h("div", { role: "tablist", aria: { label: "Timeline scope" } }, projectTab, sessionTab), refresh);
   const controls = h("div", { class: "timeline-controls" }, search, disable);
+  tabs.append(h("button", { class: "icon-button", type: "button", title: "Pull requests", aria: { label: "Pull requests" }, onClick: () => controller.openPage("pull-requests", projectId) }, icon("git-pull-request")));
   const notices = h("div", { class: "timeline-notices" });
   const list = h("div", { class: "timeline-list", role: "list", aria: { label: "Recorded changes" } });
   const repositoryName = h("span", { class: "timeline-repository-name" });

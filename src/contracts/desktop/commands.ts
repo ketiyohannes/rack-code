@@ -1,3 +1,6 @@
+import type { AccountCatalog, ReviewAccount, InboxQuery, InboxResult, InboxTarget, RepositoryTarget, InboxDetail } from "../../features/pull-requests/index.js";
+import type { ReviewRepository, PullDetail, PullList, PullRequest, CreatePull, PullState, ReviewAction } from "../../features/pull-requests/index.js";
+import type { UsageReport } from "../../features/usage/index.js";
 /**
  * Typed command surface exposed by the execution host to desktop clients.
  *
@@ -95,6 +98,24 @@ export interface StartRunParams {
 type NoParams = Record<string, never>;
 
 export interface HostCommandMap {
+  "reviews.accounts": { params: { refresh?: boolean }; result: AccountCatalog };
+  "reviews.accountConnect": { params: { host: string; token: string }; result: ReviewAccount };
+  "reviews.inbox": { params: InboxQuery; result: InboxResult };
+  "reviews.inboxRepository": { params: RepositoryTarget & { query: string; state: PullState; page: number }; result: PullList };
+  "reviews.inboxCreate": { params: RepositoryTarget & { input: CreatePull }; result: PullRequest };
+  "reviews.inboxDetail": { params: InboxTarget; result: InboxDetail };
+  "reviews.inboxAct": { params: InboxTarget & { action: ReviewAction; body: string; head: string }; result: null };
+  "reviews.inboxSync": { params: InboxTarget & { projectId?: string }; result: { projectId: string; checkpointId: string } };
+  "reviews.repositories": { params: { projectId: string }; result: readonly ReviewRepository[] };
+  "reviews.connect": { params: { projectId: string; remote: string; token: string }; result: null };
+  "reviews.list": { params: { projectId: string; remote: string; query: string; state: PullState; page: number }; result: PullList };
+  "reviews.detail": { params: { projectId: string; remote: string; id: number }; result: PullDetail };
+  "reviews.create": { params: { projectId: string; remote: string; input: CreatePull }; result: PullRequest };
+  "reviews.act": { params: { projectId: string; remote: string; id: number; action: ReviewAction; body: string; head: string }; result: null };
+  "reviews.publish": { params: { projectId: string; remote: string; branch: string }; result: null };
+  "reviews.sync": { params: { projectId: string; remote: string; id: number }; result: { checkpointId: string } };
+  "usage.report": { params: { projectId?: string; days: number }; result: UsageReport };
+
   "files.list": { params: { projectId: string; path: string }; result: FileListing };
   "files.read": { params: { projectId: string; path: string }; result: FileDocument };
   "files.save": { params: { projectId: string; path: string; text: string; version: string }; result: FileDocument };
@@ -143,7 +164,7 @@ export interface HostCommandMap {
   };
   "sessions.get": { params: { readonly sessionId: string }; result: SessionView };
   "sessions.attachFiles": { params: { readonly sessionId: string; readonly paths: readonly string[] }; result: readonly SessionAttachment[] };
-  "sessions.remove": { params: { readonly sessionId: string }; result: null };
+  "sessions.remove": { params: { readonly sessionId: string; readonly force?: boolean }; result: null };
   "sessions.discover": { params: { readonly projectId: string }; result: SessionDiscovery };
   "sessions.previewImport": {
     params: { readonly projectId: string; readonly sourceId: string; readonly nativeSessionId: string };
@@ -206,6 +227,24 @@ const credential = object({ id, providerId: id, method: id });
 
 /** Runtime validators, one per command, typed against `HostCommandMap`. */
 export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<CommandParams<C>> } = {
+  "reviews.accounts": object({ refresh: optional(boolean) }),
+  "reviews.accountConnect": object({ host: id, token: text({ maxLength: 4096 }) }),
+  "reviews.inbox": object({ accountId: optional(id), involvement: oneOf(["involved", "created", "review_requested", "assigned"]), query: text({ allowEmpty: true, maxLength: 512 }), state: oneOf(["open", "closed", "merged", "all"]), page: integer(1, 20) }),
+  "reviews.inboxRepository": object({ accountId: id, repository: id, query: text({ allowEmpty: true, maxLength: 512 }), state: oneOf(["open", "closed", "merged", "all"]), page: integer(1, 1000) }),
+  "reviews.inboxCreate": object({ accountId: id, repository: id, input: object({ title: text({ maxLength: 256 }), body: text({ allowEmpty: true, maxLength: 60000 }), source: id, target: id, draft: boolean }) }),
+  "reviews.inboxDetail": object({ accountId: id, repository: id, id: integer(1, 2147483647) }),
+  "reviews.inboxAct": object({ accountId: id, repository: id, id: integer(1, 2147483647), action: oneOf(["comment", "approve", "request_changes", "merge", "close", "reopen"]), body: text({ allowEmpty: true, maxLength: 60000 }), head: text({ maxLength: 64 }) }),
+  "reviews.inboxSync": object({ accountId: id, repository: id, projectId: optional(id), id: integer(1, 2147483647) }),
+  "reviews.repositories": object({ projectId: id }),
+  "reviews.connect": object({ projectId: id, remote: id, token: text({ allowEmpty: true, maxLength: 4096 }) }),
+  "reviews.list": object({ projectId: id, remote: id, query: text({ allowEmpty: true, maxLength: 512 }), state: oneOf(["open", "closed", "merged", "all"]), page: integer(1, 1000) }),
+  "reviews.detail": object({ projectId: id, remote: id, id: integer(1, 2147483647) }),
+  "reviews.create": object({ projectId: id, remote: id, input: object({ title: text({ maxLength: 256 }), body: text({ allowEmpty: true, maxLength: 60000 }), source: id, target: id, draft: boolean }) }),
+  "reviews.act": object({ projectId: id, remote: id, id: integer(1, 2147483647), action: oneOf(["comment", "approve", "request_changes", "merge", "close", "reopen"]), body: text({ allowEmpty: true, maxLength: 60000 }), head: text({ maxLength: 64 }) }),
+  "reviews.publish": object({ projectId: id, remote: id, branch: id }),
+  "reviews.sync": object({ projectId: id, remote: id, id: integer(1, 2147483647) }),
+  "usage.report": object({ projectId: optional(id), days: integer(1, 365) }),
+
   "files.list": object({ projectId: id, path: text({ allowEmpty: true }) }),
   "files.read": object({ projectId: id, path: text() }),
   "files.save": object({ projectId: id, path: text(), text: text({ allowEmpty: true, maxLength: 1_048_576 }), version: text({ maxLength: 64 }) }),
@@ -247,7 +286,7 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "sessions.create": object({ projectId: id, title: optional(text({ maxLength: 256 })) }),
   "sessions.get": object({ sessionId: id }),
   "sessions.attachFiles": object({ sessionId: id, paths: array(text(), MAX_ATTACHMENTS) }),
-  "sessions.remove": object({ sessionId: id }),
+  "sessions.remove": object({ sessionId: id, force: optional(boolean) }),
   "sessions.discover": object({ projectId: id }),
   "sessions.previewImport": object({ projectId: id, sourceId: id, nativeSessionId: id }),
   "sessions.import": object({ projectId: id, sourceId: id, nativeSessionId: id }),

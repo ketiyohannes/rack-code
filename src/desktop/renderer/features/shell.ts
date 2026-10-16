@@ -28,6 +28,7 @@ import { applyTheme, loadTheme } from "../theme.js";
 
 export interface ShellRegions {
   readonly navigator: HTMLElement;
+  readonly page: HTMLElement;
   /** Slot in the toolbar for the session title and metadata. */
   readonly sessionHeader: HTMLElement;
   readonly session: HTMLElement;
@@ -65,13 +66,14 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
   const sidebar = h("aside", { class: "sidebar" });
   const workbench = h("aside", { class: "workbench" });
   const regions: ShellRegions = {
+    page: h("section", { class: "workspace-page" }),
     navigator: h("div", { class: "sidebar-body" }),
     sessionHeader: h("div", { class: "toolbar-title" }),
     session: h("div", { class: "session" }),
     composer: h("div", { class: "composer-region" }),
     workbench,
     overlay: h("div", { class: "overlay-root" }),
-    isWorkbenchVisible: () => !layout.right,
+    isWorkbenchVisible: () => !layout.right && store.get().page === "chat",
   };
 
   const leftToggle = toggleButton("Toggle sidebar", "sidebar-simple", () => setCollapsed("left", !layout.left));
@@ -87,13 +89,14 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
     sidebar,
     h("main", { class: "main" },
       h("header", { class: "toolbar" }, leftToggle, regions.sessionHeader, rightToggle),
-      notice,
+      regions.page,
       regions.session,
       regions.composer,
     ),
     workbench,
     hoverZone,
     regions.overlay,
+    notice,
   );
   workbench.append(h("div", { class: "workbench-top" }));
 
@@ -182,6 +185,14 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
   };
   window.addEventListener("resize", fitWidths);
   fitWidths();
+
+  store.watch((state) => state.page, (page) => {
+    root.dataset.page = page;
+    regions.page.hidden = page === "chat";
+    regions.session.hidden = page !== "chat";
+    regions.composer.hidden = page !== "chat";
+    regions.sessionHeader.hidden = page !== "chat";
+  });
 
   // --- Notice banner ----------------------------------------------------------
   store.watch((state) => [state.notice, state.host], (_slice, state) => {

@@ -1,3 +1,5 @@
+import GitPullRequest from "@phosphor-icons/core/assets/regular/git-pull-request.svg";
+import ChartBar from "@phosphor-icons/core/assets/regular/chart-bar.svg";
 /**
  * Phosphor icon set (regular weight, filled star for favorites), bundled as inline SVG markup.
  *
@@ -85,6 +87,8 @@ import Star from "@phosphor-icons/core/assets/regular/star.svg";
 import StarFill from "@phosphor-icons/core/assets/fill/star-fill.svg";
 
 const ICONS = {
+  "git-pull-request": GitPullRequest,
+  "chart-bar": ChartBar,
   "star": Star,
   "star-fill": StarFill,
   "arrow-up-right": ArrowUpRight,

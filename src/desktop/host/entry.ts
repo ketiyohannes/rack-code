@@ -54,7 +54,7 @@ const application = createApplication(
 const api = new HostApi(application, (event) => port.postMessage({ kind: "event", event }));
 // Existing projects start recording without needing a session/import action.
 // Failures are optional-feature failures and cannot prevent host readiness.
-void application.timeline?.startProjectTracking().catch(() => {});
+void application.execution.initialize().then(() => application.timeline?.startProjectTracking()).catch(() => {});
 
 port.on("message", ({ data }) => {
   const message = data as HostInbound;
@@ -72,4 +72,6 @@ port.on("message", ({ data }) => {
   }
 });
 
+// Main must not expose stale run statuses or writer locks during recovery.
+await application.execution.initialize();
 port.postMessage({ kind: "ready" });

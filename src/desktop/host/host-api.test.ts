@@ -122,6 +122,20 @@ class FakeConnector implements AccountConnector {
   }
 }
 
+/** Ignores both abort and graceful cancellation; only owned-process termination works. */
+class HungRuntime extends ApprovalRuntime {
+  override readonly runtimeId = "hung-runtime";
+  readonly output = new AsyncQueue<RuntimeEvent>();
+  stopped = false;
+  override async models(_input: RuntimeModelInput): Promise<readonly RuntimeModel[]> { return []; }
+  override startRun(_input: RuntimeRunInput): AsyncIterable<RuntimeEvent> {
+    this.output.push({ type: "message_delta", text: "partial output" });
+    return this.output;
+  }
+  override cancel(): Promise<void> { return new Promise(() => {}); }
+  async forceCancel(): Promise<void> { this.stopped = true; }
+}
+
 async function setup(withQuestions = false) {
   const accounts = new AccountsService(new InMemoryAccountStore());
   const projects = new ProjectsService(new InMemoryProjectStore());
@@ -130,7 +144,8 @@ async function setup(withQuestions = false) {
   runtimes.register(new ApprovalRuntime());
   runtimes.register(new BlockingRuntime());
   if (withQuestions) runtimes.register(new QuestionRuntime());
-  const execution = new ExecutionService(new InMemoryExecutionStore(), accounts, sessions, projects, runtimes);
+  const hung = new HungRuntime(); runtimes.register(hung);
+  const execution = new ExecutionService(new InMemoryExecutionStore(), accounts, sessions, projects, runtimes, { cancelTimeoutMs: 20 });
   const connector = new FakeConnector();
   const connections = new ConnectionsService(
     accounts,
@@ -157,7 +172,7 @@ async function setup(withQuestions = false) {
     credential: { id: "cred-1", providerId: "fake", method: "token" },
     runtimeContextId: "ctx-1",
   });
-  return { api, call, events, accounts, connector, project, session, account };
+  return { api, call, events, accounts, connector, project, session, account, hung, execution, projects, sessions };
 }
 
 test("removal waits for a concurrent start, rejects active sessions, then preserves the settled audit", { timeout: 3000 }, async () => {
@@ -243,7 +258,7 @@ test("errors carry stable codes and structured details", async () => {
 test("runtimes report adapter permission mappings", async () => {
   const { call, account } = await setup();
   const runtimes = await call<Array<{ runtimeId: string; permissionMappings: Record<string, string> }>>("runtimes.list");
-  assert.deepEqual(runtimes.map((runtime) => runtime.runtimeId), ["approval-runtime", "blocking-runtime"]);
+  assert.deepEqual(runtimes.map((runtime) => runtime.runtimeId), ["approval-runtime", "blocking-runtime", "hung-runtime"]);
   assert.equal(runtimes[0]?.permissionMappings["read_only"], "native read_only");
   const capabilities = await call<{ approvals: boolean }>("runtimes.capabilities", { runtimeId: "approval-runtime", accountId: account.id });
   assert.equal(capabilities.approvals, true);
@@ -519,4 +534,45 @@ test("a project is the only folder identity exposed by the host", async () => {
   assert.equal(!missing.ok && missing.error.code, "project_not_found");
   const oldInput = await api.dispatch("sessions.create", { projectId: project.id, workspaceId: "obsolete" });
   assert.equal(!oldInput.ok && oldInput.error.code, "invalid_input");
+});
+
+test("confirmed force deletion stops a hung provider, settles its audit, and rejects late output", { timeout: 3000 }, async () => {
+  const { api, call, events, project, session, account, hung, execution, projects } = await setup();
+  const { run } = await call<{ run: { id: string } }>("runs.start", { sessionId: session.id, projectId: project.id, providerId: "fake", runtimeId: "hung-runtime",
+    accountId: account.id, prompt: "wait", permissionMode: "full_access" });
+  await waitFor(events, (event) => event.type === "run.event");
+  const ordinary = await api.dispatch("sessions.remove", { sessionId: session.id });
+  assert.equal(!ordinary.ok && ordinary.error.code, "session_busy");
+  assert.equal(hung.stopped, false, "unconfirmed deletion must not stop the run");
+  await call("sessions.remove", { sessionId: session.id, force: true });
+  assert.equal(hung.stopped, true);
+  assert.deepEqual(await call("runs.active"), []);
+  assert.equal((await execution.getRun(run.id)).status, "interrupted");
+  assert.equal((await projects.getProject(project.id)).activeWriterAttemptId, undefined);
+  hung.output.push({ type: "message_delta", text: "late output must not be saved" });
+  hung.output.push({ type: "completed", result: "late completion" }); hung.output.complete();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await execution.getRun(run.id)).status, "interrupted");
+  assert.doesNotMatch(JSON.stringify(await execution.listJournal(run.id)), /late output|late completion/);
+  const missing = await api.dispatch("sessions.get", { sessionId: session.id });
+  assert.equal(!missing.ok && missing.error.code, "session_not_found");
+  assert.ok(events.some((event) => event.type === "sessions.removed" && event.sessionId === session.id));
+});
+
+test("initialization is idempotent and cannot recover a run owned by this live host", async () => {
+  const { call, events, session, project, account, execution } = await setup();
+  const { run } = await call<{ run: { id: string } }>("runs.start", { sessionId: session.id, projectId: project.id, providerId: "fake", runtimeId: "blocking-runtime", accountId: account.id, prompt: "wait", permissionMode: "full_access" });
+  await waitFor(events, (event) => event.type === "run.event");
+  await execution.initialize();
+  assert.equal((await execution.getRun(run.id)).status, "running");
+  await call("sessions.remove", { sessionId: session.id, force: true });
+});
+
+test("shutdown rejects queued starts so a closing app cannot create a new untracked run", async () => {
+  const { api, project, session, account, call } = await setup();
+  const starting = api.dispatch("runs.start", { sessionId: session.id, projectId: project.id, providerId: "fake", runtimeId: "blocking-runtime", accountId: account.id, prompt: "wait", permissionMode: "full_access" });
+  assert.equal(await api.shutdown(1000), 0);
+  const result = await starting;
+  assert.equal(!result.ok && result.error.code, "host_unavailable");
+  assert.deepEqual(await call("runs.active"), []);
 });

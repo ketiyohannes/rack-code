@@ -138,7 +138,8 @@ export class ActiveRuns {
     }
     active.cancelRequested = true;
     this.dependencies.emit({ type: "run.cancel_requested", runId });
-    await active.handle.cancel();
+    try { await active.handle.cancel(); }
+    catch (error) { active.cancelRequested = false; throw error; }
   }
 
   /**
@@ -147,16 +148,28 @@ export class ActiveRuns {
    * Returns the number of runs still active when the wait ended.
    */
   async cancelAll(timeoutMs: number): Promise<number> {
-    const pending = [...this.runs.keys()];
-    await Promise.allSettled(pending.map((runId) => this.cancel(runId)));
-    const allDone = Promise.allSettled([...this.runs.values()].map((active) => active.done));
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, timeoutMs);
-    });
-    await Promise.race([allDone, timeout]);
-    clearTimeout(timer);
+    // Start the deadline before asking providers to cancel: their acknowledgment
+    // can hang too, so it must be included in the budget.
+    await this.waitForStop([...this.runs.values()], timeoutMs);
     return this.runs.size;
+  }
+
+  /** Force removal waits for native cancellation AND durable execution settlement. */
+  async cancelSession(sessionId: string, timeoutMs: number): Promise<void> {
+    const runs = [...this.runs.values()].filter((active) => active.sessionId === sessionId);
+    await this.waitForStop(runs, timeoutMs);
+    if (runs.some((active) => this.runs.has(active.run.id))) throw new HostOperationError("session_busy", "The runtime has not stopped yet. Try stopping and deleting again.", { sessionId });
+  }
+
+  private async waitForStop(runs: readonly ActiveRun[], timeoutMs: number): Promise<void> {
+    const stopping = Promise.allSettled(runs.map(async (active) => {
+      // Even after a client already requested Stop, wait for the actual result.
+      await this.cancel(active.run.id);
+      await active.done;
+    }));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([stopping, new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); })]); }
+    finally { clearTimeout(timer); }
   }
 
   private require(runId: string): ActiveRun {
@@ -206,7 +219,8 @@ export class ActiveRuns {
     } catch {
       // Fall back to the last known snapshot so clients still see the run
       // leave the active set; a later `runs.list` shows the stored record.
-      finished = active.run;
+      finished = { ...active.run, status: "unknown", error: "Run stopped without a saved final outcome. Review its activity before continuing.",
+        attempts: active.run.attempts.map((attempt) => attempt.status === "running" || attempt.status === "queued" ? { ...attempt, status: "unknown" } : attempt) };
     }
     this.runs.delete(runId);
     emit({ type: "run.finished", run: finished });
