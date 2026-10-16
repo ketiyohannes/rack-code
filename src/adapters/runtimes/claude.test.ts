@@ -233,3 +233,18 @@ test("Claude offers standard and fast speeds only for fast-mode models and maps 
   assert.equal(options, undefined);
   assert.equal(events.at(-1)?.type, "failed");
 });
+
+test("Claude keeps native Plan mode read-only and cannot exit it through a tool", async () => {
+  let options!: import("@anthropic-ai/claude-agent-sdk").Options;
+  const adapter = new ClaudeRuntimeAdapter({ resolve: async () => ({ environment: {} }) }, { resolve: async () => ({ directory: "/account" }) }, ((value: { options: typeof options }) => {
+    options = value.options;
+    return { async *[Symbol.asyncIterator]() { yield { type: "result", subtype: "success", result: "A plan" }; }, close: () => {} } as unknown as Query;
+  }) as any);
+  for await (const _ of adapter.startRun({ runId: "run", attemptId: "attempt", sessionId: "chat", projectPath: "/chat", prompt: "Plan a document", permissionMode: "read_only", interactionMode: "plan",
+    account: { accountId: "account", providerId: "claude", credential: { id: "credential", providerId: "claude", method: "test" }, runtimeContextId: "account" }, signal: new AbortController().signal, requestApproval: async () => "allow" })) {}
+  assert.equal(options.permissionMode, "plan");
+  for (const tool of ["Write", "Bash", "ExitPlanMode"]) {
+    const result = await options.canUseTool!(tool, { command: "touch file" }, { signal: new AbortController().signal, toolUseID: "tool", requestId: "request" });
+    assert.equal(result?.behavior, "deny");
+  }
+});

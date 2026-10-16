@@ -292,7 +292,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
           return repositoryPicker.element;
         })()) : null,
       error !== undefined ? h("p", { class: "error-line" }, error)
-        : projectId === undefined ? h("p", { class: "note" }, "Open a session to see its project changes.")
+        : projectId === undefined ? h("p", { class: "note" }, store.get().selection.sessionId === undefined ? "Open a project to see its changes." : "Attach a project to view Git changes.")
         : repositories === undefined ? h("p", { class: "note" }, "Finding repositories…")
         : repositories.paths.length === 0 ? h("p", { class: "note" }, "No repositories found. Scan deeper or choose a folder inside this project.") : null,
       repositories?.limited ? h("p", { class: "note" }, "Discovery reached its scan limit. Scan deeper or choose a repository folder.") : null,

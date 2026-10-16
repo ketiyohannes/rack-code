@@ -1,3 +1,4 @@
+import { openModal } from "../components/modal.js";
 /**
  * Center column: the open session as a simple chat transcript.
  *
@@ -99,7 +100,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   }
 
   store.watch((state) => [state.session, state.projects, state.selection.sessionId], (_slice, state) => {
-    replace(header, ...renderHeader(state.session, state.projects));
+    replace(header, ...renderHeader(state.session, state.projects, controller));
   });
 
   let lastSessionId: string | undefined;
@@ -114,19 +115,27 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   );
 }
 
-function renderHeader(session: SessionView | undefined, projects: readonly ProjectView[]): Node[] {
+function renderHeader(session: SessionView | undefined, projects: readonly ProjectView[], controller: Controller): Node[] {
   if (session === undefined) {
     return [h("span", { class: "session-title muted" }, "No session")];
   }
   const project = projects.find((candidate) => candidate.id === session.projectId);
   const meta = [
-    project?.path ?? shortId(session.projectId),
+    project?.path ?? (session.projectId === undefined ? "Chat" : shortId(session.projectId)),
     project?.startingRevision?.slice(0, 7),
   ].filter((part) => part !== undefined).join(" / ");
   return [
-    h("span", { class: "session-title" }, session.title ?? `Session ${shortId(session.id)}`),
+    h("span", { class: "session-title" }, session.title ?? (session.projectId === undefined ? "New chat" : `Session ${shortId(session.id)}`)),
     h("span", { class: "session-meta", title: meta }, meta),
     h("div", { class: "session-chips" },
+      session.projectId === undefined ? h("button", { class: "button button-small", type: "button", onClick: () => {
+        const content = h("div", { class: "modal-body attach-project-list" },
+          h("p", { class: "note" }, "Keep this conversation and continue in a project. Chat files remain in their original workspace."),
+          ...projects.map((project) => h("button", { class: "button", type: "button", onClick: async () => { if (await controller.attachProject(session.id, project.id)) modal.close(); } }, project.path)),
+          h("button", { class: "button button-primary", type: "button", onClick: async () => { if (await controller.attachProject(session.id)) modal.close(); } }, "Choose folder…"));
+        const modal = openModal({ title: "Attach a project", content });
+      } }, icon("folder-simple-plus"), "Attach project") : null,
+      (session.originatedAsChat || session.projectId === undefined) ? h("button", { class: "icon-button", type: "button", title: "Open chat files", aria: { label: "Open chat files" }, onClick: () => void controller.openSessionPath(session.id, "", true) }, icon("folder-open")) : null,
       project?.activeWriterAttemptId === undefined ? null : h("span", { class: "chip" },
         icon("pencil-simple"), `writer ${shortId(project.activeWriterAttemptId)}`),
     ),
@@ -142,7 +151,7 @@ function renderTranscript(
 ): Node[] {
   const session = state.session;
   if (session === undefined || state.selection.sessionId === undefined) {
-    return [placeholder("chat-circle-text", "No session selected", "Add a project folder, then use its + button to start a session.")];
+    return [placeholder("chat-circle-text", "No session selected", "Start a new chat, or choose a project to work with its files.")];
   }
 
   // Live runs of this session that the persisted list does not contain yet.
@@ -152,7 +161,9 @@ function renderTranscript(
   const runs = [...state.runs, ...liveOnly];
   const imported = session.messages.filter((message) => message.metadata?.["imported"] === "true");
   if (runs.length === 0 && imported.length === 0) {
-    return [placeholder("terminal-window", "What should we work on?", "Describe a task below. The agent works in this session's project.")];
+    return [session.projectId === undefined
+      ? placeholder("chat-circle-text", "What’s on your mind?", "Ask a question, research a topic, or create something. Attach files whenever you need them.")
+      : placeholder("terminal-window", "What should we work on?", "Describe a task below. The agent works in this session's project.")];
   }
   return [
     ...(session.importSource === undefined ? [] : [h("div", { class: "import-history-note note" }, icon("database"),
@@ -235,7 +246,7 @@ function renderTurn(
   if (live !== undefined) {
     if (isActiveStatus(run.status) && (reply.length === 0 || live.cancelRequested)) {
       reply.push(h("div", { class: "note working" }, icon("circle-notch", { className: "spin" }),
-        live.cancelRequested ? "Stopping" : run.status === "queued" ? "Waiting for the project" : "Working"));
+        live.cancelRequested ? "Stopping" : run.status === "queued" ? "Waiting for the runtime" : "Working"));
     }
   } else {
     if (copyText === "") {
@@ -270,6 +281,7 @@ function renderTurn(
 
   return h("article", { class: "turn", data: { runId: run.id } },
     renderPrompt(run, memory, rerender, controller),
+    run.interactionMode === "plan" ? h("div", { class: "turn-workflow note" }, icon("list-checks"), "Plan") : null,
     h("div", { class: "reply" }, ...reply, meta),
   );
 }

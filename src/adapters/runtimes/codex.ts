@@ -1,3 +1,4 @@
+import { codexSkillRoots, skillId } from "./installed-skills.js";
 import type {
   CredentialResolver,
   RuntimeContextResolver,
@@ -84,6 +85,31 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       clearTimeout(timer);
       await child.close();
     }
+  }
+
+  /** Native discovery includes account/project/system skills and installed user roots. */
+  async skills(input: RuntimeModelInput): Promise<import("../../core/execution/types.js").SkillCatalog> {
+    const credential = await this.credentials.resolve(input.account.credential);
+    const context = await this.contexts.resolve(input.account.runtimeContextId);
+    const child = this.createProcess({ cwd: input.projectPath ?? context.directory, environment: { ...process.env, ...context.environment, ...credential.environment, CODEX_HOME: context.directory } });
+    try {
+      await child.request("initialize", { clientInfo: { name: "rack", version: "1.0.0" }, capabilities: { experimentalApi: true } }, 10_000);
+      child.notify("initialized", {});
+      await child.request("skills/extraRoots/set", { extraRoots: codexSkillRoots() }, 10_000);
+      const response = asRecord(await child.request("skills/list", { cwds: input.projectPath ? [input.projectPath] : [], forceReload: true }, 15_000));
+      if (!Array.isArray(response.data)) throw new Error("Codex returned an invalid skills catalog.");
+      const skills: import("../../core/execution/types.js").RuntimeSkill[] = []; const errors: string[] = [];
+      for (const raw of response.data) {
+        const entry = asRecord(raw);
+        for (const rawSkill of Array.isArray(entry.skills) ? entry.skills : []) {
+          const skill = asRecord(rawSkill);
+          if (typeof skill.name !== "string" || typeof skill.path !== "string") continue;
+          skills.push({ id: skillId("codex", skill.path), name: skill.name, description: typeof skill.description === "string" ? skill.description : "", path: skill.path, source: String(skill.scope ?? "Installed"), enabled: skill.enabled !== false });
+        }
+        for (const error of Array.isArray(entry.errors) ? entry.errors : []) errors.push(String(asRecord(error).message ?? "A skill could not be loaded."));
+      }
+      return { skills: [...new Map(skills.map((skill) => [skill.id, skill])).values()], errors };
+    } finally { await child.close(); }
   }
 
   private async readModels(child: ReturnType<CodexProcessFactory>): Promise<readonly RuntimeModel[]> {
@@ -237,6 +263,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
   }
 
   private async *run(input: RuntimeRunInput, resume: boolean): AsyncIterable<RuntimeEvent> {
+    if (input.interactionMode === "plan") input = { ...input, permissionMode: "read_only" };
     const credential = await this.credentials.resolve(input.account.credential);
     const context = await this.contexts.resolve(input.account.runtimeContextId);
     const environment: NodeJS.ProcessEnv = {
@@ -266,6 +293,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       }, 10_000);
       childProcess.notify("initialized", {});
 
+      if (input.skills?.length) await childProcess.request("skills/extraRoots/set", { extraRoots: codexSkillRoots() }, 10_000);
       appTools = await startAppToolServer(input.tools ?? [], input.signal);
       const toolConfig = appTools === undefined ? {} : { config: { mcp_servers: { rack: {
         url: appTools.url, http_headers: { Authorization: `Bearer ${appTools.token}` }, tool_timeout_sec: 3600,
@@ -280,9 +308,14 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       }
       yield { type: "native_session", nativeSessionId: threadId };
 
+      const collaborationModel = input.model ?? readString(threadResponse, ["model"]);
+      if (input.interactionMode === "plan" && !collaborationModel) throw new Error("Codex did not report the model required for Plan mode.");
       const turnResponse = await childProcess.request("turn/start", {
         threadId,
-        input: [{ type: "text", text: input.prompt }],
+        input: [{ type: "text", text: `${(input.skills ?? []).map((skill) => `$${skill.name}`).join(" ")}${input.skills?.length ? "\n\n" : ""}${input.prompt}` },
+          ...(input.skills ?? []).map((skill) => ({ type: "skill", name: skill.name, path: skill.path }))],
+        // Always reset the native workflow when leaving a plan on a resumed thread.
+        ...(input.interactionMode === undefined || !collaborationModel ? {} : { collaborationMode: { mode: input.interactionMode === "plan" ? "plan" : "default", settings: { model: collaborationModel, reasoning_effort: input.reasoningEffort ?? null, developer_instructions: null } } }),
         cwd: input.projectPath,
         // Override resumed thread settings at the turn boundary as well. The
         // provider owns review; Rack only forwards prompts in Ask me mode.
@@ -484,6 +517,7 @@ function mapCodexNotification(method: string, rawParams: unknown, state: CodexEv
   const nativeId = typeof params.itemId === "string" ? params.itemId : undefined;
   const callId = nativeId === undefined ? {} : { toolCallId: nativeId };
   switch (method) {
+    case "item/plan/delta":
     case "item/agentMessage/delta": {
       if (typeof params.delta !== "string") return [];
       if (nativeId !== undefined) state.messages.set(nativeId, (state.messages.get(nativeId) ?? "") + params.delta);
@@ -510,7 +544,7 @@ function mapCodexNotification(method: string, rawParams: unknown, state: CodexEv
     }
     case "item/completed": {
       const item = asRecord(params.item);
-      if (item.type === "agentMessage") {
+      if (item.type === "agentMessage" || item.type === "plan") {
         if (typeof item.text !== "string") return [];
         const previous = typeof item.id === "string" ? state.messages.get(item.id) ?? "" : "";
         const text = item.text.startsWith(previous) ? item.text.slice(previous.length) : "";

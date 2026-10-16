@@ -27,6 +27,7 @@ const RUNTIME_EVENT_TYPES = new Set<string>([
  * this run.
  */
 export function renderRunDetails(run: RunView, state: AppState, controller: Controller): HTMLElement {
+  const effectivePermission = run.interactionMode === "plan" ? "read_only" : run.permissionMode;
   const live = state.live[run.id];
   const journal = state.journal?.runId === run.id ? state.journal.entries : undefined;
   const summary: TranscriptState = live !== undefined
@@ -55,10 +56,13 @@ export function renderRunDetails(run: RunView, state: AppState, controller: Cont
         row("Model", run.model ?? "default"),
         row("Reasoning effort", run.reasoningEffort ?? "default"),
         row("Speed", run.speed ?? "default"),
-        row("Project", project?.path ?? shortId(run.projectId)),
+        row("Project", project?.path ?? (run.projectId === undefined ? "Chat workspace" : shortId(run.projectId))),
       ),
       h("div", { class: "detail-rows" },
-        row("Permission", PERMISSION_LABELS[run.permissionMode].label),
+        row("Workflow", run.interactionMode === "plan" ? "Plan" : "Normal"),
+        row("Permission", PERMISSION_LABELS[effectivePermission].label),
+        ...(run.interactionMode === "plan" ? [row("After approval", PERMISSION_LABELS[run.permissionMode].label)] : []),
+        ...(run.skills?.length ? [row("Skills", run.skills.map((skill) => skill.name).join(", "))] : []),
         row("Attempt", `${shortId(attempt?.id)} (${run.attempts.length})`),
         row("Native session", shortId(nativeSession)),
         row("Created", formatTime(run.createdAt)),
@@ -68,8 +72,8 @@ export function renderRunDetails(run: RunView, state: AppState, controller: Cont
     h("div", { class: "details-columns" },
       h("div", { class: "info-block" },
         label("Permission mapping"),
-        h("p", {}, PERMISSION_LABELS[run.permissionMode].note),
-        runtime === undefined ? null : h("p", { class: "mono muted" }, runtime.permissionMappings[run.permissionMode]),
+        h("p", {}, PERMISSION_LABELS[effectivePermission].note),
+        runtime === undefined ? null : h("p", { class: "mono muted" }, runtime.permissionMappings[effectivePermission]),
       ),
       h("div", { class: "info-block" },
         label("Status"),

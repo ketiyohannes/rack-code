@@ -1,3 +1,5 @@
+import ListChecks from "@phosphor-icons/core/assets/regular/list-checks.svg";
+import Sparkle from "@phosphor-icons/core/assets/regular/sparkle.svg";
 import GitPullRequest from "@phosphor-icons/core/assets/regular/git-pull-request.svg";
 import ChartBar from "@phosphor-icons/core/assets/regular/chart-bar.svg";
 /**
@@ -87,6 +89,8 @@ import Star from "@phosphor-icons/core/assets/regular/star.svg";
 import StarFill from "@phosphor-icons/core/assets/fill/star-fill.svg";
 
 const ICONS = {
+  "list-checks": ListChecks,
+  "sparkle": Sparkle,
   "git-pull-request": GitPullRequest,
   "chart-bar": ChartBar,
   "star": Star,

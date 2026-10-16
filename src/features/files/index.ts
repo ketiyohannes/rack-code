@@ -14,7 +14,12 @@ export class FileOperationError extends Error {
 }
 export class FilesService {
   private readonly saves = new Map<string, Promise<FileDocument>>();
-  constructor(private readonly project: (id: string) => Promise<{ path: string }>, private readonly files: ProjectFiles) {}
+  constructor(private readonly project: (id: string) => Promise<{ path: string }>, private readonly files: ProjectFiles, private readonly session?: (id: string) => Promise<{ path: string }>) {}
+  /** Session scope resolves a private chat folder or its attached project. */
+  forSession(): FilesService {
+    if (!this.session) throw new FileOperationError("invalid_input", "Session files are unavailable.");
+    return new FilesService(this.session, this.files);
+  }
   async list(projectId: string, path = ""): Promise<FileListing> { return this.files.list((await this.project(projectId)).path, path); }
   async read(projectId: string, path: string): Promise<FileDocument> { return this.files.read((await this.project(projectId)).path, path); }
   async save(projectId: string, path: string, text: string, version: string): Promise<FileDocument> {

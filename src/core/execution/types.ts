@@ -10,6 +10,19 @@ export type AttemptId = string;
 
 export type PermissionMode = "read_only" | "ask" | "approve_for_me" | "full_access";
 
+/** Workflow is independent of the user's eventual execution permissions. */
+export type InteractionMode = "normal" | "plan";
+/** Native skill reference; only adapters discover paths and core validates IDs. */
+export interface RuntimeSkill {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly path: string;
+  readonly source: string;
+  readonly enabled: boolean;
+}
+export interface SkillCatalog { readonly skills: readonly RuntimeSkill[]; readonly errors: readonly string[] }
+
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "interrupted" | "unknown";
 export type AttemptStatus = "queued" | "running" | "completed" | "failed" | "interrupted" | "unknown";
 
@@ -55,6 +68,10 @@ export interface RuntimeRunInput {
    */
   readonly speed?: string;
   readonly permissionMode: PermissionMode;
+  readonly interactionMode?: InteractionMode;
+  readonly skills?: readonly RuntimeSkill[];
+  /** The completed plan explicitly approved for this implementation turn. */
+  readonly approvedPlanRunId?: string;
   readonly continuation?: RuntimeContinuation;
   readonly signal: AbortSignal;
   readonly requestApproval: (request: Omit<ApprovalRequest, "id">) => Promise<ApprovalDecision>;
@@ -149,6 +166,7 @@ export interface RuntimeAdapter {
   readonly openTerminal?: (input: NativeTerminalInput) => Promise<TerminalProcess>;
   /** Discovers selectable models for this account/project; rejects on provider failure. */
   readonly models?: (input: RuntimeModelInput) => Promise<readonly RuntimeModel[]>;
+  readonly skills?: (input: RuntimeModelInput) => Promise<SkillCatalog>;
   capabilities(account: RuntimeAccountContext): Promise<RuntimeCapabilities>;
   startRun(input: RuntimeRunInput): AsyncIterable<RuntimeEvent>;
   resumeRun(input: RuntimeRunInput): AsyncIterable<RuntimeEvent>;
@@ -169,7 +187,8 @@ export interface RunRecord {
   readonly attachments?: readonly SessionAttachment[];
   readonly id: RunId;
   readonly sessionId: string;
-  readonly projectId: string;
+  /** Absent for a standalone chat. */
+  readonly projectId?: string;
   readonly prompt: string;
   readonly providerId: string;
   readonly accountId: string;
@@ -179,6 +198,10 @@ export interface RunRecord {
   /** Requested speed option; absent means the provider default. */
   readonly speed?: string;
   readonly permissionMode: PermissionMode;
+  readonly interactionMode?: InteractionMode;
+  readonly skills?: readonly RuntimeSkill[];
+  /** The completed plan explicitly approved for this implementation turn. */
+  readonly approvedPlanRunId?: string;
   readonly status: RunStatus;
   readonly attemptIds: readonly AttemptId[];
   readonly result?: string;

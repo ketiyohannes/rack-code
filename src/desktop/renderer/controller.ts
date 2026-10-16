@@ -68,11 +68,11 @@ export class Controller {
     return this.host.call("projects.changes", { projectId, ...(repositoryPath === undefined ? {} : { repositoryPath }) });
   }
 
-  listFiles(projectId: string, path: string) { return this.host.call("files.list", { projectId, path }); }
-  readFile(projectId: string, path: string) { return this.host.call("files.read", { projectId, path }); }
-  saveFile(projectId: string, path: string, text: string, version: string) { return this.host.call("files.save", { projectId, path, text, version }); }
-  openTerminal(projectId: string, sessionId: string | undefined, cols: number, rows: number) {
-    return this.host.call("terminal.open", { projectId, ...(sessionId === undefined ? {} : { sessionId }), cols, rows });
+  listFiles(projectId: string, path: string) { return projectId.startsWith("chat:") ? this.host.call("sessions.files.list", { sessionId: projectId.slice(5), path }) : this.host.call("files.list", { projectId, path }); }
+  readFile(projectId: string, path: string) { return projectId.startsWith("chat:") ? this.host.call("sessions.files.read", { sessionId: projectId.slice(5), path }) : this.host.call("files.read", { projectId, path }); }
+  saveFile(projectId: string, path: string, text: string, version: string) { return projectId.startsWith("chat:") ? this.host.call("sessions.files.save", { sessionId: projectId.slice(5), path, text, version }) : this.host.call("files.save", { projectId, path, text, version }); }
+  openTerminal(projectId: string | undefined, sessionId: string | undefined, cols: number, rows: number) {
+    return this.host.call("terminal.open", { ...(projectId === undefined ? {} : { projectId }), ...(sessionId === undefined ? {} : { sessionId }), cols, rows });
   }
   readTerminal(terminalId: string, after: number) { return this.host.call("terminal.read", { terminalId, after }); }
   writeTerminal(terminalId: string, data: string) { return this.host.call("terminal.write", { terminalId, data }); }
@@ -202,11 +202,11 @@ export class Controller {
     this.rememberCurrentSession();
     const cached = this.sessionCache.get(sessionId);
     const projectId = this.store.get().sessions.find((session) => session.id === sessionId)?.projectId;
-    const projectChanged = projectId !== undefined && projectId !== this.store.get().selection.projectId;
+    const projectChanged = projectId !== this.store.get().selection.projectId;
     this.store.update((state) => ({
       ...state,
       page: "chat",
-      selection: { projectId: projectId ?? state.selection.projectId, sessionId, runId: undefined },
+      selection: { projectId, sessionId, runId: undefined },
       session: cached?.session,
       runs: cached?.runs ?? [],
       transcripts: cached?.transcripts ?? {},
@@ -306,15 +306,36 @@ export class Controller {
     return this.createSession(project.id);
   }
 
-  async createSession(projectId: string, title?: string): Promise<boolean> {
+  async createSession(projectId?: string, title?: string): Promise<boolean> {
     return this.attempt(async () => {
       const session = await this.host.call("sessions.create", {
-        projectId,
+        ...(projectId === undefined ? {} : { projectId }),
         ...(title === undefined ? {} : { title }),
       });
       await this.reloadSessions();
       await this.selectSession(session.id);
     });
+  }
+
+  /** The same conversation moves into a project; native cwd state is reset by Sessions. */
+  async attachProject(sessionId: string, projectId?: string): Promise<boolean> {
+    return this.attempt(async () => {
+      if (projectId === undefined) {
+        const path = await this.selectDirectory("Attach a project folder");
+        if (path === undefined) return;
+        projectId = (await this.host.call("projects.create", { path })).id;
+      }
+      await this.host.call("sessions.attachProject", { sessionId, projectId });
+      this.sessionCache.delete(sessionId);
+      await Promise.all([this.reloadProjects(), this.reloadSessions()]);
+      await this.selectSession(sessionId);
+    });
+  }
+  listSkills(sessionId: string, runtimeId: string, accountId: string) {
+    return this.host.call("skills.list", { sessionId, runtimeId, accountId });
+  }
+  async openSessionPath(sessionId: string, path = "", chatFiles = false): Promise<void> {
+    await this.attempt(async () => { await this.openPath(path || ".", await this.host.call("sessions.directory", { sessionId, chatFiles })); });
   }
 
   /** Local-history UI uses the same host boundary; no filesystem access in the renderer. */
@@ -451,8 +472,9 @@ export class Controller {
    */
   async openPath(path: string, base?: string): Promise<void> {
     const state = this.store.get();
-    const projectPath = base ?? state.projects.find((project) => project.id === (state.session?.projectId ?? state.selection.projectId))?.path;
     try {
+      const chatBase = base === undefined && state.session?.projectId === undefined && state.session ? await this.host.call("sessions.directory", { sessionId: state.session.id }) : undefined;
+      const projectPath = base ?? chatBase ?? state.projects.find((project) => project.id === (state.session?.projectId ?? state.selection.projectId))?.path;
       const result = await this.host.openPath({ path, ...(projectPath === undefined ? {} : { base: projectPath }) });
       if (result === "missing") this.notify({ kind: "info", message: `${path} was not found.` });
       else if (result === "invalid") this.notify({ kind: "info", message: `${path} cannot be opened.` });
@@ -734,13 +756,15 @@ export class Controller {
   /** Refreshes provider-backed models after account or project changes. */
   private reloadModels(): Promise<void> {
     return this.coalesce("models", async () => {
-      const projectId = this.store.get().selection.projectId;
-      const models = await this.host.call("models.list", projectId === undefined ? {} : { projectId });
-      this.store.update((state) => ({
-        ...state,
-        models: models.models,
-        modelCatalogFailures: models.failures,
-      }));
+      // A chat can be selected while a project's native catalog is loading.
+      // Finish that query, discard its reply and drain the current context.
+      for (;;) {
+        const projectId = this.store.get().selection.projectId;
+        const models = await this.host.call("models.list", projectId === undefined ? {} : { projectId });
+        if (projectId !== this.store.get().selection.projectId) continue;
+        this.store.update((state) => ({ ...state, models: models.models, modelCatalogFailures: models.failures }));
+        return;
+      }
     });
   }
 

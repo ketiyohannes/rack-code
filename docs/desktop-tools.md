@@ -109,3 +109,7 @@ local PTYs and Codex standalone PTYs against disposable files, profiles and
 a loopback website. It requires a desktop environment and Codex CLI, and
 starts no provider login or model turn. Adapter MCP tests use controlled
 runtimes; authenticated model-driven browsing remains a live integration check.
+
+## Standalone chat workspaces
+
+Files and Terminal also accept session context without a project. Composition resolves the saved chat ID to its private workspace, separate from authentication directories; the existing file and PTY adapters retain their protections and lifecycle. Browser already uses session identity. Changes and Timeline require a project. See [Chats, Plan mode and installed skills](chat-plan-skills.md).

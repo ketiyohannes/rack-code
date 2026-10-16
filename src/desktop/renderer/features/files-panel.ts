@@ -36,6 +36,7 @@ export function createFilesPanel(store: Store, controller: Controller, isVisible
   const save = h("button", { class: "button button-primary button-small", type: "button", onClick: () => void saveCurrent() }, "Save");
   const external = h("button", { class: "icon-button", type: "button", aria: { label: "Open file externally" }, onClick: () => {
     const project = store.get().projects.find((project) => project.id === projectId);
+    if (projectId?.startsWith("chat:")) { void controller.openSessionPath(projectId.slice(5), selected ?? ""); return; }
     if (selected !== undefined && project !== undefined) void controller.openPath(selected, project.path);
   } }, icon("arrows-out-simple"));
   const editor = h("textarea", { class: "files-editor", aria: { label: "File contents" }, onInput: () => {
@@ -75,7 +76,7 @@ export function createFilesPanel(store: Store, controller: Controller, isVisible
   }
   function renderList(): void {
     const project = store.get().projects.find((project) => project.id === projectId);
-    folderName.textContent = path || project?.path.split(/[\\/]/).at(-1) || "Select a project";
+    folderName.textContent = path || project?.path.split(/[\\/]/).at(-1) || (projectId?.startsWith("chat:") ? "Chat files" : "Select a project");
     folderName.title = path || project?.path || "";
     up.disabled = path === ""; refresh.disabled = loading || projectId === undefined;
     filter.disabled = projectId === undefined;
@@ -139,8 +140,9 @@ export function createFilesPanel(store: Store, controller: Controller, isVisible
     catch (failure) { if (target === projectId && file === selected) error.textContent = message(failure); }
     finally { saving = false; renderEditorStatus(); }
   }
-  store.watch((state) => [state.selection.projectId, state.host.status], () => {
-    const next = store.get().selection.projectId;
+  store.watch((state) => [state.selection.projectId, state.selection.sessionId, state.host.status], () => {
+    const state = store.get();
+    const next = state.selection.projectId ?? (state.selection.sessionId === undefined ? undefined : `chat:${state.selection.sessionId}`);
     if (next !== projectId) { projectId = next; generation++; fileGeneration++; readingKey = undefined; loading = false; path = next === undefined ? "" : folders.get(next) ?? ""; selected = next === undefined ? undefined : selectedFiles.get(next); listing = undefined; filter.value = ""; error.textContent = ""; showEditor(); renderList(); }
     if (active) void load();
   });

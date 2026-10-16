@@ -83,8 +83,8 @@ for (const format of ["workspace-only", "project-and-workspace", "partial-worksp
       assert.deepEqual((await reloaded.listProjects()).map((project) => project.id).sort(),
         format === "workspace-only" ? ["folder-1", "new-project"] : ["folder-1", "folder-2", "new-project"]);
       assert.equal(JSON.parse(await readFile(projectPath, "utf8")).schemaVersion, 4);
-      assert.equal(JSON.parse(await readFile(join(directory, "sessions.json"), "utf8")).schemaVersion, 3);
-      assert.equal(JSON.parse(await readFile(join(directory, "execution.json"), "utf8")).schemaVersion, 3);
+      assert.equal(JSON.parse(await readFile(join(directory, "sessions.json"), "utf8")).schemaVersion, 4);
+      assert.equal(JSON.parse(await readFile(join(directory, "execution.json"), "utf8")).schemaVersion, 4);
       assert.equal((await new JsonSessionStore(join(directory, "sessions.json")).get("session-1"))?.projectId, "folder-1");
       assert.equal((await new JsonExecutionStore(join(directory, "execution.json")).getRun("run-1"))?.projectId, "folder-1");
     } finally {
