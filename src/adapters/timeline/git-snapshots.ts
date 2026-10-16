@@ -182,7 +182,7 @@ export class GitSnapshotRepository implements SnapshotRepository {
       "--date-order",
       ...(head === undefined ? [] : ["HEAD"]),
       "--glob=refs/rack-timeline/*", "--glob=refs/codex-timeline/*", "--glob=refs/relay-timeline/*",
-      "--glob=refs/rack-project-timeline/*",
+      "--glob=refs/rack-project-timeline/*", "--glob=refs/rack-pr-timeline/*",
     ], limit);
   }
 

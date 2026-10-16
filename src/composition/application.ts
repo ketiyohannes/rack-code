@@ -1,3 +1,8 @@
+import { ReviewInboxService } from "../features/pull-requests/index.js";
+import { GitHubInbox } from "../adapters/code-hosts/github-inbox.js";
+import { PullRequestsService } from "../features/pull-requests/index.js";
+import { RestCodeHosts } from "../adapters/code-hosts/rest.js";
+import { UsageService } from "../features/usage/index.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -41,6 +46,9 @@ import { BrowserService, type BrowserDriver } from "../features/browser/index.js
 import { validateCommandParams } from "../contracts/desktop/commands.js";
 
 export interface Application {
+  readonly pullRequests: PullRequestsService;
+  readonly reviewInbox: ReviewInboxService;
+  readonly usage: UsageService;
   readonly accounts: AccountsService;
   readonly projects: ProjectsService;
   readonly sessions: SessionsService;
@@ -166,7 +174,12 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
     { watcher: new NodeProjectWatcher() },
   );
 
+  const reviewInbox = new ReviewInboxService(new GitHubInbox(), () => projects.listProjects());
+  const pullRequests = new PullRequestsService((id) => projects.getProject(id), new RestCodeHosts());
+  const usage = new UsageService(() => execution.listRunUsage());
+
   return {
+    pullRequests, reviewInbox, usage,
     files, terminal, ...(browser === undefined ? {} : { browser }),
     ...(timeline === undefined ? {} : { timeline }),
     accounts,

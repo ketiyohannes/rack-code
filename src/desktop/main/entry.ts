@@ -33,6 +33,14 @@ import { SharedBrowser } from "./shared-browser.js";
 
 /** How long quitting waits for cancelled runs to record a terminal state. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+// Recovery assumes one live owner of persisted execution. A second launch of
+// the same desktop profile focuses its owner rather than recovering its runs.
+const ownsInstance = app.requestSingleInstanceLock();
+app.on("second-instance", () => {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (window === undefined) openWindow();
+  else { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
+});
 
 const bundleDirectory = dirname(fileURLToPath(import.meta.url));
 const paths = {
@@ -43,6 +51,7 @@ const paths = {
 
 let host: HostProcess | undefined;
 let quitConfirmed = false;
+let quitInProgress = false;
 const sharedBrowser = new SharedBrowser();
 
 function broadcast(event: HostEvent): void {
@@ -210,15 +219,15 @@ async function handleOpenPath(event: IpcMainInvokeEvent, request: unknown): Prom
  * Returns false when the user chose to keep working.
  */
 async function stopHostForQuit(current: HostProcess): Promise<boolean> {
-  const active = await current.request("runs.active", {});
-  const count = active.ok && Array.isArray(active.value) ? active.value.length : 0;
-  if (count > 0) {
+  const active = await quitDeadline(current.request("runs.active", {}), 1500);
+  const count = active?.ok && Array.isArray(active.value) ? active.value.length : 0;
+  if (count > 0 || active === undefined || !active.ok) {
     const { response } = await dialog.showMessageBox({
       type: "warning",
       buttons: ["Stop runs and quit", "Keep working"],
       defaultId: 1,
       cancelId: 1,
-      message: count === 1 ? "1 run is active." : `${count} runs are active.`,
+      message: active === undefined || !active.ok ? "The execution host is not responding." : count === 1 ? "1 run is active." : `${count} runs are active.`,
       detail: "Quitting cancels active agent runs and waits briefly for them to record their final state. Partial output is kept.",
     });
     if (response !== 0) {
@@ -226,10 +235,17 @@ async function stopHostForQuit(current: HostProcess): Promise<boolean> {
     }
   }
   // Interactive terminals also need orderly shutdown when no model run is active.
-  await current.shutdown(SHUTDOWN_TIMEOUT_MS);
+  await quitDeadline(current.shutdown(SHUTDOWN_TIMEOUT_MS), SHUTDOWN_TIMEOUT_MS);
   current.kill();
   sharedBrowser.shutdown();
   return true;
+}
+
+/** Includes host acknowledgments and optional cleanup in a finite quit budget. */
+async function quitDeadline<T>(operation: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { return await Promise.race([operation.catch(() => undefined), new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), timeoutMs); })]); }
+  finally { clearTimeout(timer); }
 }
 
 app.on("before-quit", (event) => {
@@ -237,8 +253,11 @@ app.on("before-quit", (event) => {
     return;
   }
   event.preventDefault();
+  if (quitInProgress) return;
+  quitInProgress = true;
   const current = host;
   void stopHostForQuit(current).then((stopped) => {
+    quitInProgress = false;
     if (stopped) {
       quitConfirmed = true;
       app.quit();
@@ -259,6 +278,7 @@ app.on("activate", () => {
 });
 
 void app.whenReady().then(() => {
+  if (!ownsInstance) { app.quit(); return; }
   ipcMain.handle(IPC_CHANNELS.invoke, handleInvoke);
   ipcMain.handle(IPC_CHANNELS.selectDirectory, handleSelectDirectory);
   ipcMain.handle(IPC_CHANNELS.selectFiles, handleSelectFiles);

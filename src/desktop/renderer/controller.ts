@@ -182,10 +182,11 @@ export class Controller {
 
   /** Makes one project current without opening a session. */
   async selectProject(projectId: string): Promise<void> {
-    if (this.store.get().selection.projectId === projectId) return;
+    if (this.store.get().selection.projectId === projectId) { this.openPage("chat"); return; }
     this.rememberCurrentSession();
     this.store.update((state) => ({
       ...state,
+      page: "chat",
       selection: { projectId, sessionId: undefined, runId: undefined },
       session: undefined,
       runs: [],
@@ -204,6 +205,7 @@ export class Controller {
     const projectChanged = projectId !== undefined && projectId !== this.store.get().selection.projectId;
     this.store.update((state) => ({
       ...state,
+      page: "chat",
       selection: { projectId: projectId ?? state.selection.projectId, sessionId, runId: undefined },
       session: cached?.session,
       runs: cached?.runs ?? [],
@@ -225,6 +227,10 @@ export class Controller {
     }
     this.store.update((state) => ({ ...state, selection: { ...state.selection, runId } }));
     await this.reloadJournal(runId);
+  }
+
+  openPage(page: "chat" | "usage" | "pull-requests", reviewProjectId?: string): void {
+    this.store.update((state) => ({ ...state, page, ...(reviewProjectId === undefined ? {} : { reviewProjectId }) }));
   }
 
   openSettings(section?: SettingsSection): void {
@@ -509,7 +515,8 @@ export class Controller {
     // Mark locally first so the button disables immediately; the host's
     // `run.cancel_requested` event confirms it for every client.
     this.patchLive(runId, (live) => ({ ...live, cancelRequested: true }));
-    await this.attempt(() => this.host.call("runs.cancel", { runId }).then(() => undefined));
+    const stopped = await this.attempt(() => this.host.call("runs.cancel", { runId }).then(() => undefined));
+    if (!stopped) this.patchLive(runId, (live) => ({ ...live, cancelRequested: false }));
   }
 
   async respondToApproval(runId: string, approvalId: string, decision: "allow" | "deny"): Promise<void> {
@@ -523,9 +530,9 @@ export class Controller {
   /** Removal events update every window; also apply locally so fake/offline
    * transports that deliver a command reply first cannot leave stale history.
    */
-  async removeSession(sessionId: string): Promise<boolean> {
+  async removeSession(sessionId: string, force = false): Promise<boolean> {
     return this.attempt(async () => {
-      await this.host.call("sessions.remove", { sessionId });
+      await this.host.call("sessions.remove", { sessionId, ...(force ? { force: true } : {}) });
       this.forgetSession(sessionId);
     });
   }
@@ -542,14 +549,32 @@ export class Controller {
   // Host events
 
   private handleEvent(event: HostEvent): void {
+    // Already-queued IPC from a dead host cannot resurrect loading indicators.
+    if (this.store.get().host.status === "exited" && event.type.startsWith("run.")) return;
     const { selection } = this.store.get();
     switch (event.type) {
-      case "host.status":
-        this.store.update((state) => ({
-          ...state,
-          host: { status: event.status, ...(event.detail === undefined ? {} : { detail: event.detail }) },
-        }));
+      case "host.status": {
+        if (event.status === "exited") {
+          this.sessionCache.clear();
+          for (const session of this.store.get().sessions) this.invalidateSession(session.id);
+        }
+        this.store.update((state) => {
+          if (event.status !== "exited") return { ...state, host: { status: event.status } };
+          const ended = (run: RunView): RunView => run.status === "running" || run.status === "queued"
+            ? { ...run, status: "unknown", error: "The execution host stopped. Restart Rack and review the saved activity before continuing.",
+              attempts: run.attempts.map((attempt) => attempt.status === "running" || attempt.status === "queued" ? { ...attempt, status: "unknown" } : attempt) } : run;
+          const runs = new Map(state.runs.map((run) => [run.id, ended(run)]));
+          const transcripts = { ...state.transcripts };
+          for (const live of Object.values(state.live)) if (live.run.sessionId === state.selection.sessionId) {
+            runs.set(live.run.id, ended(live.run)); transcripts[live.run.id] = live.events;
+          }
+          // A dead host cannot own a live handle. Retain activity as uncertain
+          // history instead of leaving stop controls and loading dots forever.
+          return { ...state, host: { status: "exited", ...(event.detail === undefined ? {} : { detail: event.detail }) }, live: {},
+            runs: [...runs.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), transcripts };
+        });
         return;
+      }
       case "run.started":
         this.invalidateSession(event.run.sessionId);
         this.addLiveRun(event.run, event.fallbackFromAccountId);

@@ -1,3 +1,5 @@
+import { mountPullRequests } from "./features/pull-requests.js";
+import { mountUsage } from "./features/usage.js";
 /**
  * Renderer bootstrap: builds the store, controller, and feature panels, then
  * connects to the host.
@@ -31,10 +33,17 @@ if (params.get("view") === "timeline") {
   mountSnapshotWindow(root, createHostClient(), params);
 } else {
   const store = new Store();
-  const controller = new Controller(createHostClient(), store);
+  const host = createHostClient();
+  const controller = new Controller(host, store);
 
   const regions = mountShell(root, store, controller);
   mountNavigator(regions.navigator, store, controller);
+  const reviews = document.createElement("div");
+  const usage = document.createElement("div");
+  reviews.className = usage.className = "workspace-page-content";
+  regions.page.append(reviews, usage);
+  mountPullRequests(reviews, store, controller, host);
+  mountUsage(usage, store, controller, host);
   mountSessionView(regions.session, regions.sessionHeader, store, controller);
   mountComposer(regions.composer, store, controller);
   mountWorkbench(regions.workbench, store, regions.isWorkbenchVisible, controller);

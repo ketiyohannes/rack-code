@@ -134,6 +134,11 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
     active?.close();
   }
 
+  async forceCancel(input: Pick<RuntimeRunInput, "attemptId" | "signal">): Promise<void> {
+    this.activeQueries.get(input.attemptId)?.close();
+    this.activeQueries.delete(input.attemptId);
+  }
+
   private async *run(input: RuntimeRunInput): AsyncIterable<RuntimeEvent> {
     const credential = await this.credentials.resolve(input.account.credential);
     const context = await this.contexts.resolve(input.account.runtimeContextId);
@@ -173,6 +178,7 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
           options.allowedTools = [...(options.allowedTools ?? []), ...(input.tools ?? []).map((tool) => `mcp__rack__${tool.name}`)];
         }
       }
+      input.signal.throwIfAborted();
       activeQuery = this.createQuery({ prompt: input.prompt, options });
       this.activeQueries.set(input.attemptId, activeQuery);
       for await (const rawMessage of activeQuery) {

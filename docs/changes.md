@@ -1,3 +1,25 @@
+# Account-wide GitHub PR inbox (2026-10-16)
+
+- Keep work on `feature/pr-support`. Replace the project-required PR landing page with a compact inbox inspired by T3's involvement filters and review tabs. Aggregate all connected GitHub CLI/environment/session-token identities, including multiple users on the same host; show account, involvement and status filters, search, deduplicated rows and load-more results.
+- Add explicit per-account reads, reviews and creation without global CLI account switching or credential fallback. Keep GitLab/Bitbucket repository workflows and branch publishing. Share Overview/Code/Activity review UI, retain drafts and decisions by identity, and resolve exact local repository matches only for Timeline.
+- Expose partial/total account failures, incomplete search and GitHub's 1,000-result limit. Tokens remain host-memory-only; CLI credentials remain in gh. See [usage and limits](pull-requests.md).
+- Validation: `npm run check` passed (237 tests, both TypeScript configurations, headless build and desktop bundle). After the final UI guards and reviewed-by search lane, `npm run typecheck`, `npm run build:desktop` and focused provider/Git/inbox tests passed (18 tests). Populated browser fixtures covered no-project inbox navigation, two accounts, equal PR numbers across repositories, late-result rejection, per-account drafts/decisions, Code/Activity/file filters, review submission identity, explicit refresh, Timeline folder registration/targeting, account-specific draft creation, explicit branch publishing, load-more deduplication and disconnected/error states. Read-only discovery found zero connected GitHub accounts here, so live authenticated aggregation and mutations remain unverified. Packaged distribution and live Enterprise deployments remain untested.
+
+# Interrupted-session recovery and confirmed running-session deletion (2026-10-16)
+
+- Fix abandoned queued/running records and stale project writer locks surviving restart as perpetual chat loading dots without a live Stop target. Startup atomically marks uncertain outcomes and journals recovery before host readiness. Preserve completed runs, continuations and partial output; never replay automatically.
+- Bound provider cancellation, stream/iterator cleanup and application quit. Close owned Codex processes even during initialization, reject pending RPCs and terminate their POSIX process groups; close owned Claude queries. Ignore late output, close event drains even on persistence failure, reject starts during shutdown and prevent duplicate desktop owners for the same profile.
+- Enable deleting running sessions through an explicit **Are you sure? / Stop and delete session** modal. The host stops and settles execution before removal. A run starting after the modal opens requires a new confirmation; ordinary deletion keeps its busy guard.
+- Validation: the 225-test full suite passed, followed by 59 targeted execution/runtime/host/renderer checks for final shutdown-race and persistence-failure guards. Type checks and headless/desktop builds passed. Real subprocess tests verified pending-RPC rejection and owned-child termination; `npm run test:desktop-features` passed for Chromium, local PTY and Codex standalone PTY. Isolated Electron checks verified orphan recovery without dots/locks and ordinary deletion; renderer fixtures verified the running-session warning, confirmed force parameter and second-confirmation race. Live model turns, hard OS termination and packaged distribution were not exercised.
+
+# PR support, Usage and footer navigation (2026-10-16)
+
+- Branch: `feature/pr-support`. Move notices to bottom left above the sidebar footer; use icon-only Settings, Usage and Pull Requests navigation.
+- Add real provider adapters for GitHub, GitLab and Bitbucket Cloud, repository selection, PR search/filter/pagination, diffs, discussion/reviews, checks, draft creation, explicit branch publishing and guarded review/merge/close/reopen controls. See [capabilities and provider boundaries](pull-requests.md).
+- Connect PR comparisons to existing Timeline history/viewers through isolated, persistent hidden refs, refresh changed PR versions and retain prior comparisons. Add a Timeline-to-PR shortcut.
+- Add Usage analytics from a minimal execution audit projection, with project/period filters, daily activity, model/provider totals and explicit usage coverage. Pause hidden workbench/native-browser surfaces when full pages are open.
+- Validation: `npm run check` passed (216 tests, type checks, headless build and desktop bundle). Targeted provider/Git/Usage/Codex tests passed. Electron checks covered footer navigation, empty Usage/PR states and the offline toast position; populated renderer fixtures covered PR details, file presentation, draft retention, pagination, creation/publishing inputs, Timeline targeting and Usage filters/metrics. Live remote mutations, enterprise deployments and packaged distribution remain untested.
+
 # Change log
 
 ## 2026-10-15 - Complete Terminal, Browser and Files

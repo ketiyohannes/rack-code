@@ -183,3 +183,7 @@ Automated tests (`src/features/timeline/service.test.ts`, `src/desktop/host/time
 - Visibility filtering, external Codex refs and baselines, error messages, watcher coalescing, and `feature_unavailable` when not assembled.
 
 T02's editor half, T11 to T12, and T15 to T20 belong to the unimplemented phases.
+
+## Pull request comparisons
+
+The Pull Requests page can sync the complete merge-base-to-head PR tree into project history and open it in the existing snapshot viewer. Local immutable comparisons live under `refs/rack-pr-timeline/*`; fetched objects use `refs/rack-pr-objects/*`. Refreshing a previously synced PR detail updates changed head/base commits, retaining older comparison versions. A Pull Requests control in the Timeline header opens reviews for the viewed project, including nested repository selections. See [Pull requests and Usage](pull-requests.md) for provider support, credentials and refresh boundaries.

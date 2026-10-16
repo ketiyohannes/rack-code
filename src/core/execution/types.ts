@@ -153,6 +153,8 @@ export interface RuntimeAdapter {
   startRun(input: RuntimeRunInput): AsyncIterable<RuntimeEvent>;
   resumeRun(input: RuntimeRunInput): AsyncIterable<RuntimeEvent>;
   cancel(input: Pick<RuntimeRunInput, "attemptId" | "signal">): Promise<void>;
+  /** Closes the attempt-owned native process when graceful interruption stalls. */
+  forceCancel?(input: Pick<RuntimeRunInput, "attemptId" | "signal">): Promise<void>;
   /**
    * Human-readable description of the native controls this adapter applies
    * for an application permission mode. The same app mode maps to different
@@ -204,4 +206,10 @@ export interface JournalEntry {
   readonly type: RuntimeEvent["type"] | "run_started" | "attempt_started" | "run_status";
   readonly payload: unknown;
   readonly observedAt: string;
+}
+
+/** Minimal audit projection: analytics never needs prompts, attachments or tool output. */
+export interface RunUsage {
+  readonly run: Pick<RunRecord, "id" | "projectId" | "providerId" | "model" | "status" | "createdAt">;
+  readonly usage: readonly JournalEntry[];
 }

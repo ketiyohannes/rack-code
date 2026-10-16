@@ -90,29 +90,38 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
 
   function removeSession(sessionId: string, title: string): void {
     let closed = false;
+    let force = Object.values(store.get().live).some((live) => live.run.sessionId === sessionId);
     const error = h("p", { class: "error-line session-remove-error", role: "alert" });
+    const warning = h("p", { class: "note" });
     const cancel = h("button", { class: "button button-small", type: "button", onClick: () => modal.close() }, "Cancel");
     const remove = h("button", { class: "button button-primary button-small", type: "button", onClick: async () => {
       if (remove.disabled) return;
       remove.disabled = true;
-      remove.textContent = "Removing…";
+      remove.textContent = force ? "Stopping and deleting…" : "Deleting…";
       error.textContent = "";
-      if (await controller.removeSession(sessionId)) {
+      if (await controller.removeSession(sessionId, force)) {
         const restoreFocus = !closed;
         modal.close();
-        // Removal rebuilds the tree, so the original trigger no longer
-        // exists. Return keyboard focus to the selected project instead.
         if (restoreFocus) requestAnimationFrame(() => tree.querySelector<HTMLElement>('.tree-folder-toggle[aria-current="true"]')?.focus());
       } else {
         remove.disabled = false;
-        remove.textContent = "Remove session";
-        error.textContent = store.get().notice?.message ?? "Could not remove this session. Try again.";
+        // A run may start after the modal opens. Only a second explicit click
+        // on the stronger warning authorizes stopping it; never escalate silently.
+        if (store.get().notice?.code === "session_busy") force = true;
+        renderWarning();
+        error.textContent = store.get().notice?.message ?? "Could not delete this session. Try again.";
       }
-    } }, "Remove session");
-    const modal = openModal({ title: "Remove session?", className: "session-remove-modal", onClose: () => { closed = true; }, content: h("div", { class: "modal-body" },
-      h("p", {}, `Remove “${title}” from Rack? You won’t be able to reopen this conversation here.`),
-      h("p", { class: "note" }, "Project files and provider history are kept. Local execution records, attachments and Timeline snapshots are retained."),
-      error, h("div", { class: "modal-actions" }, cancel, remove)),
+    } }, "Delete session");
+    function renderWarning(): void {
+      warning.textContent = force
+        ? "This session is still running. Are you sure? Continuing stops its agent before deleting the session. Work already performed is kept."
+        : "Project files and provider history are kept. Local execution records, attachments and Timeline snapshots are retained.";
+      remove.textContent = force ? "Stop and delete session" : "Delete session";
+    }
+    renderWarning();
+    const modal = openModal({ title: "Delete session?", className: "session-remove-modal", onClose: () => { closed = true; }, content: h("div", { class: "modal-body" },
+      h("p", {}, `Are you sure you want to delete “${title}”? You won’t be able to reopen this conversation here.`),
+      warning, error, h("div", { class: "modal-actions" }, cancel, remove)),
     });
   }
 
@@ -125,12 +134,18 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
       tree,
     ),
     h("div", { class: "sidebar-footer" },
-      h("button", { class: "nav-item", onClick: () => controller.openSettings() },
-        icon("gear-six", { className: "nav-icon" }),
-        h("span", { class: "nav-title" }, "Settings"),
-      ),
+      iconButton("gear-six", "Settings", () => controller.openSettings()),
+      iconButton("chart-bar", "Usage", () => controller.openPage("usage")),
+      iconButton("git-pull-request", "Pull requests", () => controller.openPage("pull-requests", store.get().selection.projectId)),
+
     ),
   );
+
+  store.watch((state) => state.page, (page) => {
+    root.querySelectorAll<HTMLButtonElement>(".sidebar-footer button").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.title === (page === "usage" ? "Usage" : page === "pull-requests" ? "Pull requests" : "")));
+    });
+  });
 
   function renderTree(state: AppState): void {
     const running = new Set(runningKey(state).split("|"));
@@ -224,8 +239,7 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
           );
           const title = session.title ?? `Session ${shortId(session.id)}`;
           const remove = iconButton("trash-simple", `Remove session: ${title}`, () => removeSession(session.id, title), "tree-remove");
-          remove.disabled = isRunning;
-          if (isRunning) remove.title = "Stop this session's active run before removing it.";
+          if (isRunning) remove.title = "Stop and delete this running session";
           // Separate sibling buttons keep navigation and removal accessible
           // without nesting interactive elements or selecting on removal.
           const container = h("div", { class: "tree-session-row" }, row, remove);

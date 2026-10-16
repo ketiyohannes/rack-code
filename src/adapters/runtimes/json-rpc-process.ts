@@ -25,6 +25,7 @@ export class JsonRpcProcess {
   >();
   private nextId = 1;
   private closed = false;
+  private closing: Promise<void> | undefined;
 
   private constructor(private readonly child: ChildProcessWithoutNullStreams) {
     const lines = createInterface({ input: child.stdout });
@@ -46,12 +47,15 @@ export class JsonRpcProcess {
     const child = spawn(command, [...args], {
       cwd: options.cwd,
       env: options.environment,
+      // Give each owned provider a process group so shutdown also stops its tools.
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
     return new JsonRpcProcess(child);
   }
 
   async request(method: string, params: unknown): Promise<unknown> {
+    if (this.closed) throw new Error("Provider process is closed.");
     const id = this.nextId++;
     const result = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -76,17 +80,28 @@ export class JsonRpcProcess {
     return this.messages.next();
   }
 
-  async close(): Promise<void> {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    this.messages.complete();
-    this.child.kill();
-    await new Promise<void>((resolve) => {
-      this.child.once("close", () => resolve());
-      setTimeout(resolve, 1000);
-    });
+  close(): Promise<void> {
+    return this.closing ??= (async () => {
+      // Reject requests *before* marking closed. In particular, initialize or
+      // turn/interrupt may be awaiting an acknowledgment that will never arrive.
+      this.fail(new Error("Provider process was stopped."));
+      const signal = (kind: NodeJS.Signals) => {
+        if (process.platform !== "win32" && this.child.pid !== undefined) {
+          try { process.kill(-this.child.pid, kind); return; } catch { /* The group may already be gone. */ }
+        }
+        this.child.kill(kind);
+      };
+      signal("SIGTERM");
+      if (this.child.exitCode === null && this.child.signalCode === null) {
+        await new Promise<void>((resolve) => {
+          const done = () => { clearTimeout(timer); this.child.off("close", done); resolve(); };
+          const timer = setTimeout(done, 500);
+          this.child.once("close", done);
+        });
+      }
+      // Even if the parent exited promptly, tools in its group can ignore TERM.
+      signal("SIGKILL");
+    })();
   }
 
   private write(message: JsonRpcMessage): void {
