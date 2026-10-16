@@ -34,6 +34,8 @@ export const IPC_CHANNELS = {
   /** Opens a separate read-only snapshot window using only app identities. */
   openTimelineWindow: "harness:open-timeline-window",
   presentBrowser: "harness:present-browser",
+  windowAction: "harness:window-action",
+  windowTheme: "harness:window-theme",
 } as const;
 
 export type CommandResponse<T = unknown> =
@@ -62,6 +64,9 @@ export type HostOutbound =
  * the renderer's only route to privileged operations.
  */
 export interface HarnessBridge {
+  /** Shell-only allowlisted actions; no host/domain access. */
+  windowAction?(action: WindowAction): Promise<void>;
+  windowTheme?(colors: { background: string; foreground: string }): Promise<void>;
   invoke<C extends HostCommand>(command: C, params: CommandParams<C>): Promise<CommandResponse<CommandResult<C>>>;
   /** Subscribes to host events; returns an unsubscribe function. */
   onEvent(listener: (event: HostEvent) => void): () => void;
@@ -79,6 +84,9 @@ export interface HarnessBridge {
   openTimelineWindow(request: TimelineWindowRequest): Promise<CommandResponse<null>>;
   presentBrowser(request: BrowserPresentation): Promise<void>;
 }
+
+export const WINDOW_ACTIONS = ["undo", "redo", "cut", "copy", "paste", "selectAll", "reload", "devTools", "zoomIn", "zoomOut", "resetZoom", "fullscreen", "close", "quit", "help", "about"] as const;
+export type WindowAction = typeof WINDOW_ACTIONS[number];
 
 export interface TimelineWindowRequest extends TimelineSnapshotTarget {
   /** Optional initial selection; the host still validates tree membership. */

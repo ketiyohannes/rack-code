@@ -397,6 +397,26 @@ export class Controller {
     });
   }
 
+  /** Repeated clicks share a check. New checks clear old observations so a
+   * failed request cannot leave a previous success looking current.
+   */
+  async diagnoseProvider(providerId: string, accountId?: string): Promise<void> {
+    const key = JSON.stringify([providerId, accountId ?? null]);
+    if (this.store.get().providerDiagnostics[key]?.pending) return;
+    const pending = { pending: true };
+    this.store.update((state) => ({ ...state, providerDiagnostics: { ...state.providerDiagnostics, [key]: pending } }));
+    try {
+      const result = await this.host.call("auth.diagnose", { providerId, ...(accountId === undefined ? {} : { accountId }) });
+      if (this.store.get().providerDiagnostics[key] !== pending) return;
+      this.store.update((state) => ({ ...state, providerDiagnostics: { ...state.providerDiagnostics, [key]: { pending: false, result } } }));
+    } catch {
+      if (this.store.get().providerDiagnostics[key] !== pending) return;
+      this.store.update((state) => ({ ...state, providerDiagnostics: { ...state.providerDiagnostics,
+        [key]: { pending: false, error: "Connection check could not complete. Check that the app is online and try again." },
+      } }));
+    }
+  }
+
   async submitConnectCode(connectId: string, code: string): Promise<void> {
     await this.attempt(() => this.host.call("auth.submitCode", { connectId, code }).then(() => undefined));
   }
@@ -446,6 +466,15 @@ export class Controller {
     }
     if (connect.status === "completed") {
       this.ownConnects.delete(connect.connectId);
+      // A reconnect rotates the account's runtime context. Drop its old local
+      // observation; any check still in flight must not repopulate that result.
+      if (connect.accountId !== undefined) {
+        const key = JSON.stringify([connect.providerId, connect.accountId]);
+        this.store.update((state) => {
+          const { [key]: _old, ...providerDiagnostics } = state.providerDiagnostics;
+          return { ...state, providerDiagnostics };
+        });
+      }
       void this.reloadAccounts();
     } else if (connect.status !== "waiting") {
       this.ownConnects.delete(connect.connectId);

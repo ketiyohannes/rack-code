@@ -159,3 +159,5 @@ export interface ConnectProviderView {
   readonly providerId: string;
   readonly displayName: string;
 }
+
+export type { ProviderDiagnostic } from "../../core/connections/ports.js";

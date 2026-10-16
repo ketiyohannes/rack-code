@@ -55,4 +55,20 @@ export interface AccountConnector {
   /** Human-readable provider name for "Connect <name> account". */
   readonly displayName: string;
   connect(context: ConnectContext): ConnectAttempt;
+  /** Read-only local readiness check; omitted context checks installation only.
+   * Implementations bound process lifetime and return only display-safe fields.
+   * No login, model turn, account mutation or credential material is permitted.
+   */
+  diagnose?(context?: ConnectContext): Promise<ProviderDiagnostic>;
+}
+
+/** Point-in-time local observation, not a guarantee of subscription/network access. */
+export interface ProviderDiagnostic {
+  readonly status: "ready" | "failed";
+  readonly stage: "discovery" | "version" | "startup" | "authentication";
+  readonly message: string;
+  readonly executable?: string;
+  readonly version?: string;
+  readonly authentication: "signed_in" | "signed_out" | "not_checked";
+  readonly checkedAt: string;
 }

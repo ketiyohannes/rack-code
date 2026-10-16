@@ -20,6 +20,7 @@ import { mountWorkbench } from "./features/workbench.js";
 import { createHostClient } from "./host-client.js";
 import { Store } from "./store.js";
 import { mountSnapshotWindow } from "./features/snapshot-window.js";
+import { mountWindowChrome } from "./features/window-chrome.js";
 
 const root = document.getElementById("app");
 if (root === null) {
@@ -27,6 +28,7 @@ if (root === null) {
 }
 
 const params = new URLSearchParams(window.location.search);
+mountWindowChrome();
 if (params.get("view") === "timeline") {
   mountSnapshotWindow(root, createHostClient(), params);
 } else {

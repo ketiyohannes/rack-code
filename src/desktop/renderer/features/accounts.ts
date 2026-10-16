@@ -18,11 +18,13 @@ import { formatTime, h, replace, row } from "../dom.js";
 import { icon } from "../icons.js";
 import type { AppState, Store } from "../store.js";
 import { accountLabel, availabilityBadge } from "./run-format.js";
+import { openModal } from "../components/modal.js";
 
 export function mountAccounts(root: HTMLElement, store: Store, controller: Controller): void {
   const count = h("span", { class: "count-wrap" });
   const connectButtons = h("div", { class: "connect-buttons" });
   const connecting = h("div", { class: "connect-list" });
+  const diagnostics = h("div", { class: "connection-shortcuts" });
   const list = h("div", { class: "account-list" });
 
   root.append(
@@ -31,6 +33,7 @@ export function mountAccounts(root: HTMLElement, store: Store, controller: Contr
       h("p", {}, "Sign in with your own subscriptions. Credentials stay in each provider's own login store, isolated per account."),
     ),
     connectButtons,
+    diagnostics,
     connecting,
     list,
   );
@@ -51,6 +54,13 @@ export function mountAccounts(root: HTMLElement, store: Store, controller: Contr
     replace(connecting, ...Object.values(state.connects).map((connect) => renderConnect(connect, state, controller)));
   });
 
+  store.watch((state) => state.connectProviders, (_slice, state) => {
+    replace(diagnostics, h("span", { class: "connection-shortcuts-label" }, "Connection details"),
+      ...state.connectProviders.map((provider) => h("button", {
+        class: "quiet-button", type: "button", onClick: () => openDiagnostic(provider.providerId, undefined, store, controller),
+      }, provider.displayName, icon("arrow-right"))));
+  });
+
   store.watch((state) => [state.accounts, state.highlightAccountId, state.connects], (_slice, state) => {
     replace(count, h("span", { class: "count" }, String(state.accounts.length)));
     if (state.accounts.length === 0) {
@@ -62,7 +72,7 @@ export function mountAccounts(root: HTMLElement, store: Store, controller: Contr
       h("span", { class: "label" }, providerName(state, providerId)),
       ...state.accounts
         .filter((account) => account.providerId === providerId)
-        .map((account) => renderAccount(account, state, controller)),
+        .map((account) => renderAccount(account, state, controller, store)),
     )));
     if (state.highlightAccountId !== undefined) {
       list.querySelector(`[data-account-id="${CSS.escape(state.highlightAccountId)}"]`)?.scrollIntoView({ block: "nearest" });
@@ -138,7 +148,7 @@ function renderCodeForm(connect: ConnectView, controller: Controller): HTMLFormE
   } }, input, h("button", { class: "button button-primary", type: "submit" }, "Submit"));
 }
 
-function renderAccount(account: AccountView, state: AppState, controller: Controller): HTMLElement {
+function renderAccount(account: AccountView, state: AppState, controller: Controller, store: Store): HTMLElement {
   const highlighted = state.highlightAccountId === account.id;
   const reconnecting = Object.values(state.connects).some((connect) =>
     connect.status === "waiting" && connect.targetAccountId === account.id);
@@ -172,8 +182,59 @@ function renderAccount(account: AccountView, state: AppState, controller: Contro
         disabled: reconnecting,
         onClick: () => void controller.connectAccount(account.providerId, account.id),
       }, icon("arrow-clockwise"), "Reconnect"),
+      h("button", { class: "quiet-button", type: "button",
+        onClick: () => openDiagnostic(account.providerId, account.id, store, controller),
+      }, "Connection details", icon("arrow-right")),
     ),
   );
+}
+
+/** Only normalized, allowlisted observations reach this view. Text nodes keep
+ * executable paths literal, and timestamps make the point-in-time scope clear.
+ */
+function renderDiagnostic(providerId: string, accountId: string | undefined, state: AppState): HTMLElement {
+  const check = state.providerDiagnostics[JSON.stringify([providerId, accountId ?? null])];
+  const result = check?.result;
+  return h("div", { class: "provider-diagnostic" },
+    h("div", { role: "status", aria: { live: "polite" } },
+      check?.pending ? h("p", { class: "form-note" }, "Checking the local CLI. Each startup step has a 10-second timeout.") : null,
+      check?.error ? h("p", { class: "form-note" }, check.error) : null,
+      result ? h("div", { class: "detail-rows" },
+        row("Check", result.status === "ready" ? "Passed" : "Needs attention"),
+        h("p", { class: "form-note" }, result.message),
+        result.executable ? row("Executable", result.executable) : null,
+        result.version ? row("Version", result.version) : null,
+        row("Sign-in", result.authentication === "signed_in" ? "Saved sign-in found" : result.authentication === "signed_out" ? "Signed out" : "Not checked"),
+        row("Checked", formatTime(result.checkedAt)),
+      ) : null,
+    ),
+  );
+}
+
+/** An on-demand drawer keeps technical details out of the account list. Its
+ * subscription ends on close; an already-running read-only check may finish
+ * in the controller cache and is visible when reopened. Focus stays in the
+ * modal and returns to the trigger without closing the underlying Settings.
+ */
+function openDiagnostic(providerId: string, accountId: string | undefined, store: Store, controller: Controller): void {
+  const name = providerName(store.get(), providerId);
+  const account = store.get().accounts.find((entry) => entry.id === accountId);
+  const result = h("div", {});
+  const run = h("button", { class: "button button-small", type: "button",
+    onClick: () => void controller.diagnoseProvider(providerId, accountId),
+  }, "Test connection");
+  const content = h("div", { class: "modal-body diagnostic-drawer-body" },
+    h("p", { class: "diagnostic-description" }, account ? accountLabel(account) : `${name} installation`),
+    h("p", { class: "form-note" }, "Check the local installation and connection when something isn't working. This does not start a model request."),
+    h("div", { class: "card-actions" }, run), result,
+  );
+  const key = JSON.stringify([providerId, accountId ?? null]);
+  const unsubscribe = store.watch((state) => state.providerDiagnostics[key], (check, state) => {
+    run.disabled = check?.pending === true;
+    run.textContent = check?.pending ? "Checking..." : check?.result ? "Check again" : "Test connection";
+    replace(result, renderDiagnostic(providerId, accountId, state));
+  });
+  openModal({ title: `${name} connection`, className: "diagnostic-drawer", content, onClose: unsubscribe });
 }
 
 function providerName(state: AppState, providerId: string): string {

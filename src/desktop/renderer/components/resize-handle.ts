@@ -80,6 +80,7 @@ export function createResizeHandle(options: ResizeHandleOptions): HTMLElement {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", end);
       handle.removeEventListener("pointercancel", end);
+      handle.removeEventListener("lostpointercapture", end);
       handle.classList.remove("dragging");
       document.documentElement.classList.remove("resizing");
       apply(latest, true);
@@ -87,6 +88,9 @@ export function createResizeHandle(options: ResizeHandleOptions): HTMLElement {
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", end);
     handle.addEventListener("pointercancel", end);
+    // Capture can be lost when the OS interrupts a drag; always release the
+    // global resize cursor and commit the last visible width in that case.
+    handle.addEventListener("lostpointercapture", end);
   });
 
   handle.addEventListener("dblclick", () => apply(options.defaultWidth, true));
@@ -105,5 +109,8 @@ export function createResizeHandle(options: ResizeHandleOptions): HTMLElement {
   });
 
   syncAria(clamp(options.width()));
+  // Window fitting happens outside this component; announce its current
+  // bounds when keyboard users return to the separator.
+  handle.addEventListener("focus", () => syncAria(clamp(options.width())));
   return handle;
 }

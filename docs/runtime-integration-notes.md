@@ -4,6 +4,32 @@ Status: documentation findings and implemented adapter notes, updated 2026-10-12
 
 ## Codex app server
 
+Local diagnostics initialize the server without creating a thread or model
+turn. Saved-account checks call `account/read` with `refreshToken: false` and
+report only whether a ChatGPT account is present. Initialization, login-start
+and account-read control requests now have 10-second deadlines; cancellation
+has a two-second deadline. User browser interaction itself is not timed out.
+The transport settles pending requests on close and drains stderr without
+exposing provider output. Runtime/model/terminal initialization shares the
+startup deadline; long-running work is unaffected.
+
+### Windows executable discovery (2026-10-16)
+
+Sign-in and runtime operations share `adapters/runtimes/codex-command.ts` to
+resolve a native `codex.exe`. Electron's direct process spawning cannot run
+npm's PowerShell or command-file launchers as a bare `codex` command. The
+resolver checks absolute PATH entries in order for native executables and
+known npm package layouts, then the standard `%APPDATA%/npm` installation
+when the desktop inherited an older PATH. Both x64 and ARM64 package layouts
+are supported. It launches without a shell and preserves account-specific
+`CODEX_HOME` isolation. Explicit adapter command overrides and non-Windows
+launches keep their existing behavior.
+
+If no supported installation is found, the error asks the user to install
+Codex CLI for Windows and restart Rack. Custom npm prefixes must be on PATH;
+restart the app after changing PATH. This resolves launch failures such as
+`spawn codex ENOENT`; it does not complete browser authentication for the user.
+
 The official documentation describes threads, turns, streamed items, native resume, history reads, client approval requests, and MCP integration. It also describes experimental history injection and dynamic tools; those should not become assumed stable dependencies. Native thread state remains Codex-managed, even when our application owns the user-facing conversation. This does not document a universal transcript interchangeable with Claude.
 
 The documentation exposes account rate-limit queries and updates. It distinguishes local/open-source app-server authentication from commercial or hosted offerings, directing the latter toward Sign in with ChatGPT. Confirm the supported authentication route for the intended distribution model before implementing subscription-account switching.
@@ -11,6 +37,14 @@ The documentation exposes account rate-limit queries and updates. It distinguish
 The reference inspected does not establish a reusable browser window that our UI can directly embed or launch. MCP support offers an integration boundary for app-provided tools; browser compatibility still needs validation. These findings come from the [Codex app-server reference](https://learn.chatgpt.com/docs/app-server), reached through the official developer documentation redirect.
 
 ## Claude Agent SDK sessions
+
+The Claude sign-in connector now resolves native Windows `claude.exe` through
+PATH and the standard `%USERPROFILE%/.local/bin` installation before spawning
+it directly. Explicit command overrides are retained; a missing native install
+produces installation/restart guidance. This does not change the SDK's own
+runtime executable selection. Local diagnostics use `--version` and, for a saved
+account only, `auth status --json`, each bounded to 10 seconds and 64 KiB of
+captured stdout. Only normalized sign-in state and a parsed version reach the UI.
 
 The SDK documents native session IDs, resume, and fork. Session history and workspace files are distinct: resuming or forking a conversation does not restore or isolate its filesystem. Prefer explicit native IDs over continuing whichever session happens to be most recent. See [working with sessions](https://code.claude.com/docs/en/agent-sdk/sessions).
 

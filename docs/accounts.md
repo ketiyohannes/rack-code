@@ -33,6 +33,27 @@ The implementation provides both an in-memory store for headless tests and a ver
 
 After an authentication flow succeeds, `AccountsService.reauthenticate` replaces an account's opaque credential reference, optionally rotates its runtime context, clears stale availability and quota observations, and leaves active attempts untouched. It does not perform provider login itself.
 
+## Connection checks (2026-10-16)
+
+Settings > Accounts provides quiet **Connection details** actions for each provider
+and saved account. These open a right-side drawer; **Test connection** runs only
+when requested inside it. Escape or Close dismisses the drawer and restores focus
+to its trigger. Results stay out of the main account list. Provider setup checks resolve the CLI, read its version and,
+for Codex, initialize the app-server protocol. They use temporary configuration
+and do not inspect the user's default CLI login. Saved-account checks also
+ask the provider for local sign-in status in that account's isolated context.
+Codex account reads request no token refresh. Claude checks subscription-safe
+environment variables just as its sign-in flow does.
+
+The result includes the executable location, version, sign-in observation,
+time and an actionable message when a step fails. Each process probe/control
+request has a 10-second deadline; a check with multiple steps can take longer
+overall. Tests never start model turns or alter selected accounts or their
+availability. A saved sign-in does not prove that the network, subscription or
+quota permits a model request. Checks are explicit and results are window-local;
+reconnecting invalidates the old account result. Credentials and raw CLI output
+are not included in the diagnostic result.
+
 ## Validation
 
-The account tests cover duplicate identities, provider-scoped selection, availability-gated failover, stale availability clearing, usage tracking, and defensive copies. No provider credentials or SDKs are used by these tests.
+The account tests cover duplicate identities, provider-scoped selection, availability-gated failover, stale availability clearing, usage tracking, and defensive copies. Connection diagnostics additionally cover ownership validation, request coalescing, bounded process execution, isolated config, normalized account status and exclusion of raw provider output. No provider credentials are used by these tests.
