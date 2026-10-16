@@ -31,7 +31,7 @@ import type { AccountsService } from "../accounts/service.js";
 import type { AccountRecord } from "../accounts/types.js";
 import type { RuntimeContextResolver } from "../authentication/contracts.js";
 import { ConnectNotFoundError, ConnectorNotFoundError } from "./errors.js";
-import type { AccountConnector, ConnectAttempt, ConnectedIdentity } from "./ports.js";
+import type { AccountConnector, ConnectAttempt, ConnectedIdentity, ProviderDiagnostic } from "./ports.js";
 import type { ConnectStatus, ConnectView } from "./types.js";
 
 /** Credential method for logins stored by the provider in the runtime context. */
@@ -47,6 +47,34 @@ interface Running {
 }
 
 export class ConnectionsService {
+  private readonly diagnostics = new Map<string, Promise<ProviderDiagnostic>>();
+
+  /** Validate ownership before resolving an account context. Concurrent checks
+   * share one process sequence; results never alter selection or availability.
+   */
+  async diagnose(input: { providerId: string; accountId?: string }): Promise<ProviderDiagnostic> {
+    const connector = this.connectors.get(input.providerId);
+    if (connector === undefined) throw new ConnectorNotFoundError(input.providerId);
+    const account = input.accountId === undefined ? undefined : await this.accounts.get(input.accountId);
+    if (account !== undefined && account.providerId !== input.providerId) {
+      throw new AccountProviderMismatchError(account.id, input.providerId, account.providerId);
+    }
+    const key = JSON.stringify([input.providerId, account?.runtimeContextId]);
+    const existing = this.diagnostics.get(key);
+    if (existing !== undefined) return existing;
+    const check = (async (): Promise<ProviderDiagnostic> => {
+      if (connector.diagnose === undefined) return {
+        status: "failed", stage: "discovery", authentication: "not_checked",
+        message: "This provider does not support connection checks.", checkedAt: new Date().toISOString(),
+      };
+      const context = account === undefined ? undefined : {
+        ...await this.contexts.resolve(account.runtimeContextId), runtimeContextId: account.runtimeContextId,
+      };
+      return connector.diagnose(context);
+    })();
+    this.diagnostics.set(key, check);
+    try { return await check; } finally { this.diagnostics.delete(key); }
+  }
   private readonly connectors = new Map<string, AccountConnector>();
   private readonly running = new Map<string, Running>();
   private readonly listeners = new Set<(view: ConnectView) => void>();

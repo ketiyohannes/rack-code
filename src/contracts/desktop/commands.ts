@@ -33,6 +33,7 @@ import {
   type AccountView,
   type ActiveRunView,
   type ConnectProviderView,
+  type ProviderDiagnostic,
   type ConnectView,
   type JournalEntryView,
   type PermissionMode,
@@ -116,6 +117,8 @@ export interface HostCommandMap {
   };
   /** Providers with an interactive sign-in. */
   "auth.providers": { params: NoParams; result: readonly ConnectProviderView[] };
+  /** Local readiness observation only; never starts login or changes availability. */
+  "auth.diagnose": { params: { readonly providerId: string; readonly accountId?: string }; result: ProviderDiagnostic };
   /** Starts a sign-in; pass `accountId` to reconnect an existing account. */
   "auth.connect": { params: { readonly providerId: string; readonly accountId?: string }; result: ConnectView };
   "auth.submitCode": { params: { readonly connectId: string; readonly code: string }; result: null };
@@ -228,6 +231,7 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "accounts.select": object({ providerId: id, accountId: id }),
   "accounts.reauthenticate": object({ accountId: id, credential, runtimeContextId: optional(id) }),
   "auth.providers": empty,
+  "auth.diagnose": object({ providerId: text(), accountId: optional(text()) }),
   "auth.connect": object({ providerId: id, accountId: optional(id) }),
   "auth.submitCode": object({ connectId: id, code: text({ maxLength: 4096 }) }),
   "auth.cancel": object({ connectId: id }),

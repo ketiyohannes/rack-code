@@ -36,6 +36,7 @@ export function openModal(options: ModalOptions): ModalHandle {
     close() {
       if (closed) return;
       closed = true;
+      document.removeEventListener("keydown", onKeyDown, true);
       backdrop.remove();
       previousFocus?.focus();
       options.onClose?.();
@@ -45,14 +46,19 @@ export function openModal(options: ModalOptions): ModalHandle {
   backdrop.addEventListener("pointerdown", (event) => {
     if (event.target === backdrop) handle.close();
   });
-  backdrop.addEventListener("keydown", (event) => {
+  // A pending action can disable the focused button and move focus to body.
+  // Capture at document level so Escape/Tab still belong to the topmost modal.
+  const onKeyDown = (event: KeyboardEvent) => {
+    if ([...document.querySelectorAll(".modal-backdrop")].at(-1) !== backdrop || document.querySelector(".popover")) return;
     if (event.key === "Escape") {
+      event.preventDefault();
       event.stopPropagation();
       handle.close();
     } else if (event.key === "Tab") {
       trapFocus(dialog, event);
     }
-  });
+  };
+  document.addEventListener("keydown", onKeyDown, true);
 
   document.body.append(backdrop);
   dialog.querySelector<HTMLElement>("input, button:not(.icon-button), select, textarea")?.focus();
@@ -65,7 +71,9 @@ function trapFocus(container: HTMLElement, event: KeyboardEvent): void {
   const first = focusable[0];
   const last = focusable.at(-1);
   if (first === undefined || last === undefined) return;
-  if (event.shiftKey && document.activeElement === first) {
+  if (!container.contains(document.activeElement)) {
+    event.preventDefault(); first.focus();
+  } else if (event.shiftKey && document.activeElement === first) {
     event.preventDefault();
     last.focus();
   } else if (!event.shiftKey && document.activeElement === last) {

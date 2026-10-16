@@ -10,6 +10,7 @@
  */
 import { BrowserWindow, nativeTheme, shell } from "electron";
 import type { TimelineWindowRequest } from "../../contracts/desktop/transport.js";
+import { performWindowAction } from "./window-actions.js";
 
 export interface MainWindowOptions {
   readonly preloadPath: string;
@@ -27,10 +28,14 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     // Matches the renderer's light/dark surface so the window does not flash
     // the wrong color before the page paints.
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#121417" : "#f5f5f3",
-    title: options.timeline === undefined ? "Thinking and Code" : "Timeline snapshot",
+    title: options.timeline === undefined ? "Rack" : "Timeline snapshot",
     // macOS: content extends under an inset title bar; the sidebar reserves
     // space for the window controls and acts as the drag region.
-    ...(process.platform === "darwin" && options.timeline === undefined ? { titleBarStyle: "hiddenInset" as const } : {}),
+    titleBarStyle: process.platform === "darwin" ? (options.timeline ? "default" : "hiddenInset") : "hidden",
+    ...(process.platform === "darwin" ? {} : { titleBarOverlay: {
+      color: nativeTheme.shouldUseDarkColors ? "#121417" : "#f5f5f3",
+      symbolColor: nativeTheme.shouldUseDarkColors ? "#eef0f2" : "#15171a", height: 36,
+    } }),
     show: false,
     webPreferences: {
       preload: options.preloadPath,
@@ -40,6 +45,21 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       webSecurity: true,
       spellcheck: false,
     },
+  });
+
+  // The renderer supplies a themed menu strip. Keep macOS's global native
+  // menu; Windows/Linux must not also render Electron's default menu bar.
+  if (process.platform !== "darwin") window.setMenu(null);
+  window.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || process.platform === "darwin") return;
+    const key = input.key.toLowerCase();
+    const command = input.control || input.meta;
+    const action = key === "f11" ? "fullscreen"
+      : command && input.shift && key === "i" ? "devTools"
+      : command && key === "r" ? "reload" : command && key === "w" ? "close"
+      : command && key === "0" ? "resetZoom" : command && ["+", "="].includes(key) ? "zoomIn"
+      : command && key === "-" ? "zoomOut" : undefined;
+    if (action) { event.preventDefault(); performWindowAction(window, action); }
   });
 
   window.webContents.on("will-navigate", (event) => event.preventDefault());

@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { sameImportProject } from "../../core/session-imports/project-path.js";
 import { getSessionInfo, getSessionMessages, listSessions } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
 
@@ -18,17 +18,19 @@ export class ClaudeLocalSessionSource implements LocalSessionSource {
   } = { listSessions, getSessionInfo, getSessionMessages }) {}
 
   async list(projectPath: string): Promise<readonly ExternalSession[]> {
-    const sessions = await this.api.listSessions({ dir: projectPath, includeWorktrees: false });
-    return sessions.filter((session) => session.cwd !== undefined && resolve(session.cwd) === resolve(projectPath))
+    // Windows encoded transcript directories may retain the original cwd's
+    // casing. Enumerate SDK history, then enforce exact folder identity locally.
+    const sessions = await this.api.listSessions({ ...(process.platform === "win32" ? {} : { dir: projectPath }), includeWorktrees: false });
+    return sessions.filter((session) => session.cwd !== undefined && sameImportProject(session.cwd, projectPath))
       .map((session) => this.describe(session));
   }
 
   async read(projectPath: string, nativeSessionId: string): Promise<ExternalSessionSnapshot> {
-    const info = await this.api.getSessionInfo(nativeSessionId, { dir: projectPath });
-    if (info?.cwd === undefined || resolve(info.cwd) !== resolve(projectPath)) {
+    const info = await this.api.getSessionInfo(nativeSessionId, process.platform === "win32" ? {} : { dir: projectPath });
+    if (info?.cwd === undefined || !sameImportProject(info.cwd, projectPath)) {
       throw new Error("Claude session is not in the selected project.");
     }
-    const messages = await this.api.getSessionMessages(nativeSessionId, { dir: projectPath });
+    const messages = await this.api.getSessionMessages(nativeSessionId, { dir: info.cwd });
     const imported: ImportedMessage[] = [];
     const calls = new Map<string, { index: number; value: Record<string, unknown> }>();
     for (const item of messages) {

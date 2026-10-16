@@ -11,6 +11,11 @@ export interface JsonRpcMessage {
   readonly error?: { readonly code?: number; readonly message: string; readonly data?: unknown };
 }
 
+/** Typed deadline failure lets callers explain a timeout without exposing RPC output. */
+export class ProviderRequestTimeoutError extends Error {
+  constructor(method: string) { super(`Provider ${method} timed out. Restart the provider and try again.`); }
+}
+
 /**
  * Line-delimited JSON-RPC transport for local provider runtimes.
  *
@@ -25,6 +30,7 @@ export class JsonRpcProcess {
   >();
   private nextId = 1;
   private closed = false;
+  private closing: Promise<void> | undefined;
 
   private constructor(private readonly child: ChildProcessWithoutNullStreams) {
     const lines = createInterface({ input: child.stdout });
@@ -34,6 +40,7 @@ export class JsonRpcProcess {
     // verbose provider cannot fill the pipe and deadlock the run.
     child.stderr.on("data", () => undefined);
     child.on("error", (error) => this.fail(error));
+    child.stdin.on("error", (error) => this.fail(error));
     child.on("close", (code, signal) => {
       this.fail(new Error(`Provider process exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}.`));
     });
@@ -47,17 +54,29 @@ export class JsonRpcProcess {
       cwd: options.cwd,
       env: options.environment,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     return new JsonRpcProcess(child);
   }
 
-  async request(method: string, params: unknown): Promise<unknown> {
+  /** Optional deadline is for bounded control requests, never long-running turns
+   * or commands. Expiry closes the transport because its state is uncertain.
+   */
+  async request(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
+    if (this.closed) throw new Error("Provider process is closed.");
     const id = this.nextId++;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const result = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
-    this.write({ id, method, params });
-    return result;
+    if (timeoutMs !== undefined) timer = setTimeout(() => {
+      this.fail(new ProviderRequestTimeoutError(method));
+      this.child.kill();
+    }, timeoutMs);
+    try { this.write({ id, method, params }); } catch (error) {
+      this.fail(error instanceof Error ? error : new Error("Provider write failed."));
+    }
+    try { return await result; } finally { clearTimeout(timer); }
   }
 
   notify(method: string, params: unknown): void {
@@ -77,16 +96,19 @@ export class JsonRpcProcess {
   }
 
   async close(): Promise<void> {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    this.messages.complete();
-    this.child.kill();
-    await new Promise<void>((resolve) => {
-      this.child.once("close", () => resolve());
-      setTimeout(resolve, 1000);
+    if (this.closing !== undefined) return this.closing;
+    // Closing must also settle outstanding requests, including startup/cancel.
+    this.fail(new Error("Provider process was closed."));
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+    // A timeout can mark the transport closed before the OS process exits.
+    // Still wait for termination so disposable config can be removed safely.
+    this.closing = new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(done, 1000);
+      this.child.once("close", done);
+      this.child.kill();
     });
+    return this.closing;
   }
 
   private write(message: JsonRpcMessage): void {

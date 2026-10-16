@@ -155,7 +155,7 @@ function renderTranscript(
     return [placeholder("terminal-window", "What should we work on?", "Describe a task below. The agent works in this session's project.")];
   }
   return [
-    ...(session.importSource === undefined ? [] : [h("div", { class: "import-history-note note" }, icon("database"),
+    ...(session.importSource === undefined ? [] : [h("div", { class: "import-history-note note" }, icon("tray-arrow-down"),
       `Imported from ${session.importSource.providerName}. Continuing uses recent conversation context in a new runtime session; the original remains unchanged.`)]),
     ...renderImportedHistory(imported, memory, rerender, markdownActions(controller)),
     ...runs.map((run) => renderTurn(run, state, controller, fold, memory, rerender)),

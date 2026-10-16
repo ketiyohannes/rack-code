@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { sameImportProject } from "../../core/session-imports/project-path.js";
+import { resolveCodexCommand } from "../runtimes/codex-command.js";
 
 import type { LocalSessionSource } from "../../core/session-imports/ports.js";
 import type { ExternalSession, ExternalSessionSnapshot, ImportedMessage } from "../../core/session-imports/types.js";
@@ -31,13 +32,16 @@ export class CodexLocalSessionSource implements LocalSessionSource {
       const seen = new Set<string>();
       do {
         const page = record(await process.request("thread/list", {
-          cwd: projectPath, limit: 100, sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
+          // Server cwd filtering can compare raw strings. Windows paths must
+          // instead be matched locally to tolerate casing and slash differences.
+          ...(globalThis.process.platform === "win32" ? {} : { cwd: projectPath }),
+          limit: 100, sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
           useStateDbOnly: false,
           ...(cursor === undefined ? {} : { cursor }),
         }));
         for (const raw of Array.isArray(page.data) ? page.data : []) {
           const thread = record(raw);
-          if (typeof thread.cwd !== "string" || resolve(thread.cwd) !== resolve(projectPath)) continue;
+          if (typeof thread.cwd !== "string" || !sameImportProject(thread.cwd, projectPath)) continue;
           if (record(thread.status).type === "active") continue;
           if (typeof thread.id !== "string") continue;
           sessions.set(thread.id, this.describe(thread));
@@ -54,7 +58,7 @@ export class CodexLocalSessionSource implements LocalSessionSource {
     return this.withProcess(projectPath, async (process) => {
       const response = record(await process.request("thread/read", { threadId: nativeSessionId, includeTurns: true }));
       const thread = record(response.thread);
-      if (thread.id !== nativeSessionId || typeof thread.cwd !== "string" || resolve(thread.cwd) !== resolve(projectPath)) {
+      if (thread.id !== nativeSessionId || typeof thread.cwd !== "string" || !sameImportProject(thread.cwd, projectPath)) {
         throw new Error("Codex session is not in the selected project.");
       }
       if (record(thread.status).type === "active") throw new Error("Wait for this Codex session to finish before importing.");
@@ -117,7 +121,7 @@ export class CodexLocalSessionSource implements LocalSessionSource {
   }
 
   private async withProcess<T>(projectPath: string, operation: (process: HistoryProcess) => Promise<T>): Promise<T> {
-    const process = this.options.createProcess?.(projectPath) ?? JsonRpcProcess.start("codex", ["app-server", "--stdio"], {
+    const process = this.options.createProcess?.(projectPath) ?? JsonRpcProcess.start(resolveCodexCommand(), ["app-server", "--stdio"], {
       cwd: projectPath, environment: { ...globalThis.process.env,
         ...(this.options.codexHome === undefined ? {} : { CODEX_HOME: this.options.codexHome }) },
     });

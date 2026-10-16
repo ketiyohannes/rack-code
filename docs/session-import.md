@@ -5,7 +5,7 @@ Status: implemented 2026-10-14. Imports local Codex and Claude conversations int
 ## Use
 
 1. Add the project folder in the sidebar if it is not already present.
-2. Click its database icon, labelled **Import local sessions into <folder>**.
+2. Click its tray-with-down-arrow icon, labelled **Import local sessions into <folder>**.
 3. Check individual sessions or **Select all**. Select all excludes conversations already imported. Click a session title to preview it independently of its checkbox.
 4. Click **Import N sessions**. Successful imports are saved even if another selection fails; failed selections remain checked for retry. Previously imported entries are labelled **Imported** and can open their existing Rack session.
 
@@ -20,6 +20,18 @@ If one provider cannot be read, the dialog reports its failure while keeping the
 - Both readers use normal local provider stores selected by their inherited environment, rather than Rack's isolated account contexts. The host revalidates source identity and folder before saving. Renderer commands cannot supply native transcript paths or credential directories.
 
 Codex's [app-server reference](https://learn.chatgpt.com/docs/app-server) documents history APIs. Claude's [TypeScript SDK reference](https://code.claude.com/docs/en/agent-sdk/typescript) and [session guide](https://code.claude.com/docs/en/agent-sdk/sessions) cover history helpers and continuation. Installed SDK types and Codex-generated protocol schemas were inspected during implementation.
+
+## Windows discovery
+
+Windows import resolves the native Codex executable using the same PATH/npm
+installation discovery as sign-in, rather than trying to spawn a shell shim.
+Codex and Claude enumerate local history without a raw directory filter on
+Windows, then match the selected folder using normalized separators, casing and
+extended-length path prefixes. Preview and import revalidate that same identity;
+child folders and unrelated worktrees remain excluded. Claude reads messages
+using the transcript's recorded folder spelling. Normal local provider homes
+(including inherited CODEX_HOME and CLAUDE_CONFIG_DIR overrides) remain the source;
+this does not search WSL, remote machines, or arbitrary custom profile directories.
 
 ## Continuation
 

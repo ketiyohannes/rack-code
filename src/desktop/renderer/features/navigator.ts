@@ -183,7 +183,7 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
           project.startingRevision === undefined ? null : h("span", { class: "nav-meta" }, project.startingRevision.slice(0, 7)),
         ),
       ),
-      iconButton("database", `Import local sessions into ${basename(project.path)}`, () => openSessionImport(project, controller), "tree-add"),
+      iconButton("tray-arrow-down", `Import local sessions into ${basename(project.path)}`, () => openSessionImport(project, controller), "tree-add"),
       iconButton("plus", `New session in ${basename(project.path)}`, () => {
         void controller.createSessionForProject(project.id);
       }, "tree-add"),
