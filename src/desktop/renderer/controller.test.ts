@@ -413,3 +413,13 @@ test("switching from a project to chat clears project selection and discards a l
   assert.deepEqual(catalogs, [{ projectId: "project" }, {}]);
   assert.deepEqual(store.get().models, []);
 });
+
+test("explicit chat editor targets keep their workspace when another project is selected", async () => {
+  const store = new ImmediateStore();
+  store.update((state) => ({ ...state, projects: [{ id: "other", path: "/other-project", createdAt: stamp, updatedAt: stamp }], selection: { projectId: "other" } }));
+  const host = { call: async (command: string, params: unknown) => {
+    assert.equal(command, "sessions.directory"); assert.deepEqual(params, { sessionId: "original-chat" }); return "/chat-files/original-chat";
+  } } as unknown as HostClient;
+  const target = await new Controller(host, store).resolveEditorTarget("report.md", undefined, "original-chat");
+  assert.deepEqual(target, { path: "report.md", base: "/chat-files/original-chat" });
+});

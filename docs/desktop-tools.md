@@ -1,9 +1,18 @@
 # Terminal, Browser and Files
 
-Enable these implemented surfaces in **Settings > Plugins**, then open them
-from **All surfaces** in the right sidebar. Launcher shortcuts are **T**,
-**B** and **F** when focus is outside a text field. Hiding/disabling a surface
-changes its presentation; it does not close its shell or page.
+The right sidebar starts with one empty **New tab** showing the surface list,
+including Files, Terminal, Browser, Timeline, Retrospective and the other tools.
+Choose an item to fill that tab. **+** keeps its dropdown: choose **New tab**
+for another blank tab, or a tool for another tool tab. Choosing an optional tool
+enables its Settings plugin. Existing tools are focused rather than duplicated,
+since each tool has one session-owned panel. Enabled plugins do not open tabs
+automatically. New windows always start blank, regardless of older tab settings.
+
+Close a tab with its **x** (or Delete while focused); the last close leaves a
+blank tab with the surface list. Closing a tab retains its shell, page or file
+draft for the window's lifetime; it does not terminate the tool. Arrow keys and
+Home/End switch tabs. The strip scrolls when the sidebar is narrow. Settings >
+Plugins still controls optional tool visibility.
 
 ## Terminal
 
@@ -18,14 +27,15 @@ changes its presentation; it does not close its shell or page.
 - xterm supplies ANSI rendering, scrollback and interactive input; terminal
   keystrokes stay out of chat shortcuts. Input is ordered across clients and
   paste chunks, resize follows the panel, and exit codes remain visible.
-  **Close** terminates a shell; **New shell** replaces it. Session removal and
-  application shutdown release its processes. xterm initializes only after
+  **Close shell** terminates a shell; **Restart shell** replaces it. These are
+  compact icon actions above the flush terminal viewport. Session removal and
+  application shutdown release its processes. The terminal initializes only after
   DOM attachment so the renderer can measure its font and dimensions.
 - Manual terminal input is user-owned, independent of model permission
   settings. Native agent shell tools retain their provider permissions and
   execution journal. This panel does not mirror every model command.
 - Limits: 12 retained contexts including exited shells, 262,144 UTF-16 code
-  units of host output per context, 5,000 xterm scrollback lines. Absolute
+  units of host output per context, 5,000 terminal scrollback lines. Absolute
   output offsets detect truncation. Shells/output do not survive app exit.
 
 After upgrading Electron, run `npm run rebuild:native` for `node-pty`.
@@ -33,17 +43,20 @@ After upgrading Electron, run `npm run rebuild:native` for `node-pty`.
 ## Browser
 
 - Each conversation owns one live Chromium page, shared between user and
-  agent. The toolbar offers an HTTP/HTTPS address, Back, Forward, Reload,
-  **Pause agent / Resume agent**, and **Close page**. Popups open in that same
+  agent. One integrated toolbar offers Back, Forward, Reload, a search/address omnibox,
+  agent pause/resume and Close controls. Cmd/Ctrl+L focuses the omnibox from
+  the website as well as app chrome. Enter navigates; there is no second URL form
+  or separate actions row. Bare searches use Google; explicit addresses use HTTP/HTTPS. Popups open in that same
   page. Hiding the panel, switching sessions or reloading the renderer retains
   it; session removal, closing the page and app exit release it.
-- Up to 12 pages may be open. State polling does not allocate pages. Each
+- Native page bounds account for Rack page zoom so websites stay aligned with
+  their viewport at different zoom levels. Up to 12 pages may be open. State polling does not allocate pages. Each
   conversation has its own in-memory profile, including cookies and site
   storage, isolated from the others and discarded on app exit. Downloads,
   privileged navigation and unsolicited browser permissions are blocked.
 - Websites run in sandboxed native views without Node, preload or the Rack
   bridge. Main owns page lifetime and bounds; the trusted renderer owns the
-  toolbar. Views detach for Settings, menus, modals and hidden surfaces.
+  toolbar. Views detach for Settings, menus, modals, splitter drags and hidden tabs.
 - The agent's `rack_browser` tool supports snapshot, navigate, click, type,
   select, press, scroll, back, forward and reload. `text` supplies field text,
   an option value or a key name. Keys: Enter, Tab, Escape, Space, arrows,
@@ -113,3 +126,38 @@ runtimes; authenticated model-driven browsing remains a live integration check.
 ## Standalone chat workspaces
 
 Files and Terminal also accept session context without a project. Composition resolves the saved chat ID to its private workspace, separate from authentication directories; the existing file and PTY adapters retain their protections and lifecycle. Browser already uses session identity. Changes and Timeline require a project. See [Chats, Plan mode and installed skills](chat-plan-skills.md).
+
+## Opening in an editor
+
+**Open in** in the conversation/project header opens the working folder. The
+Files panel's editor button opens the selected file. The menu detects installed
+VS Code/Insiders, Cursor, Windsurf, Zed, Sublime Text, JetBrains editors, and
+other common editors. **Choose application…** invokes the OS picker for other
+installations; **Default application** keeps the existing safe-open behavior.
+Discovery covers standard system/user application folders on macOS, common
+installation folders on Windows, and editor executables on PATH on Linux.
+Nonstandard installations can use the chooser. Unsaved in-app file drafts are
+not implicitly saved; external editors read the file on disk.
+
+Desktop main validates editor IDs, re-discovers their application paths and
+passes literal file/folder arguments without a shell. Provider text cannot name
+an arbitrary executable. Relative files resolve against their original saved
+project/chat workspace even if navigation changes while the menu is loading.
+
+## Typography and bundled assets
+
+A shared 15px content scale covers prompts, user bubbles, assistant prose,
+inline/fenced code, tool output, diffs, Files and terminal text. Navigation and
+metadata retain their compact sizes. Normal app zoom scales content together.
+The original xterm renderer is bundled locally with its CSS, with no external
+terminal application or WASM asset. Its generated style elements supply cell
+geometry and ANSI colors; the trusted renderer still blocks inline scripts,
+eval and remote resources. Terminal colors follow the app palette.
+
+The chat transcript occupies a bounded viewport and scrolls independently of
+the prompt. Drag the horizontal divider above the prompt to change its height,
+or use Up/Down when the divider is focused. Double-click restores 200px; the
+minimum is 148px and the maximum keeps conversation history visible. The height
+persists per device. Long drafts, attachments and question cards scroll within
+the prompt area. Sidebars retain their draggable inner-edge width splitters;
+the native browser detaches during a drag and returns at the final bounds.

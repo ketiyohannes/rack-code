@@ -1,7 +1,8 @@
 /**
  * Unified project navigator.
  *
- * Chats stand alone; project sessions attach directly to a selected folder.
+ * Project sessions attach directly to a selected folder. Standalone chat
+ * services remain available; their sidebar UI is deferred for a later design.
  *
  * Adding a project uses the native folder picker, and a session is created
  * directly from a project row. There are deliberately no editable
@@ -125,13 +126,10 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
   }
 
   const tree = h("div", { class: "tree" });
-  const chats = h("div", { class: "tree chat-tree" });
   const add = iconButton("folder-simple-plus", "Add project", () => void addProject());
 
   root.append(
     h("div", { class: "sidebar-sessions sidebar-projects-unified" },
-      h("button", { class: "button new-chat-button", type: "button", onClick: () => void controller.createSession() }, icon("plus"), "New chat"),
-      h("div", { class: "nav-heading" }, label("Chats")), chats,
       h("div", { class: "nav-heading" }, label("Projects"), add),
       tree,
     ),
@@ -152,10 +150,6 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
   function renderTree(state: AppState): void {
     const running = new Set(runningKey(state).split("|"));
     const waiting = new Set(waitingKey(state).split("|"));
-    const chatSessions = state.sessions.filter((session) => session.projectId === undefined);
-    const chatIds = order("chats", chatSessions.map((session) => session.id));
-    replace(chats, ...chatIds.map((id) => renderSession(chatSessions.find((session) => session.id === id)!, state, running, waiting, "chats", chatIds)),
-      chatIds.length === 0 ? h("p", { class: "empty tree-empty" }, "Questions, research, or a fresh idea.") : null);
     if (state.projects.length === 0) {
       replace(tree, h("button", { class: "empty-card empty-action", onClick: () => void addProject() },
         icon("folder-simple-plus"), h("span", {}, "Add a project folder")));

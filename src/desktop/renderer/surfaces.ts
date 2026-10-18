@@ -2,13 +2,13 @@
  * Surfaces that can open in the right panel.
  *
  * "Changes" is a core surface and always listed. Plugin surfaces appear in
- * the panel's launcher only when enabled in Settings > Plugins. Plugins
+ * the blank-tab launcher and + menu; choosing one enables it if needed. Plugins
  * marked `preview` add a placeholder surface with no functionality yet.
  * Timeline, Browser, Terminal and Files are functional. Retrospective and
  * orchestration remain previews.
  *
  * Enablement is a renderer preference stored per device and only controls
- * whether the surface is offered. Timeline has automatic project observers
+ * whether an open tool stays available. Timeline has automatic project observers
  * with host-owned Pause/Resume plus independently opted-in session chains;
  * hiding the surface does not stop either. Moving this toggle to the host (so
  * composition can validate dependencies and stop workers, as the
@@ -20,7 +20,7 @@ export interface SurfaceDefinition {
   readonly id: string;
   readonly title: string;
   readonly icon: IconName;
-  /** Single key that opens the surface while the launcher is visible. */
+  /** Legacy shortcut label retained for surface metadata. */
   readonly shortcut: string;
   readonly kind: "core" | "plugin";
   readonly description: string;

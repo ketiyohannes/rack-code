@@ -1,3 +1,4 @@
+import { createOpenInButton } from "../components/open-in.js";
 import { openModal } from "../components/modal.js";
 /**
  * Center column: the open session as a simple chat transcript.
@@ -99,8 +100,8 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     updateChrome();
   }
 
-  store.watch((state) => [state.session, state.projects, state.selection.sessionId], (_slice, state) => {
-    replace(header, ...renderHeader(state.session, state.projects, controller));
+  store.watch((state) => [state.session, state.projects, state.selection.sessionId, state.selection.projectId], (_slice, state) => {
+    replace(header, ...renderHeader(state.session, state.projects, controller, state.selection.projectId));
   });
 
   let lastSessionId: string | undefined;
@@ -115,9 +116,11 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   );
 }
 
-function renderHeader(session: SessionView | undefined, projects: readonly ProjectView[], controller: Controller): Node[] {
+function renderHeader(session: SessionView | undefined, projects: readonly ProjectView[], controller: Controller, projectId?: string): Node[] {
   if (session === undefined) {
-    return [h("span", { class: "session-title muted" }, "No session")];
+    const project = projects.find((entry) => entry.id === projectId);
+    return [h("span", { class: "session-title muted" }, project?.path.split(/[\\/]/).at(-1) ?? "No session"),
+      ...(project ? [createOpenInButton(controller, () => controller.resolveEditorTarget(".", project.path))] : [])];
   }
   const project = projects.find((candidate) => candidate.id === session.projectId);
   const meta = [
@@ -128,6 +131,7 @@ function renderHeader(session: SessionView | undefined, projects: readonly Proje
     h("span", { class: "session-title" }, session.title ?? (session.projectId === undefined ? "New chat" : `Session ${shortId(session.id)}`)),
     h("span", { class: "session-meta", title: meta }, meta),
     h("div", { class: "session-chips" },
+      createOpenInButton(controller, () => controller.resolveEditorTarget(".", project?.path, session.id)),
       session.projectId === undefined ? h("button", { class: "button button-small", type: "button", onClick: () => {
         const content = h("div", { class: "modal-body attach-project-list" },
           h("p", { class: "note" }, "Keep this conversation and continue in a project. Chat files remain in their original workspace."),

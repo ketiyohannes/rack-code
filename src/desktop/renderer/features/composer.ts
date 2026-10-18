@@ -93,7 +93,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       void submitOrStop();
     }
   });
-  prompt.addEventListener("input", () => { autoGrow(); refresh(store.get()); });
+  prompt.addEventListener("input", () => { refresh(store.get()); });
   prompt.addEventListener("keydown", (event) => {
     if (event.key === "/" && prompt.value === "" && !event.ctrlKey && !event.metaKey && !skills.trigger.disabled) { event.preventDefault(); skills.open(); }
   });
@@ -109,11 +109,6 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     event.preventDefault();
     void controller.cancelRun(active);
   });
-
-  function autoGrow(): void {
-    prompt.style.height = "auto";
-    prompt.style.height = `${Math.min(prompt.scrollHeight, window.innerHeight * 0.4)}px`;
-  }
 
   function activeRunId(state: AppState): string | undefined {
     // Navigation selects the new ID before its record finishes loading.
@@ -155,7 +150,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     submitting = false;
     if (ok) {
       attachments.clear(session.id, draft.map((file) => file.id));
-      if (store.get().session?.id === session.id && prompt.value === rawPrompt) { prompt.value = ""; autoGrow(); }
+      if (store.get().session?.id === session.id && prompt.value === rawPrompt) { prompt.value = ""; prompt.scrollTop = 0; }
     }
     refresh(store.get());
   }
@@ -209,7 +204,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       prompt.value = draft?.prompt ?? "";
       workflow = draft?.workflow ?? "normal";
       workflowInitializedFor = draft ? draftSession : undefined;
-      autoGrow();
+      prompt.scrollTop = 0;
     }
     // Session metadata/history arrive after selection. Restore the persisted
     // workflow only once they belong to this chat, without overwriting a draft.

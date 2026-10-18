@@ -1,21 +1,9 @@
 /**
- * Right panel: a launcher of surfaces ("Open a surface"), and the open
- * surface itself.
- *
- * - The launcher lists the core Changes surface and every plugin surface
- *   enabled in Settings > Plugins, each with its single-key shortcut. While
- *   the launcher is visible and focus is not in a text field, pressing a
- *   surface's key opens it.
- * - Changes reads the selected project working tree through the controller.
- *   Polls are serialized, bounded by the host adapter, and paused while hidden.
- *   Stale replies cannot cross projects.
- * - Timeline (optional plugin) is a persistent panel owned by
- *   `timeline-panel.ts`; the workbench only attaches it and reports whether
- *   it is the open surface. Files, Terminal and Browser own persistent
- *   interactive panels; unfinished plugin surfaces remain previews.
- *
- * The open surface is local presentation state. If its plugin is disabled
- * while open, the panel returns to the launcher.
+ * Tabbed right workbench. Tool instances belong to their panels, so switching
+ * or closing a tab preserves shell output, file drafts and the shared browser.
+ * Each window starts with a blank tab containing the tool launcher. Adding an
+ * optional tool enables its existing plugin through the controller; neither
+ * saved plugin preferences nor earlier tabs pre-open tools on startup.
  */
 import type { ProjectChanges, ProjectRepositories, RepositoryDiscoveryOptions } from "../../../contracts/desktop/index.js";
 import { createDropdown } from "../components/dropdown.js";
@@ -33,7 +21,10 @@ import type { Store } from "../store.js";
 import { SURFACES, type SurfaceDefinition } from "../surfaces.js";
 
 export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () => boolean, controller: Controller): void {
-  let openSurface: string | undefined = "changes";
+  let nextBlankId = 1;
+  let tabs = ["new-tab-1"];
+  let openSurface: string | undefined = tabs[0];
+  let tabSignature = "";
   let projectId: string | undefined;
   let repositories: ProjectRepositories | undefined;
   // Empty selection means All repositories; undefined means discovery pending.
@@ -43,6 +34,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   const snapshots = new Map<string, { snapshot?: ProjectChanges; error?: string }>();
   let error: string | undefined;
   let inFlight = false;
+  const surfaceScroll = new Map<string, number>();
   const changesMemory: ChangesMemory = { selectedFiles: new Map(), collapsedGroups: new Set(), split: false };
   // Changes and run details are rebuilt on render, so pickers are created
   // once and re-attached with fresh options; rebuilding them would close an open menu
@@ -57,6 +49,20 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     onChange: (value) => chooseRepository(value === ALL_REPOSITORIES ? "" : value),
   });
   const body = h("div", { class: "workbench-body" });
+  const tabList = h("div", { class: "workbench-tabs", role: "tablist", aria: { label: "Workbench tools" } });
+  const addTab = h("button", { class: "icon-button workbench-add-tab", type: "button", title: "Add tool tab", aria: { label: "Add tool tab" }, onClick: () => {
+    const menu = h("div", { class: "menu workbench-tool-menu" });
+    const picker = openPopover({ anchor: addTab, content: menu, minWidth: 220, align: "end" });
+    menu.append(h("button", { class: "menu-item", type: "button", onClick: () => { picker.close(); newTab(); focusTab(); } }, icon("plus"), "New tab"), h("div", { class: "menu-divider" }));
+    for (const surface of SURFACES) menu.append(h("button", {
+      class: "menu-item", type: "button", onClick: () => {
+        picker.close();
+        openTool(surface.id);
+        tabList.querySelector<HTMLElement>(`[data-tool="${surface.id}"]`)?.focus();
+      },
+    }, icon(surface.icon), surface.title, tabs.includes(surface.id) ? icon("check") : null));
+  } }, icon("plus"));
+  root.querySelector(".workbench-top")?.append(tabList, addTab);
   root.append(body);
   // Created once so its search field and expansion state survive re-renders.
   const timelinePanel = createTimelinePanel(store, controller, isVisible);
@@ -69,15 +75,84 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     return SURFACES.filter((surface) => surface.kind === "core" || enabled.has(surface.id));
   };
 
-  const open = (surfaceId: string | undefined) => {
-    openSurface = surfaceId;
+  function focusTab(): void {
+    tabList.querySelector<HTMLElement>(`[data-tool="${openSurface}"]`)?.focus();
+  }
+
+  function newTab(): void {
+    const id = `new-tab-${++nextBlankId}`;
+    tabs.push(id);
+    selectTab(id);
+  }
+
+  /** Launcher choices fill their blank tab. The + menu opens an additional
+   * tool tab; selecting an already open tool focuses its retained instance. */
+  function openTool(surfaceId: string, fillBlank = false): void {
+    const surface = SURFACES.find((candidate) => candidate.id === surfaceId);
+    if (!surface) return;
+    if (surface.kind === "plugin" && !store.get().enabledPlugins.includes(surfaceId)) controller.setPluginEnabled(surfaceId, true);
+    if (!tabs.includes(surfaceId)) {
+      const index = fillBlank && isBlankTab(openSurface) ? tabs.indexOf(openSurface!) : -1;
+      if (index >= 0) tabs[index] = surfaceId;
+      else tabs.push(surfaceId);
+    }
+    selectTab(surfaceId);
+  }
+
+  function selectTab(id: string): void {
+    openSurface = id;
     render();
     void refresh();
-    if (surfaceId === "run-details") {
+    if (id === "run-details") {
       const run = selectedRun();
       if (run !== undefined && run.id !== store.get().selection.runId) void controller.selectRun(run.id);
     }
-  };
+  }
+
+  function closeTab(id: string): void {
+    const index = tabs.indexOf(id);
+    tabs = tabs.filter((candidate) => candidate !== id);
+    if (openSurface === id) openSurface = tabs[Math.min(index, tabs.length - 1)];
+    render();
+    (tabList.querySelector<HTMLElement>(`[data-tool="${openSurface}"]`) ?? addTab).focus();
+    void refresh();
+  }
+
+  function renderTabs(surfaces: readonly SurfaceDefinition[]): void {
+    const shown = tabs.flatMap<Pick<SurfaceDefinition, "id" | "title" | "icon">>((id) => isBlankTab(id)
+      ? [{ id, title: "New tab", icon: "plus" as const }]
+      : surfaces.filter((surface) => surface.id === id));
+    const signature = JSON.stringify([shown.map((surface) => surface.id), openSurface]);
+    if (signature === tabSignature) return;
+    tabSignature = signature;
+    const scroll = tabList.scrollLeft;
+    replace(tabList, ...shown.map((surface) => {
+      const tab = h("button", {
+        class: "workbench-tab", type: "button", role: "tab", id: `tool-tab-${surface.id}`,
+        title: surface.title, data: { tool: surface.id },
+        aria: { selected: String(surface.id === openSurface), controls: "workbench-panel" },
+        onClick: () => { selectTab(surface.id); tabList.querySelector<HTMLElement>(`[data-tool="${surface.id}"]`)?.focus(); },
+      }, icon(surface.icon), h("span", {}, surface.title));
+      tab.tabIndex = surface.id === openSurface ? 0 : -1;
+      tab.addEventListener("keydown", (event) => {
+        const index = tabs.indexOf(surface.id);
+        let target: string | undefined;
+        if (event.key === "ArrowRight") target = tabs[(index + 1) % tabs.length];
+        else if (event.key === "ArrowLeft") target = tabs[(index + tabs.length - 1) % tabs.length];
+        else if (event.key === "Home") target = tabs[0];
+        else if (event.key === "End") target = tabs.at(-1);
+        else if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); closeTab(surface.id); return; }
+        if (target === undefined) return;
+        event.preventDefault(); selectTab(target);
+        tabList.querySelector<HTMLElement>(`[data-tool="${target}"]`)?.focus();
+      });
+      const close = h("button", { class: "workbench-tab-close", type: "button", title: isBlankTab(surface.id) ? "Close tab" : `Close ${surface.title} tab`, aria: { label: isBlankTab(surface.id) ? "Close tab" : `Close ${surface.title} tab` }, onClick: () => closeTab(surface.id) }, icon("x"));
+      close.tabIndex = -1;
+      return h("div", { class: `workbench-tab-item${surface.id === openSurface ? " active" : ""}`, role: "presentation" }, tab, close);
+    }));
+    tabList.scrollLeft = scroll;
+    tabList.querySelector<HTMLElement>(`[data-tool="${openSurface}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
 
   function render(): void {
     const focused = root.contains(document.activeElement) ? document.activeElement as HTMLElement : undefined;
@@ -88,14 +163,23 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     const focusGroup = focused?.dataset["changeGroup"];
     const focusLabel = focused?.getAttribute("aria-label");
     const focusRepository = focused?.closest<HTMLElement>(".git-repository")?.dataset["repositoryKey"];
-    const scroll = body.scrollTop;
+    const previousSurface = body.querySelector<HTMLElement>(".surface");
+    if (previousSurface?.dataset["surface"]) surfaceScroll.set(previousSurface.dataset["surface"], previousSurface.scrollTop);
     const diffScroll = [...body.querySelectorAll<HTMLElement>(".git-diff-scroll:not(.split), .git-split-pane")].map((node) => ({
       repository: node.closest<HTMLElement>(".git-repository")?.dataset["repositoryKey"], top: node.scrollTop, left: node.scrollLeft,
       path: node.closest<HTMLElement>(".git-file-diff")?.dataset["diffPath"], side: node.dataset["diffSide"],
     }));
     const surfaces = available();
+    tabs = tabs.filter((id) => isBlankTab(id) || surfaces.some((surface) => surface.id === id));
+    // A window always has a blank tab after its last tool is closed or disabled.
+    if (tabs.length === 0) tabs.push(`new-tab-${++nextBlankId}`);
+    if (!tabs.includes(openSurface ?? "")) openSurface = tabs[0];
+    renderTabs(surfaces);
     const surface = surfaces.find((candidate) => candidate.id === openSurface);
-    // Streaming chat updates must not detach persistent editors, xterm's
+    body.setAttribute("role", "tabpanel");
+    body.id = "workbench-panel";
+    body.setAttribute("aria-labelledby", `tool-tab-${openSurface}`);
+    // Streaming chat updates must not detach persistent editors, the terminal's
     // hidden textarea, or the browser chrome. Reattachment loses focus and
     // IME composition even if the exact DOM node is inserted again.
     const persistent = surface?.id === "files" ? filesPanel.element
@@ -103,10 +187,9 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
         : surface?.id === "browser" ? browserPanel.element
           : surface?.id === "timeline" ? timelinePanel.element : undefined;
     if (surface === undefined) {
-      openSurface = undefined;
-      replace(body, renderLauncher(surfaces, open));
+      replace(body, renderLauncher((id) => { openTool(id, true); focusTab(); }));
     } else if (persistent === undefined || !body.contains(persistent)) {
-      replace(body, renderSurface(surface, () => open(undefined), surface.id === "changes" ? renderChanges()
+      replace(body, renderSurface(surface, surface.id === "changes" ? renderChanges()
         : surface.id === "run-details" ? renderDetails()
           : surface.id === "timeline" ? timelinePanel.element
             : surface.id === "files" ? filesPanel.element
@@ -121,7 +204,8 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
       focused.focus({ preventScroll: true });
       if (caret !== undefined && caret.start !== null && caret.end !== null) focused.setSelectionRange(caret.start, caret.end);
     }
-    body.scrollTop = scroll;
+    const visibleSurface = body.querySelector<HTMLElement>(".surface");
+    if (visibleSurface && surface) visibleSurface.scrollTop = surfaceScroll.get(surface.id) ?? 0;
     for (const node of body.querySelectorAll<HTMLElement>(".git-diff-scroll:not(.split), .git-split-pane")) {
       const matches = diffScroll.filter((entry) => entry.repository === node.closest<HTMLElement>(".git-repository")?.dataset["repositoryKey"]
         && entry.path === node.closest<HTMLElement>(".git-file-diff")?.dataset["diffPath"]);
@@ -339,17 +423,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     void refresh();
   });
 
-  // Single-key shortcuts while the launcher is showing.
-  document.addEventListener("keydown", (event) => {
-    if (openSurface !== undefined || !isVisible() || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (store.get().settings.open || isTextInput(event.target)) return;
-    const match = available().find((surface) => surface.shortcut.toLowerCase() === event.key.toLowerCase());
-    if (match !== undefined) {
-      event.preventDefault();
-      open(match.id);
-    }
-  });
-
+  // Settings changes affect availability; enabling a plugin never opens tabs.
   store.watch((state) => [state.enabledPlugins, state.page], () => { render(); void refresh(); });
   store.watch((state) => [state.selection.runId, state.journal, state.live, state.runs, state.session], () => {
     if (openSurface === "run-details") render();
@@ -359,33 +433,8 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
 /** Picker value for "All repositories"; the panel stores it as "". */
 const ALL_REPOSITORIES = "__all__";
 
-function renderLauncher(surfaces: readonly SurfaceDefinition[], open: (id: string) => void): HTMLElement {
-  return h("div", { class: "launcher" },
-    h("p", { class: "launcher-title" }, "Open a surface"),
-    h("div", { class: "launcher-list" },
-      ...surfaces.map((surface) => h("button", {
-        class: "launcher-item",
-        type: "button",
-        title: surface.description,
-        onClick: () => open(surface.id),
-      },
-        icon(surface.icon),
-        h("span", { class: "launcher-label" }, surface.title),
-        h("kbd", { class: "key-hint" }, surface.shortcut),
-      )),
-    ),
-    h("p", { class: "launcher-note" }, "Enable more surfaces in Settings > Plugins."),
-  );
-}
-
-function renderSurface(surface: SurfaceDefinition, back: () => void, content?: HTMLElement): HTMLElement {
+function renderSurface(surface: SurfaceDefinition, content?: HTMLElement): HTMLElement {
   return h("div", { class: "surface", data: { surface: surface.id } },
-    h("div", { class: "surface-header" },
-      h("button", { class: "icon-button", type: "button", title: "All surfaces", aria: { label: "All surfaces" }, onClick: back }, icon("arrow-left")),
-      icon(surface.icon),
-      h("span", { class: "surface-title" }, surface.title),
-      surface.preview ? h("span", { class: "soon" }, "Preview") : null,
-    ),
     content ?? h("div", { class: "placeholder" },
       h("span", { class: "placeholder-icon" }, icon(surface.icon)),
       h("p", { class: "placeholder-title" }, surface.kind === "core" ? "No changes yet" : `${surface.title} is not available yet`),
@@ -396,8 +445,16 @@ function renderSurface(surface: SurfaceDefinition, back: () => void, content?: H
   );
 }
 
-function isTextInput(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    (target instanceof HTMLElement && target.isContentEditable);
+/** Blank tabs have independent identities; tools retain one shared panel per
+ * type because their underlying browser/shell/editor state is session-owned. */
+function isBlankTab(id: string | undefined): boolean { return id?.startsWith("new-tab-") ?? false; }
+
+/** Restore the original tool list as the contents of a blank workbench tab. */
+function renderLauncher(open: (id: string) => void): HTMLElement {
+  return h("div", { class: "launcher" },
+    h("p", { class: "launcher-title" }, "Open a surface"),
+    h("div", { class: "launcher-list" }, ...SURFACES.map((surface) => h("button", {
+      class: "launcher-item", type: "button", title: surface.description, onClick: () => open(surface.id),
+    }, icon(surface.icon), h("span", { class: "launcher-label" }, surface.title), surface.preview ? h("span", { class: "soon" }, "Preview") : null))),
+  );
 }

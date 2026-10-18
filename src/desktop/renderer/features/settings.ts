@@ -209,15 +209,15 @@ function renderPlaceholder(section: SectionInfo): HTMLElement {
 }
 
 /**
- * Plugin toggles. Enabling a plugin lists its surface in the right panel's
- * launcher. Only unfinished plugins carry the Preview label. These are
+ * Plugin toggles govern optional open tools without creating tabs. The
+ * launcher and + menu can enable a tool when the user chooses it. Only unfinished plugins carry the Preview label. These are
  * presentation preferences; hiding a panel does not terminate its resources.
  */
 function renderPlugins(enabled: readonly string[], controller: Controller): Node[] {
   return [
     h("header", { class: "settings-pane-header" },
       h("h3", {}, "Plugins"),
-      h("p", {}, "Enabled plugins appear as surfaces in the right panel. Plugins marked Preview have no functionality yet."),
+      h("p", {}, "Open tools from the right panel’s list or + menu. Disabling a plugin hides its open tab. Plugins marked Preview have no functionality yet."),
     ),
     h("section", { class: "settings-group settings-list" },
       ...SURFACES.filter((surface) => surface.kind === "plugin").map((surface) => {

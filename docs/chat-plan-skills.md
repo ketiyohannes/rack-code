@@ -1,5 +1,11 @@
 # Chats, Plan mode and installed skills
 
+Current sidebar status (2026-10-19): New chat and the Chats list are hidden
+pending a new UI design. The standalone chat services, controller operations,
+persistence and existing main conversation experience described below remain
+implemented.
+
+
 New chat starts a conversation without a project. Chats appear above Projects and use the same accounts, models, attachments, streaming, questions, cancellation, deletion confirmation and durable history as project sessions. The first message supplies the default title. Composer text and mode drafts are retained separately while switching conversations within the window.
 
 Each chat has a stable private folder under the application's `chat-files` directory, named with a hash of its saved session ID. This folder is separate from provider credentials and configuration. Native tools can create documents and other files there; Files browses and edits them with the same traversal, symlink and version-conflict protections as project files. Open chat files reveals the folder in the operating system. Terminal and Browser also work without registering a project. Changes and Timeline require an attached project.
