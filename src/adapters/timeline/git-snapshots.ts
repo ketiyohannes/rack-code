@@ -1,19 +1,19 @@
 /**
  * Git implementation of Timeline's `SnapshotRepository`.
  *
- * Capture uses a temporary, initially empty Git index (a missing index file
- * is an empty index to Git):
+ * Capture uses a private temporary index, seeded from a bounded in-memory
+ * index cache to reuse Git stat data. Newly ignored entries are removed before:
  *
  *   add -A -- :/ -> write-tree -> commit-tree -> update-ref
  *
  * An unchanged tree stops after write-tree, so the common "nothing changed"
- * observation costs three Git processes.
+ * observation avoids rehashing unchanged working files.
  *
  * so the user's HEAD, branch, index, and working files are never touched.
  * Only Git objects and the hidden ref named by the caller are written. Two
  * consequences the product documentation discloses:
  * - Git ignore rules decide what enters a snapshot, even for paths the
- *   user's own index tracks, because the capture index starts empty.
+ *   user's own index tracks; cached entries are checked against current ignores.
  * - Snapshots are not a secrets filter; anything Git would add is stored.
  *
  * Every command runs without a shell. External diff drivers, text
@@ -23,7 +23,7 @@
  * the inherited environment.
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -70,6 +70,7 @@ export interface GitSnapshotRepositoryOptions {
 }
 
 export class GitSnapshotRepository implements SnapshotRepository {
+  private readonly indexes = new Map<string, Buffer>();
   private readonly roots = new Map<string, { readonly root: string; readonly expires: number }>();
   private readonly discovery = new GitRepositoryDiscovery();
   private readonly captureTimeoutMs: number;
@@ -127,6 +128,14 @@ export class GitSnapshotRepository implements SnapshotRepository {
     };
     const options = { env, timeout: this.captureTimeoutMs };
     try {
+      const cached = this.indexes.get(root);
+      if (cached !== undefined) {
+        await writeFile(env.GIT_INDEX_FILE, cached, { mode: 0o600 });
+        // A previously captured file can become ignored. A normal persistent
+        // Git index would keep it tracked, violating Timeline's ignore policy.
+        const ignored = await git(root, ["ls-files", "--cached", "--ignored", "--exclude-standard", "-z"], options);
+        if (ignored) await gitWithInput(root, ["update-index", "--force-remove", "-z", "--stdin"], ignored, [], env);
+      }
       const tip = await this.resolveTip(root, input.ref);
       const baseline = tip ?? (input.startFromHead === true ? await this.resolveTip(root, "HEAD") : undefined);
       const previous = baseline?.commit;
@@ -134,6 +143,12 @@ export class GitSnapshotRepository implements SnapshotRepository {
       // subdirectory still snapshots the whole repository.
       await git(root, ["add", "-A", "--", ":/"], options);
       const tree = (await git(root, ["write-tree"], options)).trim();
+      const index = await readFile(env.GIT_INDEX_FILE);
+      this.indexes.delete(root);
+      // At most 16 MiB of private stat data; temporary indexes are still
+      // removed in finally and no user index is ever opened for writing.
+      if (index.length <= 4 * 1024 * 1024) this.indexes.set(root, index);
+      while ([...this.indexes.values()].reduce((total, value) => total + value.length, 0) > 16 * 1024 * 1024) this.indexes.delete(this.indexes.keys().next().value!);
       if (baseline !== undefined && baseline.tree === tree) return { kind: "unchanged", snapshot: baseline.commit };
       const snapshot = (await git(root, ["commit-tree", tree, ...(previous === undefined ? [] : ["-p", previous]), "-m", commitMessage(input.label, input.trailers)], options)).trim();
       if (!OBJECT_ID.test(snapshot)) throw new Error("Git returned an invalid snapshot ID.");
@@ -147,6 +162,9 @@ export class GitSnapshotRepository implements SnapshotRepository {
         createdAt: timestamp.toISOString(),
         ...(previous === undefined ? {} : { previous }),
       };
+    } catch (error) {
+      this.indexes.delete(root);
+      throw error;
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -366,10 +384,10 @@ async function git(cwd: string, args: readonly string[], options: GitOptions = {
 }
 
 /** Runs Git with stdin; exit codes in `allowedCodes` are treated as success. */
-function gitWithInput(cwd: string, args: readonly string[], input: string, allowedCodes: readonly number[]): Promise<string> {
+function gitWithInput(cwd: string, args: readonly string[], input: string, allowedCodes: readonly number[], extraEnv?: Readonly<Record<string, string>>): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile("git", ["-C", cwd, ...SAFE_CONFIG, ...args], {
-      encoding: "utf8", timeout: 10_000, maxBuffer: 32 * 1024 * 1024, env: environment(undefined),
+      encoding: "utf8", timeout: 10_000, maxBuffer: 32 * 1024 * 1024, env: environment(extraEnv),
     }, (error, stdout) => {
       if (error !== null && !(typeof error.code === "number" && allowedCodes.includes(error.code))) reject(error);
       else resolve(stdout);

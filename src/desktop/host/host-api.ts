@@ -47,6 +47,7 @@ import {
   type RunView,
   type SessionSummaryView,
 } from "../../contracts/desktop/views.js";
+import { ModelCatalogCache } from "./model-cache.js";
 import { ActiveRuns } from "./active-runs.js";
 import { HostOperationError, toHostError } from "./errors.js";
 import type { FilesService } from "../../features/files/index.js";
@@ -78,6 +79,7 @@ type Handlers = {
 
 export class HostApi {
   private readonly activeRuns: ActiveRuns;
+  private readonly modelCatalogs = new ModelCatalogCache();
   private readonly ready: Promise<void>;
   private stopping = false;
   private readonly handlers: Handlers;
@@ -96,7 +98,7 @@ export class HostApi {
     // changed account records.
     app.connections.subscribe((connect) => {
       emit({ type: "auth.updated", connect });
-      if (connect.status === "completed") emit({ type: "accounts.changed" });
+      if (connect.status === "completed") { this.modelCatalogs.clear(); emit({ type: "accounts.changed" }); }
     });
     app.timeline?.subscribe((sessionId) => emit({ type: "timeline.changed", sessionId }));
   }
@@ -273,16 +275,7 @@ export class HostApi {
 
       "sessions.list": async (params) => {
         const projectId = params.projectId === undefined ? undefined : (await projects.getProject(params.projectId)).id;
-        return (await sessions.list(projectId)).map(
-        (session): SessionSummaryView => ({
-          id: session.id,
-          ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
-          ...(session.title === undefined ? {} : { title: session.title }),
-          messageCount: session.messages.length,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-        }),
-        );
+        return sessions.listSummaries(projectId);
       },
       "sessions.create": async (params) => {
         // Validate the project before persisting the session.
@@ -361,12 +354,13 @@ export class HostApi {
         for (const runtimeId of runtimes.list()) {
           const runtime = runtimes.get(runtimeId);
           if (runtime.models === undefined || runtime.providerId === undefined) continue;
-          for (const account of accountsByProvider.get(runtime.providerId) ?? []) {
+          await Promise.all((accountsByProvider.get(runtime.providerId) ?? []).map(async (account) => {
             try {
-              const entries = await runtime.models({
+              const key = JSON.stringify([runtimeId, account.id, account.runtimeContextId, account.credential.id, projectPath]);
+              const entries = await this.modelCatalogs.get(key, () => runtime.models!({
                 account: { accountId: account.id, providerId: account.providerId, credential: account.credential, runtimeContextId: account.runtimeContextId },
                 ...(projectPath === undefined ? {} : { projectPath }),
-              });
+              }));
               for (const model of entries) {
                 const key = `${runtimeId}|${model.providerId}|${model.id}`;
                 const current = models.get(key);
@@ -376,7 +370,7 @@ export class HostApi {
             } catch {
               failures.push({ providerName: providerNames.get(account.providerId) ?? account.providerId, accountId: account.id });
             }
-          }
+          }));
         }
         return {
           models: [...models.values()].map(({ model, runtimeId, accountIds }) => ({

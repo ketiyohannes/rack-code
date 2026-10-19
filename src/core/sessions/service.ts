@@ -1,3 +1,4 @@
+import { summarizeSession, type SessionSummary } from "./types.js";
 import { randomUUID } from "node:crypto";
 
 import { InvalidSessionError, SessionNotFoundError } from "./errors.js";
@@ -137,6 +138,12 @@ export class SessionsService {
    * Lists sessions, optionally restricted to one project, most recently
    * updated first so navigators show active conversations at the top.
    */
+  async listSummaries(projectId?: string): Promise<readonly SessionSummary[]> {
+    const summaries = this.store.listSummaries ? await this.store.listSummaries() : (await this.store.list()).map(summarizeSession);
+    return summaries.filter((session) => projectId === undefined || session.projectId === projectId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
   async list(projectId?: string): Promise<readonly SessionRecord[]> {
     const sessions = await this.store.list();
     return sessions
