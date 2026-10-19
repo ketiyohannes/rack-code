@@ -42,6 +42,8 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   if (props.title !== undefined) element.title = props.title;
   if (props.role !== undefined) element.setAttribute("role", props.role);
   if (props.id !== undefined) element.id = props.id;
+  // Icon controls always expose the same name to pointer and keyboard users.
+  if (props.title === undefined && typeof props.class === "string" && props.class.includes("icon-button") && props.aria?.label) element.title = props.aria.label;
   if (props.type !== undefined) element.setAttribute("type", props.type);
   if (props.name !== undefined) element.setAttribute("name", props.name);
   if (props.for !== undefined) element.setAttribute("for", props.for);

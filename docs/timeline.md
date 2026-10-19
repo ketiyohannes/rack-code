@@ -6,6 +6,8 @@ Timeline gives a developer a local history of observed repository states during 
 
 ## Using it
 
+**Interface (2026-10-19).** History rows show a kind icon plus a word: Commit, Agent run or Observed edit (session scope shows the checkpoint number). Next comes the commit or observation message, with the file count and relative time beneath; full timestamps are in tooltips. Import timeline and Choose a repository folder are icon-plus-label buttons. The expanded snapshot window has a title with the commit chip and a readable date, and one newer · change · older toolbar with the position under it. **Diff**, **Before / After** and **Full context** form an icon toggle with names in tooltips. File scope tabs show counts as badges. Pull request comparisons open in the same window via **Open in Timeline** on a PR review.
+
 The sidebar surface and expanded snapshot viewer use Inter for headings, file names, filters, and controls. Sidebar lists match Changes: 13 px text and 31 px rows, with single-line checkpoint summaries and truncated long labels available in tooltips. Repository choices and nested file/folder rows use the same compact sizing. The panel heading is 16 px; code uses bundled Geist Mono at 14 px. Stronger green/red backgrounds, colored edge markers, and heavier line numbers distinguish additions/deletions in diffs; Before / After retains its added-line highlights using the stronger green. Scope tabs wrap at narrow widths.
 
 1. Saved Git projects record automatically while Rack is open, including projects with no sessions or existing Timeline refs. Enable the Timeline surface in **Settings > Plugins** to inspect them (shortcut `L`). The surface toggle only shows or hides the panel.

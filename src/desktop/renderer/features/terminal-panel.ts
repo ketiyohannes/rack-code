@@ -33,7 +33,7 @@ export function createTerminalPanel(store: Store, controller: Controller, isVisi
     const key = JSON.stringify([style.fontSize, style.fontFamily, style.backgroundColor, style.color, style.borderTopColor]);
     if (client.appearance === key) return;
     client.appearance = key;
-    client.terminal.options.fontSize = parseFloat(style.fontSize) || 15;
+    client.terminal.options.fontSize = parseFloat(style.fontSize) || 13;
     client.terminal.options.fontFamily = style.fontFamily;
     client.terminal.options.theme = { background: hex(style.backgroundColor), foreground: hex(style.color), cursor: hex(style.color), selectionBackground: hex(style.borderTopColor) };
   }
@@ -78,7 +78,7 @@ export function createTerminalPanel(store: Store, controller: Controller, isVisi
       await document.fonts.ready;
       if (version !== generation || !active || !isVisible() || !viewport.isConnected) return;
       const snapshot = await controller.openTerminal(projectId, state.selection.sessionId, 80, 24);
-      const terminal = new Terminal({ cols: 80, rows: 24, fontSize: 15, cursorBlink: true, scrollback: 5000, convertEol: false });
+      const terminal = new Terminal({ cols: 80, rows: 24, fontSize: 13, cursorBlink: true, scrollback: 5000, convertEol: false });
       const addon = new FitAddon(); terminal.loadAddon(addon);
       const container = h("div", { class: "terminal-instance" });
       const client: Client = { terminal, fit: addon, element: container, id: snapshot.id, offset: 0, exited: snapshot.exited, backend: snapshot.backend, writes: Promise.resolve(), opened: false, pendingOutput: "" };

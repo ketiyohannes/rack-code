@@ -151,8 +151,8 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
     const running = new Set(runningKey(state).split("|"));
     const waiting = new Set(waitingKey(state).split("|"));
     if (state.projects.length === 0) {
-      replace(tree, h("button", { class: "empty-card empty-action", onClick: () => void addProject() },
-        icon("folder-simple-plus"), h("span", {}, "Add a project folder")));
+      replace(tree, h("button", { class: "empty-card empty-action", type: "button", title: "Add a project folder", aria: { label: "Add a project folder" }, onClick: () => void addProject() },
+        icon("folder-simple-plus"), h("span", { class: "sr-only" }, "Add a project folder")));
       return;
     }
 

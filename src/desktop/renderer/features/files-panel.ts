@@ -33,12 +33,12 @@ export function createFilesPanel(store: Store, controller: Controller, isVisible
   const list = h("div", { class: "files-list", role: "list", aria: { label: "Project files" } });
   const filename = h("span", { class: "files-editor-name" });
   const dirty = h("span", { class: "files-dirty", aria: { live: "polite" } });
-  const reload = h("button", { class: "button button-small", type: "button", onClick: () => void selectFile(selected!, true) }, "Reload");
-  const save = h("button", { class: "button button-primary button-small", type: "button", onClick: () => void saveCurrent() }, "Save");
+  const reload = h("button", { class: "icon-button", type: "button", title: "Reload file", aria: { label: "Reload file" }, onClick: () => void selectFile(selected!, true) }, icon("arrow-clockwise"));
+  const save = h("button", { class: "icon-button icon-button-primary", type: "button", title: "Save file", aria: { label: "Save file" }, onClick: () => void saveCurrent() }, icon("floppy-disk"));
   const external = createOpenInButton(controller, () => {
     const project = store.get().projects.find((entry) => entry.id === projectId);
     return controller.resolveEditorTarget(selected ?? ".", project?.path, projectId?.startsWith("chat:") ? projectId.slice(5) : undefined);
-  }, true);
+  });
   const editor = h("textarea", { class: "files-editor", aria: { label: "File contents" }, onInput: () => {
     const draft = current(); if (draft !== undefined) draft.text = draft.document.text.includes("\r\n") ? editor.value.replace(/\r?\n/g, "\r\n") : editor.value; renderEditorStatus();
   }, onKeydown: (event) => {
@@ -129,7 +129,10 @@ export function createFilesPanel(store: Store, controller: Controller, isVisible
     const reading = selected !== undefined && readingKey === key(selected);
     save.disabled = saving || reading || !changed || !draft?.document.editable;
     reload.disabled = saving || reading || draft === undefined;
-    reload.textContent = changed ? "Discard & reload" : "Reload";
+    reload.title = changed ? "Discard changes and reload file" : "Reload file";
+    reload.setAttribute("aria-label", reload.title);
+    save.title = saving ? "Saving file…" : "Save file (⌘/Ctrl+S)";
+    save.setAttribute("aria-label", save.title);
     editor.disabled = saving || reading;
   }
   async function saveCurrent(): Promise<void> {

@@ -7,9 +7,9 @@ import { h, replace } from "../dom.js";
 import { icon } from "../icons.js";
 import { openPopover, type PopoverHandle } from "./popover.js";
 
-export function createOpenInButton(controller: Controller, target: () => Promise<OpenPathRequest>, compact = false): HTMLButtonElement {
+export function createOpenInButton(controller: Controller, target: () => Promise<OpenPathRequest>): HTMLButtonElement {
   let menu: PopoverHandle | undefined;
-  const button = h("button", { class: compact ? "icon-button open-in-button" : "button button-small open-in-button", type: "button", title: "Open in editor", aria: { label: "Open in editor", haspopup: "menu", expanded: "false" }, onClick: () => {
+  const button = h("button", { class: "icon-button open-in-button", type: "button", title: "Open in editor", aria: { label: "Open in editor", haspopup: "menu", expanded: "false" }, onClick: () => {
     if (menu) { menu.close(); return; }
     const content = h("div", { class: "menu open-in-menu", role: "menu" }, h("p", { class: "note" }, "Finding installed editors…"));
     let closed = false;
@@ -27,6 +27,6 @@ export function createOpenInButton(controller: Controller, target: () => Promise
       );
       menu?.reposition();
     }).catch(() => { if (!closed) replace(content, h("p", { class: "note", role: "alert" }, "Could not load editors. Close and try again.")); });
-  } }, icon("code"), ...(compact ? [] : ["Open in", icon("caret-down")]));
+  } }, icon("code"));
   return button;
 }

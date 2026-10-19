@@ -52,8 +52,8 @@ export interface Notice {
   readonly action?: { readonly label: string; readonly run: () => void };
 }
 
-/** Sections of the settings overlay. Only some have content today. */
-export type SettingsSection = "general" | "accounts" | "models" | "permissions" | "plugins" | "shortcuts" | "notifications" | "about";
+/** Implemented settings destinations; planned controls stay out of navigation. */
+export type SettingsSection = "general" | "accounts" | "models" | "plugins" | "shortcuts" | "about";
 
 export interface AppState {
   readonly page: "chat" | "usage" | "pull-requests";
@@ -100,6 +100,8 @@ export interface AppState {
   /** Runs with an `unknown` outcome that the user explicitly acknowledged. */
   readonly acknowledgedUnknown: Readonly<Record<string, true>>;
   readonly notice?: Notice | undefined;
+  /** A request to show a right-panel tool (e.g. Side chat); `seq` makes repeated requests distinct. */
+  readonly toolRequest?: { readonly id: string; readonly seq: number } | undefined;
 }
 
 export const INITIAL_STATE: AppState = {

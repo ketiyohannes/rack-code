@@ -1,14 +1,47 @@
 /** REST translation for GitHub, GitLab and Bitbucket Cloud, shared by repository and account workflows. */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { CreatePull, PullDetail, PullList, PullRequest, PullRequestGateway, PullState, ReviewAction, ReviewCheck, ReviewComment, ReviewRepository } from "../../features/pull-requests/index.js";
+import type { CreatePull, PullDetail, PullList, PullRequest, PullRequestGateway, PullState, ReviewAction, ReviewCheck, ReviewComment, ReviewFile, ReviewRepository } from "../../features/pull-requests/index.js";
 import { git, remotes, savedReview, syncReview, type Remote } from "./repository.js";
 const exec = promisify(execFile);
 type Data = Record<string, any>;
 const enc = encodeURIComponent;
 const PAGE_SIZE = 50;
+/** GitHub's file listing: 30 per page keeps each page well under MAX_BYTES; 10 pages = 300 files. */
+const FILE_PAGE_SIZE = 30, MAX_FILE_PAGES = 10;
 const MAX_BYTES = 2_000_000;
 const str = (value: unknown): string => typeof value === "string" ? value : "";
+
+/** A non-2xx provider reply; `status` lets callers handle specific codes without parsing messages. */
+class ProviderHttpError extends Error {
+  constructor(message: string, readonly status: number | undefined) { super(message); }
+}
+/** Thrown when a body passes MAX_BYTES; text responses keep the bytes read so far. */
+class OversizedResponse extends Error {
+  constructor(readonly partial: string) { super("Provider response exceeds the 2 MB review limit. Narrow the search or open this PR on its code host."); }
+}
+/**
+ * Keeps only complete files from a cut-off unified diff: everything before the
+ * last `diff --git` header that started inside the limit. A diff with a single
+ * oversized file keeps the bytes up to the last complete line.
+ */
+function wholeFiles(partial: string): string {
+  const boundary = partial.lastIndexOf("\ndiff --git ");
+  if (boundary > 0) return partial.slice(0, boundary + 1);
+  const line = partial.lastIndexOf("\n");
+  return line > 0 ? partial.slice(0, line + 1) : "";
+}
+
+/** GitHub review states shown in Activity; PENDING (an unsubmitted draft) and unknown values are omitted. */
+function reviewState(value: unknown): ReviewComment["state"] | undefined {
+  switch (value) {
+    case "APPROVED": return "approved";
+    case "CHANGES_REQUESTED": return "changes_requested";
+    case "COMMENTED": return "commented";
+    case "DISMISSED": return "dismissed";
+    default: return undefined;
+  }
+}
 
 /** Tokens entered in Rack are host-memory only. Existing CLI logins and env tokens need no entry. */
 export class RestCodeHosts implements PullRequestGateway {
@@ -71,9 +104,9 @@ export class RestCodeHosts implements PullRequestGateway {
     if (!response?.ok) {
       await response?.body?.cancel();
       const status = response?.status;
-      throw new Error(status === 401 || status === 403 ? `Access denied by ${remote.provider}. Connect an account with repository and pull request permissions, or check the API rate limit.`
+      throw new ProviderHttpError(status === 401 || status === 403 ? `Access denied by ${remote.provider}. Connect an account with repository and pull request permissions, or check the API rate limit.`
         : status === 409 || status === 405 ? "The PR changed or cannot be merged. Refresh and check required reviews and checks."
-          : `The provider rejected this request (HTTP ${status}). Check branches, permissions and repository rules.`);
+          : `The provider rejected this request (HTTP ${status}). Check branches, permissions and repository rules.`, status);
     }
     if (response.status === 204) return {};
     const reader = response.body?.getReader();
@@ -83,11 +116,53 @@ export class RestCodeHosts implements PullRequestGateway {
       const { done, value } = await reader.read();
       if (done) break;
       length += value.byteLength;
-      if (length > MAX_BYTES) { await reader.cancel(); throw new Error("Provider response exceeds the 2 MB review limit. Narrow the search or open this PR on its code host."); }
+      if (length > MAX_BYTES) {
+        await reader.cancel();
+        // Keep the in-limit part of the final chunk too: a body can arrive as one large chunk.
+        if (raw) chunks.push(value.subarray(0, value.byteLength - (length - MAX_BYTES)));
+        throw new OversizedResponse(raw ? Buffer.concat(chunks).toString("utf8") : "");
+      }
       chunks.push(value);
     }
     const text = Buffer.concat(chunks).toString("utf8");
     return raw ? text : text ? JSON.parse(text) : {};
+  }
+  /**
+   * Reads a unified diff for review. Large PRs must stay reviewable, so a diff
+   * over the size limit is cut to whole files, and GitHub's "diff too large"
+   * reply (HTTP 406) yields an empty diff; both report `truncated`. Other
+   * failures propagate.
+   */
+  private async diff(remote: Remote, path: string): Promise<{ text: string; truncated: boolean }> {
+    try { return { text: await this.request(remote, path, "GET", undefined, undefined, true), truncated: false }; }
+    catch (error) {
+      if (error instanceof OversizedResponse) return { text: wholeFiles(error.partial), truncated: true };
+      if (error instanceof ProviderHttpError && error.status === 406) return { text: "", truncated: true };
+      throw error;
+    }
+  }
+  /**
+   * GitHub's per-file listing. Unlike the raw diff it stays small when a PR
+   * contains generated or vendored files: GitHub omits those patches but still
+   * reports the file and its counts. Paging stops at the last page, at
+   * MAX_FILE_PAGES, or at a page over MAX_BYTES; `truncated` reports any gap.
+   */
+  private async githubFiles(remote: Remote, root: string, expected: number): Promise<{ files: ReviewFile[]; truncated: boolean }> {
+    const files: ReviewFile[] = [];
+    for (let page = 1; page <= MAX_FILE_PAGES; page++) {
+      let entries: Data[];
+      try { entries = await this.request(remote, `${root}/files?per_page=${FILE_PAGE_SIZE}&page=${page}`); }
+      catch (error) { if (error instanceof OversizedResponse && files.length) break; throw error; }
+      if (!Array.isArray(entries)) break;
+      for (const entry of entries) {
+        const status = entry.status === "added" || entry.status === "removed" || entry.status === "renamed" ? entry.status : "modified";
+        files.push({ path: str(entry.filename), status, additions: Number(entry.additions) || 0, deletions: Number(entry.deletions) || 0,
+          ...(str(entry.previous_filename) ? { previousPath: str(entry.previous_filename) } : {}), ...(typeof entry.patch === "string" ? { patch: entry.patch } : {}) });
+      }
+      if (entries.length < FILE_PAGE_SIZE) break;
+    }
+    // Files without a patch are labelled individually in the Code tab, not as a shortened review.
+    return { files, truncated: files.length < expected };
   }
   async list(path: string, name: string, query: string, state: PullState, page: number): Promise<PullList> {
     return this.listRemote(await this.remote(path, name), query, state, page);
@@ -139,24 +214,50 @@ export class RestCodeHosts implements PullRequestGateway {
     const rawPull = await this.request(remote, root);
     const pull = this.normalize(remote, rawPull);
     const comments: ReviewComment[] = [];
-    let diff = "", truncated = false;
+    let diff = "", truncated = false, files: ReviewFile[] | undefined;
     if (remote.provider === "github") {
-      const [patch, discussion, reviews, inline] = await Promise.all([this.request(remote, root, "GET", undefined, undefined, true),
+      const [changed, discussion, reviews, inline] = await Promise.all([this.githubFiles(remote, root, Number(rawPull.changed_files) || 0),
         this.request(remote, `/repos/${remote.slug}/issues/${id}/comments?per_page=100`), this.request(remote, `${root}/reviews?per_page=100`), this.request(remote, `${root}/comments?per_page=100`)]);
-      diff = patch;
-      for (const entry of [...discussion, ...reviews] as Data[]) comments.push({ author: str(entry.user?.login), body: `${entry.state ? `[${entry.state}]\n` : ""}${str(entry.body)}`, createdAt: str(entry.created_at ?? entry.submitted_at) });
-      for (const entry of inline as Data[]) comments.push({ author: str(entry.user?.login), body: `${entry.path ? `[${entry.path}${entry.line ? `:${entry.line}` : ""}]\n` : ""}${str(entry.body)}`, createdAt: str(entry.created_at) });
-      truncated = discussion.length === 100 || reviews.length === 100 || inline.length === 100;
+      files = changed.files;
+      for (const entry of discussion as Data[]) comments.push({ kind: "comment", author: str(entry.user?.login), body: str(entry.body), createdAt: str(entry.created_at) });
+      for (const entry of reviews as Data[]) {
+        const state = reviewState(entry.state);
+        // A "commented" review with no body only groups inline comments, which are listed
+        // individually; pending reviews are unsubmitted drafts.
+        if (!state || (state === "commented" && !str(entry.body).trim())) continue;
+        comments.push({ kind: "review", state, author: str(entry.user?.login), body: str(entry.body), createdAt: str(entry.submitted_at ?? entry.created_at) });
+      }
+      for (const entry of inline as Data[]) {
+        const line = Number(entry.line ?? entry.original_line);
+        comments.push({ kind: "inline", author: str(entry.user?.login), body: str(entry.body), createdAt: str(entry.created_at),
+          ...(str(entry.path) ? { path: str(entry.path) } : {}), ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}) });
+      }
+      truncated = changed.truncated || discussion.length === 100 || reviews.length === 100 || inline.length === 100;
     } else if (remote.provider === "gitlab") {
       const [patches, discussion] = await Promise.all([this.request(remote, `${root}/diffs?per_page=100`), this.request(remote, `${root}/notes?per_page=100&sort=asc`)]);
-      diff = (patches as Data[]).map((entry) => `diff --git a/${entry.old_path} b/${entry.new_path}\n--- a/${entry.old_path}\n+++ b/${entry.new_path}\n${entry.diff}`).join("\n");
-      for (const entry of discussion as Data[]) comments.push({ author: str(entry.author?.username), body: str(entry.body), createdAt: str(entry.created_at) });
+      files = (patches as Data[]).map((entry) => {
+        const patch = str(entry.diff), lines = patch.split("\n");
+        return { path: str(entry.new_path), status: entry.new_file ? "added" : entry.deleted_file ? "removed" : entry.renamed_file ? "renamed" : "modified",
+          additions: lines.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length, deletions: lines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length,
+          ...(entry.renamed_file ? { previousPath: str(entry.old_path) } : {}), ...(patch ? { patch } : {}) } satisfies ReviewFile;
+      });
+      // System notes ("added 1 commit", label changes) are not discussion.
+      for (const entry of discussion as Data[]) {
+        if (entry.system) continue;
+        const path = str(entry.position?.new_path ?? entry.position?.old_path), line = Number(entry.position?.new_line ?? entry.position?.old_line);
+        comments.push({ kind: path ? "inline" : "comment", author: str(entry.author?.username), body: str(entry.body), createdAt: str(entry.created_at),
+          ...(path ? { path } : {}), ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}) });
+      }
       truncated = patches.length === 100 || discussion.length === 100 || patches.some((entry: Data) => entry.collapsed || entry.too_large);
     } else {
-      const [patch, discussion] = await Promise.all([this.request(remote, `${root}/diff`, "GET", undefined, undefined, true), this.request(remote, `${root}/comments?pagelen=100&sort=created_on`)]);
-      diff = patch;
-      for (const entry of discussion.values as Data[]) comments.push({ author: str(entry.user?.display_name), body: str(entry.content?.raw), createdAt: str(entry.created_on) });
-      truncated = Boolean(discussion.next);
+      const [patch, discussion] = await Promise.all([this.diff(remote, `${root}/diff`), this.request(remote, `${root}/comments?pagelen=100&sort=created_on`)]);
+      diff = patch.text;
+      for (const entry of discussion.values as Data[]) {
+        const line = Number(entry.inline?.to ?? entry.inline?.from);
+        comments.push({ kind: entry.inline ? "inline" : "comment", author: str(entry.user?.display_name), body: str(entry.content?.raw), createdAt: str(entry.created_on),
+          ...(str(entry.inline?.path) ? { path: str(entry.inline.path) } : {}), ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}) });
+      }
+      truncated = patch.truncated || Boolean(discussion.next);
     }
     const checks: ReviewCheck[] = [];
     let checksNotice: string | undefined;
@@ -178,10 +279,10 @@ export class RestCodeHosts implements PullRequestGateway {
     const saved = path ? await savedReview(path, remote, id) : undefined;
     let timelineCheckpointId = saved?.checkpointId, timelineError: string | undefined;
     if (path && saved && (saved.head !== pull.head || saved.base !== pull.base)) {
-      try { timelineCheckpointId = await syncReview(path, remote, pull); }
+      try { timelineCheckpointId = await syncReview(path, remote, pull, await this.token(remote)); }
       catch { timelineError = "New PR commits could not sync to Timeline. Check Git access, then use View in Timeline to retry."; }
     }
-    return { pull, diff, checks, ...(checksNotice ? { checksNotice } : {}), comments: comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt)), truncated,
+    return { pull, diff, ...(files ? { files } : {}), checks, ...(checksNotice ? { checksNotice } : {}), comments: comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt)), truncated,
       ...(timelineCheckpointId ? { timelineCheckpointId } : {}), ...(timelineError ? { timelineError } : {}) };
   }
   async create(path: string, name: string, input: CreatePull): Promise<PullRequest> {
@@ -236,6 +337,11 @@ export class RestCodeHosts implements PullRequestGateway {
   async sync(path: string, name: string, id: number): Promise<string> {
     const remote = await this.remote(path, name);
     const pull = this.normalize(remote, await this.request(remote, `${this.root(remote)}/${id}`));
-    return syncReview(path, remote, pull);
+    return syncReview(path, remote, pull, await this.token(remote));
+  }
+  /** Timeline sync for a remote this client is bound to; fetches authenticate as its credential. */
+  async syncRemote(path: string, remote: Remote, id: number): Promise<string> {
+    const pull = this.normalize(remote, await this.request(remote, `${this.root(remote)}/${id}`));
+    return syncReview(path, remote, pull, await this.token(remote));
   }
 }

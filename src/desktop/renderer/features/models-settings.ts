@@ -27,7 +27,7 @@ export function mountModelsSettings(root: HTMLElement, store: Store, controller:
     if (state.models.length === 0) {
       replace(list, h("div", { class: "empty-card empty-card-large" }, icon("star"),
         h("span", {}, state.host.status === "connecting" ? "Loading models…" : "No models available. Connect a provider account to choose favorites."),
-        h("button", { class: "button button-small", type: "button", onClick: () => controller.openSettings("accounts") }, "Manage accounts")));
+        h("button", { class: "icon-button", type: "button", title: "Manage accounts", aria: { label: "Manage accounts" }, onClick: () => controller.openSettings("accounts") }, icon("user-circle"))));
       return;
     }
     const providers = [...new Set(state.models.map((model) => model.providerId))];

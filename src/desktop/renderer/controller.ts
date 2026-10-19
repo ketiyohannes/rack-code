@@ -233,6 +233,11 @@ export class Controller {
     this.store.update((state) => ({ ...state, page, ...(reviewProjectId === undefined ? {} : { reviewProjectId }) }));
   }
 
+  /** Shows the right panel with the given tool tab open, e.g. "side-chat". */
+  openTool(id: string): void {
+    this.store.update((state) => ({ ...state, page: "chat", toolRequest: { id, seq: (state.toolRequest?.seq ?? 0) + 1 } }));
+  }
+
   openSettings(section?: SettingsSection): void {
     this.store.update((state) => ({
       ...state,

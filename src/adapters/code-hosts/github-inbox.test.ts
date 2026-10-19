@@ -1,7 +1,10 @@
 /** Multi-account fixtures never inspect real credentials or mutate a hosted repository. */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { GitHubAccounts, githubRemote, type GitHubCli } from "./github-accounts.js";
+import type { LoginProcess, SpawnLogin } from "./github-login.js";
 import { GitHubInbox } from "./github-inbox.js";
 import { ReviewInboxService } from "../../features/pull-requests/index.js";
 import { validateCommandParams } from "../../contracts/desktop/commands.js";
@@ -13,7 +16,7 @@ const cliLogins: GitHubCli = async (args, env) => {
   assert.equal(env.GH_CONFIG_DIR, "/test/config");
   if (args[1] === "status") {
     assert.deepEqual(args, ["auth", "status", "--json", "hosts"]);
-    return JSON.stringify({ hosts: { "github.com": [{ account: "alice", active: true }, { account: "bob", active: false }], "git.example.com": [{ account: "work", active: true }] } });
+    return JSON.stringify({ hosts: { "github.com": [{ login: "alice", active: true, state: "success" }, { login: "bob", active: false, state: "success" }], "git.example.com": [{ login: "work", active: true, state: "success" }] } });
   }
   assert.equal(args[1], "token"); assert.equal(args[4], "--user");
   return `secret-${args[5]}`;
@@ -73,7 +76,7 @@ test("details, reviews and creation use the selected inactive account without a 
     const url = new URL(String(input)); assert.equal(auth(options), "Bearer secret-bob");
     const method = options?.method ?? "GET";
     calls.push({ path: url.pathname, method, body: options?.body ? JSON.parse(String(options.body)) : undefined });
-    if ((options?.headers as Record<string, string>).Accept?.includes("diff")) return new Response("diff --git a/a b/a\n-old\n+new");
+    if (url.pathname.endsWith("/files")) return Response.json([{ filename: "a", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-old\n+new" }]);
     if (url.pathname.endsWith("/check-runs")) return Response.json({ check_runs: [] });
     if (url.pathname.endsWith("/status")) return Response.json({ statuses: [] });
     if (url.pathname.endsWith("/comments") || url.pathname.endsWith("/reviews")) return Response.json([]);
@@ -82,7 +85,7 @@ test("details, reviews and creation use the selected inactive account without a 
   const inbox = new ReviewInboxService(new GitHubInbox(new GitHubAccounts(fetcher, cliLogins, { GH_CONFIG_DIR: "/test/config" }), fetcher), async () => []);
   const target = { accountId: "github:github.com:bob", repository: "team/repo", id: 7 };
   const detail = await inbox.detail(target);
-  assert.equal(detail.local, undefined); assert.equal(detail.pull.head, head); assert.match(detail.diff, /new/);
+  assert.equal(detail.local, undefined); assert.equal(detail.pull.head, head); assert.match(detail.files?.[0]?.patch ?? "", /new/);
   await inbox.act(target, "approve", "Looks good", head);
   assert.equal(calls.find((call) => call.method === "POST")?.body.event, "APPROVE");
   await inbox.act(target, "merge", "", head);
@@ -102,17 +105,82 @@ test("expired selected credentials never fall back to the active account or envi
     return "secret-alice";
   }, {});
   const inbox = new GitHubInbox(accounts, async () => { fetches++; return Response.json({}); });
-  await assert.rejects(inbox.detail({ accountId: "github:github.com:bob", repository: "team/repo", id: 7 }), /Reconnect bob/);
+  await assert.rejects(inbox.detail({ accountId: "github:github.com:bob", repository: "team/repo", id: 7 }), /Sign in to bob/);
   assert.equal(fetches, 0);
 });
 
-test("manual connections bind identity via /user, reject bad replacements and keep tokens out of views", async () => {
-  const accounts = new GitHubAccounts(async (_url, options) => auth(options) === "Bearer invalid" ? new Response("bad-token", { status: 401 }) : Response.json({ login: auth(options) === "Bearer alice-token" ? "alice" : "bob" }), async () => { throw new Error("no gh"); }, {});
-  const alice = await accounts.connect("github.com", "alice-token"), bob = await accounts.connect("github.com", "bob-token");
-  assert.notEqual(alice.id, bob.id); assert.equal((await accounts.accounts()).accounts.length, 2);
-  await assert.rejects(accounts.connect("github.com", "invalid"), /Access denied/);
-  assert.equal(await accounts.token(alice.id), "alice-token"); assert.equal(await accounts.token(bob.id), "bob-token");
-  assert.doesNotMatch(JSON.stringify(await accounts.accounts()), /alice-token|bob-token|bad-token/);
+/** A scripted stand-in for `gh auth login --web`; `exit` ends it like gh would. */
+function fakeGh(): { spawn: SpawnLogin; calls: { args: readonly string[]; env: NodeJS.ProcessEnv }[]; process: () => LoginProcess & { stderr: PassThrough; exit(code: number): void; killed: boolean } } {
+  const calls: { args: readonly string[]; env: NodeJS.ProcessEnv }[] = [];
+  let latest: (LoginProcess & { stderr: PassThrough; exit(code: number): void; killed: boolean }) | undefined;
+  const spawn: SpawnLogin = (args, env) => {
+    calls.push({ args, env });
+    const events = new EventEmitter();
+    const child = Object.assign(events, {
+      stdout: new PassThrough(), stderr: new PassThrough(), killed: false,
+      exit(code: number) { events.emit("exit", code); },
+      kill() { child.killed = true; events.emit("exit", null); return true; },
+    });
+    latest = child as unknown as typeof latest;
+    return child as unknown as LoginProcess;
+  };
+  return { spawn, calls, process: () => latest! };
+}
+
+test("CLI discovery reads gh's login field and the legacy account field", async () => {
+  const accounts = new GitHubAccounts(undefined, async () => JSON.stringify({ hosts: { "github.com": [{ login: "alice", state: "success" }, { account: "bob" }, { login: "../x" }] } }), {});
+  assert.deepEqual((await accounts.accounts()).accounts.map((account) => account.login), ["alice", "bob"]);
+});
+
+test("browser sign-in shows gh's device code, then discovers the new gh login without handling a token", async () => {
+  let logins = [{ login: "alice" }];
+  const gh = fakeGh();
+  const accounts = new GitHubAccounts(undefined, async () => JSON.stringify({ hosts: { "github.com": logins } }), { GH_TOKEN: "env-secret" }, gh.spawn);
+  await accounts.accounts();
+  const starting = accounts.beginLogin("GitHub.com");
+  gh.process().stderr.write("\n! First copy your one-time code: abcd-1234\nOpen this URL to continue in your web browser: https://github.com/login/device\n");
+  const login = await starting;
+  assert.deepEqual(gh.calls[0]!.args, ["auth", "login", "--web", "--hostname", "github.com"]);
+  // gh refuses to store a login while GH_TOKEN is set; the variable is removed for the subprocess only.
+  assert.equal(gh.calls[0]!.env.GH_TOKEN, undefined);
+  assert.equal(login.userCode, "ABCD-1234");
+  assert.equal(login.verificationUrl, "https://github.com/login/device");
+  const finishing = accounts.finishLogin(login.loginId);
+  logins = [{ login: "alice" }, { login: "bob" }];
+  gh.process().stderr.write("✓ Authentication complete.\n✓ Logged in as bob\n");
+  gh.process().exit(0);
+  const result = await finishing;
+  assert.equal(result.status, "completed");
+  assert.equal(result.status === "completed" && result.account.id, "github:github.com:bob");
+  assert.doesNotMatch(JSON.stringify(result), /secret/);
+});
+
+test("browser sign-in rejects foreign verification hosts and reports cancellation and failures", async () => {
+  const gh = fakeGh();
+  const accounts = new GitHubAccounts(undefined, async () => JSON.stringify({ hosts: {} }), {}, gh.spawn);
+  const foreign = accounts.beginLogin("github.com");
+  gh.process().stderr.write("one-time code: ABCD-1234\nOpen this URL to continue: https://evil.example/login/device\n");
+  await assert.rejects(foreign, /unexpected sign-in address/);
+  assert.equal(gh.process().killed, true);
+
+  const cancelled = accounts.beginLogin("github.com");
+  gh.process().stderr.write("one-time code: ABCD-1234\nOpen this URL to continue: https://github.com/login/device\n");
+  const pending = await cancelled;
+  const outcome = accounts.finishLogin(pending.loginId);
+  accounts.cancelLogin(pending.loginId);
+  assert.deepEqual(await outcome, { status: "cancelled" });
+
+  const declined = accounts.beginLogin("github.com");
+  gh.process().stderr.write("one-time code: ABCD-1234\nOpen this URL to continue: https://github.com/login/device\n");
+  const attempt = await declined;
+  const failed = accounts.finishLogin(attempt.loginId);
+  gh.process().stderr.write("X failed to authenticate: token gho_abcdef123456 was rejected\n");
+  gh.process().exit(1);
+  const result = await failed;
+  assert.equal(result.status, "failed");
+  assert.doesNotMatch(result.status === "failed" ? result.error : "", /gho_abcdef/);
+
+  await assert.rejects(accounts.beginLogin("github.com/evil"), /hostname/);
 });
 
 test("repository identities and API redirects cannot send account credentials to an unrelated host", async () => {
@@ -128,7 +196,8 @@ test("desktop inbox commands bound inputs and preserve explicit account identity
   assert.deepEqual(validateCommandParams("reviews.inboxDetail", { accountId: "a", repository: "owner/repo", id: 3 }), { accountId: "a", repository: "owner/repo", id: 3 });
   assert.throws(() => validateCommandParams("reviews.inboxDetail", { repository: "owner/repo", id: 3 }));
   assert.throws(() => validateCommandParams("reviews.inbox", { involvement: "involved", query: "", state: "all", page: 21 }));
-  assert.throws(() => validateCommandParams("reviews.accountConnect", { host: "github.com", token: "x".repeat(4097) }));
+  assert.throws(() => validateCommandParams("reviews.accountLoginBegin", { host: "github.com", token: "secret" }));
+  assert.throws(() => validateCommandParams("reviews.accountLoginBegin", { host: "x".repeat(257) }));
 });
 
 test("Timeline resolves only matching saved folders and honors an explicitly chosen project", async () => {
@@ -157,4 +226,36 @@ test("search windows and incomplete results are disclosed, and all-account failu
   fail = true;
   const unavailable = await inbox.list(query);
   assert.equal(unavailable.unavailable, true); assert.equal(unavailable.items.length, 0);
+});
+
+test("a transient search failure is retried once before the account is reported unavailable", async () => {
+  let calls = 0;
+  const fetcher: typeof fetch = async () => {
+    calls++;
+    return calls === 1 ? new Response("busy", { status: 502 }) : Response.json({ items: [pull("team/repo", 7)], total_count: 1 });
+  };
+  const inbox = new GitHubInbox(new GitHubAccounts(fetcher, cliLogins, { GH_CONFIG_DIR: "/test/config" }), fetcher);
+  const result = await inbox.list({ accountId: "github:github.com:alice", involvement: "created", query: "", state: "open", page: 1 });
+  assert.equal(result.items.length, 1);
+  assert.deepEqual(result.notices, []);
+});
+
+test("review activity is structured: decisions, inline locations and no placeholder reviews", async () => {
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/files")) return Response.json([]);
+    if (url.pathname.endsWith("/check-runs")) return Response.json({ check_runs: [] });
+    if (url.pathname.endsWith("/status")) return Response.json({ statuses: [] });
+    if (url.pathname.endsWith("/reviews")) return Response.json([
+      { user: { login: "alice" }, state: "APPROVED", body: "", submitted_at: "2026-10-16T10:00:00Z" },
+      { user: { login: "bob" }, state: "COMMENTED", body: "", submitted_at: "2026-10-16T10:01:00Z" },
+      { user: { login: "bob" }, state: "PENDING", body: "draft", submitted_at: "2026-10-16T10:02:00Z" }]);
+    if (url.pathname.endsWith("/pulls/7/comments")) return Response.json([{ user: { login: "bob" }, body: "Rename this", path: "src/a.ts", line: 4, created_at: "2026-10-16T10:03:00Z" }]);
+    if (url.pathname.endsWith("/comments")) return Response.json([]);
+    return Response.json(pull("team/repo", 7));
+  };
+  const inbox = new GitHubInbox(new GitHubAccounts(fetcher, cliLogins, { GH_CONFIG_DIR: "/test/config" }), fetcher);
+  const detail = await inbox.detail({ accountId: "github:github.com:alice", repository: "team/repo", id: 7 });
+  assert.deepEqual(detail.comments.map((comment) => [comment.kind, comment.state, comment.path, comment.line, comment.body]),
+    [["review", "approved", undefined, undefined, ""], ["inline", undefined, "src/a.ts", 4, "Rename this"]]);
 });
