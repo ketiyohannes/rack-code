@@ -17,6 +17,8 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/;
 
 interface Observation {
   readonly projectId: string;
+  readonly projectPath: string;
+  checkedAt: number;
   readonly capture: () => Promise<void>;
   readonly poll: boolean;
   stop(): Promise<void>;
@@ -68,7 +70,12 @@ export class ProjectTimelineTracker {
     const wanted = new Map<string, { projectId: string; projectPath: string }>();
     for (const project of await this.core.projects()) {
       if (!SAFE_ID.test(project.projectId) || (await this.store.getProject(project.projectId))?.enabled === false) continue;
+      // Healthy native watches already detect edits. Revalidate roots every
+      // 30 seconds rather than launching Git for every project every 5 seconds.
+      const retained = [...this.observations].find(([, value]) => value.projectId === project.projectId && value.projectPath === project.projectPath);
+      if (retained && !retained[1].poll && Date.now() - retained[1].checkedAt < 30_000) { wanted.set(retained[0], project); continue; }
       const capability = await this.snapshots.probe(project.projectPath);
+      if (retained) retained[1].checkedAt = Date.now();
       if (capability.supported && !wanted.has(capability.repositoryRoot)) wanted.set(capability.repositoryRoot, project);
     }
     for (const [root, observation] of this.observations) {
@@ -107,7 +114,7 @@ export class ProjectTimelineTracker {
           return handle;
         } }),
       });
-      const observation: Observation = { projectId: project.projectId, capture: request, get poll() { return watch === undefined || watch.closed === true; },
+      const observation: Observation = { projectId: project.projectId, projectPath: project.projectPath, checkedAt: Date.now(), capture: request, get poll() { return watch === undefined || watch.closed === true; },
         stop: async () => { closed = true; live.abandon(); await live.finish(); await serial; } };
       this.observations.set(root, observation);
       await request();

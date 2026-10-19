@@ -82,10 +82,10 @@ Tool notifications are asynchronous. An edit may already be on disk when `Before
 
 ### Snapshot semantics
 
-- Capture stages the repository's eligible files into a temporary, initially empty Git index, writes a tree and commit object, and advances `refs/rack-timeline/<session ID>` with compare-and-swap. The user's HEAD, branch, index, and working files are never changed. Git objects and the hidden ref are written into the existing repository.
+- Capture stages the repository's eligible files into a private temporary Git index, seeded from cached stat data when available, writes a tree and commit object, and advances `refs/rack-timeline/<session ID>` with compare-and-swap. The user's HEAD, branch, index, and working files are never changed. Git objects and the hidden ref are written into the existing repository.
 - Each snapshot's parent is the previous snapshot of the session chain. An identical tree creates nothing.
 - Snapshots cover the Git repository root, even when the project folder is a subdirectory.
-- Git ignore rules decide what enters a snapshot, even for paths the user's own index tracks, because the capture index starts empty. Timeline is not a secrets filter.
+- Git ignore rules decide what enters a snapshot, even for paths the user's own index tracks, because cached entries that now match ignore rules are removed before staging. Timeline is not a secrets filter.
 - Commits use the author `Rack timeline <timeline@rack.local>` and the subject `timeline: <label>`, and carry `Rack-Timeline-Session`, `Rack-Timeline-Run`, and `Rack-Timeline-Tool-Call` trailers. Commit signing, fsmonitor, external diff drivers, and text conversion are disabled for these commands, and inherited `GIT_DIR`/`GIT_INDEX_FILE`-style variables are removed.
 - Operations on one session's chain are serialized in the execution host. This is not a lock across unrelated processes.
 
@@ -189,3 +189,20 @@ T02's editor half, T11 to T12, and T15 to T20 belong to the unimplemented phases
 ## Pull request comparisons
 
 The Pull Requests page can sync the complete merge-base-to-head PR tree into project history and open it in the existing snapshot viewer. Local immutable comparisons live under `refs/rack-pr-timeline/*`; fetched objects use `refs/rack-pr-objects/*`. Refreshing a previously synced PR detail updates changed head/base commits, retaining older comparison versions. A Pull Requests control in the Timeline header opens reviews for the viewed project, including nested repository selections. See [Pull requests and Usage](pull-requests.md) for provider support, credentials and refresh boundaries.
+
+
+### Background work reduction (2026-10-19)
+
+Native watches are shared by repository root. Filesystem events are batched
+for Git ignore checks, so ignored build/dependency files do not request full
+captures. Unknown filenames, ignore-file changes and failed ignore checks
+conservatively trigger capture. Healthy project roots are revalidated every
+30 seconds; watch failure retains the existing polling fallback.
+
+Capture reuses private index stat data (at most 4 MiB per repository and
+16 MiB total). Each capture still uses its own temporary index and checks
+current ignores before staging; edits, deletions and newly ignored/unignored
+files retain their previous semantics. Tool-boundary checkpoints remain
+serialized and are not dropped. Hiding the panel does not pause recording;
+Pause/Resume remains the explicit host-owned control. Hidden windows skip
+Timeline UI polling.

@@ -1,6 +1,6 @@
 import { JsonFileDocument } from "./json-file.js";
 import type { SessionStore } from "../../core/sessions/ports.js";
-import type { SessionId, SessionRecord } from "../../core/sessions/types.js";
+import { summarizeSession, type SessionId, type SessionRecord } from "../../core/sessions/types.js";
 
 interface SessionDocument {
   readonly schemaVersion: 4;
@@ -41,6 +41,8 @@ export class JsonSessionStore implements SessionStore {
       };
     });
   }
+
+  listSummaries() { return this.document.select((value) => value.sessions.map(summarizeSession)); }
 
   async list(): Promise<readonly SessionRecord[]> {
     return (await this.document.read()).sessions;

@@ -1,6 +1,6 @@
 # Desktop performance audit — 2026-10-19
 
-Investigation of the current, uncommitted `feat/ui-overhaul` working tree, including the newer Side chat work. This report records findings and proposed fixes; it does not implement optimizations. Pushes and merges remain pending.
+Original investigation of the `feat/ui-overhaul` working tree, including Side chat. That baseline was subsequently merged and pushed through the desktop, `dev`, and `main` branches. The findings below describe the pre-fix behavior; implementation and follow-up evidence on `fix/desktop-performance` are recorded in [Performance improvements](performance-improvements.md).
 
 ## Evidence and limits
 

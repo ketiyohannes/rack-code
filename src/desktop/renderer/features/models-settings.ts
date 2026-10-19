@@ -14,7 +14,7 @@ export function mountModelsSettings(root: HTMLElement, store: Store, controller:
       h("p", {}, "Star the models you want in the model picker.")),
     summary, notices, list,
   );
-  store.watch((state) => [state.models, state.favoriteModelKeys, state.modelCatalogFailures, state.host], (_slice, state) => {
+  store.watch((state) => [state.models, state.modelsLoading, state.favoriteModelKeys, state.modelCatalogFailures, state.host], (_slice, state) => {
     const focused = root.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset["modelKey"] : undefined;
     const favorites = new Set(state.favoriteModelKeys);
     const known = new Set(state.models.map(modelKey));
@@ -26,7 +26,7 @@ export function mountModelsSettings(root: HTMLElement, store: Store, controller:
     );
     if (state.models.length === 0) {
       replace(list, h("div", { class: "empty-card empty-card-large" }, icon("star"),
-        h("span", {}, state.host.status === "connecting" ? "Loading models…" : "No models available. Connect a provider account to choose favorites."),
+        h("span", {}, (state.modelsLoading || state.host.status === "connecting") ? "Loading models…" : "No models available. Connect a provider account to choose favorites."),
         h("button", { class: "icon-button", type: "button", title: "Manage accounts", aria: { label: "Manage accounts" }, onClick: () => controller.openSettings("accounts") }, icon("user-circle"))));
       return;
     }

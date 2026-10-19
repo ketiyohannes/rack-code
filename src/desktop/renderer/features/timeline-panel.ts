@@ -534,7 +534,7 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
     if (stale) void load();
   });
   // Run start/finish changes whether settings can be toggled.
-  store.watch((state) => state.live, () => { if (active) render(); });
+  store.watch((state) => Object.values(state.live).map((live) => `${live.run.id}:${live.run.status}`).join("|"), () => { if (active && !document.hidden) render(); });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && active) void load();
   });
@@ -554,7 +554,7 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
       active = next;
       if (poll !== undefined) { clearInterval(poll); poll = undefined; }
       // Poll external Git commits/ref changes only while the panel is open.
-      if (active) poll = setInterval(() => { if (scope === "project") void load(); }, 4000);
+      if (active) poll = setInterval(() => { if (scope === "project" && !document.hidden) void load(); }, 10_000);
       if (becameActive) { render(); void load(); }
     },
   };

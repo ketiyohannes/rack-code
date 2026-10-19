@@ -25,7 +25,7 @@ import { h, replace, relativeTime } from "../dom.js";
 import { icon, type IconName } from "../icons.js";
 import { renderMarkdown } from "../markdown.js";
 import type { Store } from "../store.js";
-import { foldEvents } from "../transcript.js";
+import { reconcileChildren, TranscriptCache } from "../render-cache.js";
 import { createModelPicker } from "../components/model-picker.js";
 import { createResizeHandle } from "../components/resize-handle.js";
 import { isActiveStatus } from "./run-format.js";
@@ -76,6 +76,12 @@ export function createSideChat(store: Store, controller: Controller, host: HostC
   let messages: readonly SessionMessageView[] = [];
   let sending = false, loadError: string | undefined, generation = 0;
   let seenLive = new Set<string>();
+  const folds = new TranscriptCache();
+  const turns = new Map<string, { signature: readonly unknown[]; node: HTMLElement }>();
+  let visibleRuns = 50;
+  let dirty = false;
+  const earlier = h("button", { class: "icon-button", type: "button", title: "Load earlier messages", aria: { label: "Load earlier messages" },
+    onClick: () => { visibleRuns += 50; render(); } }, icon("clock-counter-clockwise"));
 
   const title = h("strong", { class: "side-chat-title" });
   const subtitle = h("span", { class: "side-chat-subtitle note" });
@@ -129,7 +135,7 @@ export function createSideChat(store: Store, controller: Controller, host: HostC
     if (!context || activeRun()) return;
     const previous = sessionId;
     saveSession(context.key, undefined);
-    sessionId = undefined; runs = []; messages = []; render();
+    sessionId = undefined; runs = []; messages = []; turns.clear(); folds.clear(); visibleRuns = 50; render();
     if (previous) void host.call("sessions.remove", { sessionId: previous }).catch(() => undefined);
     input.focus();
   }
@@ -145,7 +151,7 @@ export function createSideChat(store: Store, controller: Controller, host: HostC
   async function send(text: string): Promise<void> {
     const prompt = text.trim();
     const selected = model.selected;
-    if (!context || !prompt || sending || activeRun()) return;
+    if (!context || !prompt || sending || activeRun() || store.get().modelsLoading) return;
     if (!selected) {
       loadError = store.get().models.length === 0 ? "Connect a provider account in Settings to use side chats." : "Choose a model for side chats.";
       render(); return;
@@ -182,14 +188,15 @@ export function createSideChat(store: Store, controller: Controller, host: HostC
     const running = activeRun();
     submit.replaceChildren(icon(running ? "stop" : "arrow-up"));
     submit.title = running ? "Stop" : "Send"; submit.setAttribute("aria-label", submit.title);
-    submit.disabled = !context || (running === undefined && (sending || !input.value.trim() || model.selected === undefined));
+    submit.disabled = !context || (running === undefined && (state.modelsLoading || sending || !input.value.trim() || model.selected === undefined));
     input.disabled = !context;
     clear.disabled = !context || running !== undefined || sessionId === undefined;
-    hint.textContent = loadError ?? (state.models.length === 0 ? "Connect a provider account to use side chats." : model.selected === undefined ? "Choose a model to start." : "");
+    hint.textContent = loadError ?? (state.modelsLoading ? "Loading available models…" : state.models.length === 0 ? "Connect a provider account to use side chats." : model.selected === undefined ? "Choose a model to start." : "");
     hint.classList.toggle("error-line", loadError !== undefined);
   }
 
   function render(): void {
+    dirty = false;
     title.textContent = context?.title ?? "Side chat";
     subtitle.textContent = context?.subtitle ?? "";
     subtitle.hidden = !context?.subtitle;
@@ -202,7 +209,15 @@ export function createSideChat(store: Store, controller: Controller, host: HostC
       replace(transcript, h("div", { class: "side-chat-empty" }, icon("chat-circle-text"), h("p", {}, context.emptyHint),
         ...(context.suggestions ?? []).map((suggestion) => h("button", { class: "button button-small pr-action side-chat-suggestion", type: "button", disabled: model.selected === undefined || sending, title: model.selected === undefined ? "Choose a model first" : suggestion.prompt, onClick: () => void send(suggestion.prompt) },
           icon(suggestion.icon), h("span", {}, suggestion.label)))));
-    } else replace(transcript, ...all.map((run) => renderTurn(run)));
+    } else {
+      const nodes = all.slice(-visibleRuns).map((run) => {
+        const signature = [run, state.live[run.id], messages];
+        const cached = turns.get(run.id);
+        if (cached && signature.every((value, index) => value === cached.signature[index])) return cached.node;
+        const node = renderTurn(run); turns.set(run.id, { signature, node }); return node;
+      });
+      reconcileChildren(transcript, all.length > visibleRuns ? [earlier, ...nodes] : nodes);
+    }
     if (atBottom || all.length === 0) transcript.scrollTop = transcript.scrollHeight;
     renderComposer();
   }
@@ -213,7 +228,7 @@ export function createSideChat(store: Store, controller: Controller, host: HostC
     const reply: Node[] = [];
     const actions = { openLink: (href: string) => controller.openExternal(href), openPath: (path: string) => void controller.openPath(path) };
     if (live) {
-      const folded = foldEvents(live.events);
+      const folded = folds.fold(run.id, live.events);
       const text = folded.items.flatMap((item) => item.kind === "text" ? [item.text] : []).join("\n\n");
       const tools = folded.items.filter((item) => item.kind === "tool").length;
       if (text) reply.push(h("div", { class: "md" }, renderMarkdown(text, actions)));
@@ -232,18 +247,24 @@ export function createSideChat(store: Store, controller: Controller, host: HostC
   }
 
   // Stream updates for this chat's runs; reload once a run leaves `live`.
-  store.watch((state) => [state.live, state.models, state.favoriteModelKeys], (_slice, state) => {
+  store.watch((state) => [state.models, state.modelsLoading, state.favoriteModelKeys, ...Object.values(state.live).filter((entry) => entry.run.sessionId === sessionId)], (_slice, state) => {
     const mine = new Set(Object.values(state.live).filter((entry) => entry.run.sessionId === sessionId).map((entry) => entry.run.id));
     const finished = [...seenLive].some((id) => !mine.has(id));
     seenLive = mine;
-    if (finished) void load(); else render();
+    if (finished) void load();
+    else if (!document.hidden && element.getClientRects().length > 0) render();
+    else dirty = true;
   });
 
+  const catchUp = () => { if (dirty && !document.hidden && element.getClientRects().length > 0) render(); };
+  const visibility = new ResizeObserver(catchUp); visibility.observe(element);
+  document.addEventListener("visibilitychange", catchUp);
+  window.addEventListener("unload", () => visibility.disconnect(), { once: true });
   return {
     element,
     setContext(next) {
       if (next?.key === context?.key) { context = next; render(); return; }
-      context = next; generation++;
+      context = next; generation++; turns.clear(); folds.clear(); visibleRuns = 50;
       sessionId = next ? loadSessions()[next.key] : undefined;
       runs = []; messages = []; loadError = undefined; input.value = "";
       render(); void load();

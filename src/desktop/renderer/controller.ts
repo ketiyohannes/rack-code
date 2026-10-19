@@ -47,11 +47,13 @@ const SESSION_CACHE_LIMIT = 8;
 
 export class Controller {
   private ready = false;
+  private modelDiscoveryStarted = false;
   /** Sign-ins started from this window; only these may open a browser tab. */
   private readonly ownConnects = new Set<string>();
   private readonly bufferedEvents: HostEvent[] = [];
   private readonly reloads = new Map<string, Promise<void>>();
   private readonly sessionCache = new Map<string, CachedSession>();
+  private readonly sessionCacheSizes = new Map<string, number>();
   private readonly sessionRevisions = new Map<string, number>();
   /** Reject late metadata/list responses for sessions removed by any client. */
   private readonly removedSessions = new Set<string>();
@@ -137,12 +139,11 @@ export class Controller {
       }
     });
     try {
-      const [connectProviders, connecting, accounts, runtimes, models, projects, sessions, active] = await Promise.all([
+      const [connectProviders, connecting, accounts, runtimes, projects, sessions, active] = await Promise.all([
         this.host.call("auth.providers", {}),
         this.host.call("auth.active", {}),
         this.host.call("accounts.list", {}),
         this.host.call("runtimes.list", {}),
-        this.host.call("models.list", {}),
         this.host.call("projects.list", {}),
         this.host.call("sessions.list", {}),
         this.host.call("runs.active", {}),
@@ -152,8 +153,6 @@ export class Controller {
         host: { status: "ready" },
         accounts,
         runtimes,
-        models: models.models,
-        modelCatalogFailures: models.failures,
         projects,
         sessions,
         connectProviders,
@@ -164,12 +163,16 @@ export class Controller {
       for (const event of this.bufferedEvents.splice(0)) {
         this.handleEvent(event);
       }
+      // Local navigation must not wait for provider processes or network calls.
+      // Selection below triggers discovery in the actual project context.
       // Open the most recently updated session, or the first project.
       const firstSession = sessions[0];
       if (firstSession !== undefined) {
         await this.selectSession(firstSession.id);
       } else if (projects[0] !== undefined) {
         await this.selectProject(projects[0].id);
+      } else {
+        void this.reloadModels().catch((error) => this.report(error));
       }
     } catch (error) {
       this.ready = true;
@@ -193,7 +196,7 @@ export class Controller {
       transcripts: {},
       journal: undefined,
     }));
-    await this.reloadModels();
+    void this.reloadModels().catch((error) => this.report(error));
   }
 
   /** Opens a session; its project becomes the current project. */
@@ -212,10 +215,10 @@ export class Controller {
       transcripts: cached?.transcripts ?? {},
       journal: undefined,
     }));
+    if (projectChanged || !this.modelDiscoveryStarted) void this.reloadModels().catch((error) => this.report(error));
     await Promise.all([
       this.reloadSession(sessionId),
       projectChanged ? this.reloadProjects() : Promise.resolve(),
-      projectChanged ? this.reloadModels() : Promise.resolve(),
     ]);
   }
 
@@ -779,7 +782,10 @@ export class Controller {
 
   /** Refreshes provider-backed models after account or project changes. */
   private reloadModels(): Promise<void> {
+    this.modelDiscoveryStarted = true;
     return this.coalesce("models", async () => {
+      this.store.update((state) => ({ ...state, modelsLoading: true }));
+      try {
       // A chat can be selected while a project's native catalog is loading.
       // Finish that query, discard its reply and drain the current context.
       for (;;) {
@@ -789,6 +795,7 @@ export class Controller {
         this.store.update((state) => ({ ...state, models: models.models, modelCatalogFailures: models.failures }));
         return;
       }
+      } finally { this.store.update((state) => ({ ...state, modelsLoading: false })); }
     });
   }
 
@@ -806,6 +813,25 @@ export class Controller {
       const sessions = listed.filter((session) => !this.removedSessions.has(session.id));
       this.store.update((state) => ({ ...state, sessions }));
     });
+  }
+
+  /** Load activity only for an explicitly expanded page of the current chat.
+   * Stale replies cannot replace another session's cache or current live data. */
+  async loadSessionActivity(runIds: readonly string[]): Promise<void> {
+    const initial = this.store.get();
+    const sessionId = initial.selection.sessionId;
+    const revision = sessionId === undefined ? undefined : this.sessionRevisions.get(sessionId);
+    const allowed = new Set(initial.runs.map((run) => run.id));
+    const ids = runIds.filter((id) => allowed.has(id) && initial.transcripts[id] === undefined && initial.live[id] === undefined);
+    const results = await settleInBatches(ids, async (id) => [id, eventsFromJournal(await this.host.call("runs.journal", { runId: id }))] as const);
+    this.store.update((state) => {
+      if (state.selection.sessionId !== sessionId || (sessionId !== undefined && this.sessionRevisions.get(sessionId) !== revision)) return state;
+      const transcripts = { ...state.transcripts };
+      for (const result of results) if (result.status === "fulfilled" && state.live[result.value[0]] === undefined) transcripts[result.value[0]] = result.value[1];
+      return { ...state, transcripts };
+    });
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") this.report(failure.reason);
   }
 
   private reloadSession(sessionId: string): Promise<void> {
@@ -842,11 +868,11 @@ export class Controller {
           } : state);
         };
         publish();
-        const saved = await Promise.allSettled(runs.map(async (run) => {
+        const saved = await settleInBatches(runs.slice(-50), async (run) => {
           if (this.store.get().live[run.id] !== undefined) return [run.id, undefined] as const;
           if (transcripts[run.id] !== undefined) return [run.id, transcripts[run.id]!] as const;
           return [run.id, eventsFromJournal(await this.host.call("runs.journal", { runId: run.id }))] as const;
-        }));
+        });
         let restored = false;
         for (const result of saved) {
           if (result.status === "fulfilled" && result.value[1] !== undefined && transcripts[result.value[0]] !== result.value[1]) {
@@ -877,7 +903,7 @@ export class Controller {
   private forgetSession(sessionId: string): void {
     this.removedSessions.add(sessionId);
     this.invalidateSession(sessionId);
-    this.sessionCache.delete(sessionId);
+    this.sessionCache.delete(sessionId); this.sessionCacheSizes.delete(sessionId);
     this.store.update((state) => ({
       ...state,
       sessions: state.sessions.filter((session) => session.id !== sessionId),
@@ -897,8 +923,17 @@ export class Controller {
 
   private rememberSession(value: CachedSession): void {
     this.sessionCache.delete(value.session.id);
+    this.sessionCacheSizes.delete(value.session.id);
+    // Bound retained payload, not just conversation count. Counting strings
+    // avoids serializing a large transcript solely to estimate its size.
+    const bytes = retainedBytes(value);
+    if (bytes > 32 * 1024 * 1024) return;
     this.sessionCache.set(value.session.id, value);
-    while (this.sessionCache.size > SESSION_CACHE_LIMIT) this.sessionCache.delete(this.sessionCache.keys().next().value!);
+    this.sessionCacheSizes.set(value.session.id, bytes);
+    while (this.sessionCache.size > SESSION_CACHE_LIMIT || [...this.sessionCacheSizes.values()].reduce((sum, size) => sum + size, 0) > 32 * 1024 * 1024) {
+      const id = this.sessionCache.keys().next().value!;
+      this.sessionCache.delete(id); this.sessionCacheSizes.delete(id);
+    }
   }
 
   private reloadJournal(runId: string): Promise<void> {
@@ -1038,4 +1073,22 @@ function upsertRun(runs: readonly RunView[], run: RunView): readonly RunView[] {
 function label(account: { identity: { displayName?: string; email?: string; providerAccountId: string } } | undefined, fallback: string | undefined): string {
   if (account === undefined) return fallback ?? "unknown";
   return account.identity.displayName ?? account.identity.email ?? account.identity.providerAccountId;
+}
+
+/** Limit history IPC and host work while retaining independent failures. */
+async function settleInBatches<T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = [];
+  for (let index = 0; index < items.length; index += 4) results.push(...await Promise.allSettled(items.slice(index, index + 4).map(task)));
+  return results;
+}
+
+/** Approximate owned JS payload; shared references are counted once per entry. */
+function retainedBytes(value: unknown, seen = new WeakSet<object>()): number {
+  if (typeof value === "string") return value.length * 2;
+  if (value === null || typeof value !== "object") return 8;
+  if (seen.has(value)) return 0;
+  seen.add(value);
+  let size = 32;
+  for (const child of Object.values(value)) size += retainedBytes(child, seen);
+  return size;
 }

@@ -117,7 +117,7 @@ The implemented shared runtime contract uses these operations and values:
 
 Interactive questions use a separate provider-neutral `requestQuestions` callback and `question_request`/`question_resolved` events. Execution's `QuestionBroker` owns pending requests, validates answers, journals their lifecycle and settles them on cancellation. The host mirrors pending questions for reconnecting clients and routes `runs.respondToQuestions` to the matching handle. Questions are independent of action permission mode. Claude's `AskUserQuestion` and Codex's `item/tool/requestUserInput` are translated only in runtime adapters; the Codex notification reader stays active while input is pending so native resolution can clear a question. Secret answer values are redacted from normalized question-resolution events while the native callback receives the original value.
 
-Session navigation retains an eight-entry renderer history cache and revalidates saved run versions. Metadata/final messages render before journals finish loading; newer host changes invalidate in-flight loads. JSON documents offer internal read-only projections with detached results, allowing execution/session stores to clone only the requested records rather than the whole database. Persistence schemas and atomic-write behavior are unchanged.
+Session navigation retains up to eight cached sessions with an approximate 32 MiB payload budget and revalidates saved run versions. Metadata/final messages render before journals finish loading; newer host changes invalidate in-flight loads. The newest 50 run journals load with at most four reads in flight, and earlier pages load on demand. Session summaries project metadata before cloning. Execution uses the indexed append-only log described below; other JSON documents retain their atomic-write behavior.
 
 Session removal belongs to Sessions through `SessionStore.remove` and the host command `sessions.remove`. The host serializes removal, attachment imports and run starts for each session. Ordinary removal rejects tracked or persisted queued/running runs with `session_busy`. Explicitly confirmed `force: true` first cancels and settles that session’s owned run, checks that no queued/running record remains, then removes the saved conversation/continuation record and broadcasts `sessions.removed`. The renderer never silently escalates a busy error: its running-session warning requires a second explicit confirmation when work starts after the original modal opens. Clients evict that session's history cache, discard late metadata/journal/list responses, and clear the chat only when the removed session is selected. Execution audit, attachment retention and Timeline snapshots remain with their existing owners; removal does not purge them or alter project files or provider-owned history. Session/execution schemas are unchanged.
 
@@ -513,3 +513,32 @@ See [desktop tools](desktop-tools.md).
 Side chats are a renderer feature built on existing core operations; see [Side chat](side-chat.md). Each is a standalone chat session run with the `read_only` permission mode. This placement is deliberate. The project writer lock is acquired for every project run, including Plan and read-only runs, and only one app-managed writer may hold a project. A second conversation inside the project would therefore block on the main session. Standalone chats take no lock, so a side chat can run concurrently without changing the one-writer rule. Context (session messages, project path, PR patches) is supplied as bounded hidden prompt text rather than a new core field. The context-to-session mapping is a renderer preference. If side chats later need first-class identity (hiding them from a Chats list, linking them to a parent), add an optional, versioned field to `SessionRecord` rather than inferring it from titles.
 
 Timeline PR synchronization authenticates Git fetches with the same credential the review uses. `fetchAuthEnvironment` scopes an HTTPS `Authorization` header to the code host through `GIT_CONFIG_*` environment variables. This keeps the token out of argv and Git config, and stops the global credential helper (the active gh account) from substituting a different identity.
+
+
+## Performance boundaries (2026-10-19)
+
+`JsonExecutionStore` retains the ExecutionStore port but migrates the legacy
+execution JSON to `<execution-file>.log`. Its first newline-delimited record is
+a self-contained schema-4 snapshot; later records contain version-1-log
+transactions. One host serializes and flushes each append before publishing
+it in memory or delivering the corresponding runtime event. Run, attempt,
+journal and usage indexes avoid whole-history clones and scans. Recovery
+changes are appended together. An unterminated tail is discarded on restart;
+corrupt committed records fail visibly. The legacy JSON is a frozen pre-log
+backup, not an up-to-date rollback target. Retention and compaction remain
+future work; startup still replays the log.
+
+The host caches model catalogs for 60 seconds by runtime, account, credential
+reference and project path, shares pending requests and allows at most two
+discoveries concurrently. Reconnection clears the cache; failures are not
+cached. Local navigation loads independently of discovery. Renderer loading
+state prevents sending with a catalog still being refreshed.
+
+Transcript subscriptions select their own conversation, retain completed-turn
+DOM and incrementally fold appended events. Main and side chat initially
+render 50 runs; imported main-chat history initially renders 100 messages.
+Hidden views skip stream redraws and catch up when shown. Timeline shares
+native watches by root, batches ignore checks, reuses bounded private index
+stat data and revalidates healthy project roots every 30 seconds. These
+optimizations leave recording ownership and before/after tool checkpoints
+unchanged. See [performance evidence and limits](performance-improvements.md).
