@@ -340,7 +340,7 @@ test("a run streams indexed events, parks approvals for any client, and finishes
   assert.equal(journal.at(-1)?.type, "run_status");
 });
 
-test("starting on a busy project returns project_busy with the owning attempt", async () => {
+test("a session runs one turn at a time while other sessions of the project run concurrently", async () => {
   const { api, call, events, project, session, account } = await setup();
   const params = {
     sessionId: session.id,
@@ -355,15 +355,39 @@ test("starting on a busy project returns project_busy with the owning attempt", 
   await waitFor(events, (event) => event.type === "run.event");
 
   const busy = await api.dispatch("runs.start", params);
-  assert.equal(!busy.ok && busy.error.code, "project_busy");
+  assert.equal(!busy.ok && busy.error.code, "session_busy");
   assert.equal(!busy.ok && busy.error.details?.["attemptId"], started.run.attemptIds[0]);
+
+  // A second shared session in the same project folder may run at once.
+  const other = await call<{ id: string }>("sessions.create", { projectId: project.id });
+  const parallel = await call<{ run: { id: string } }>("runs.start", { ...params, sessionId: other.id });
+  await waitFor(events, (event) => event.type === "run.event" && event.runId === parallel.run.id);
+  const [view] = await call<Array<{ activeWriters: Array<{ sessionId: string }> }>>("projects.list");
+  assert.deepEqual(view?.activeWriters.map((writer) => writer.sessionId).sort(), [session.id, other.id].sort());
+  await call("runs.cancel", { runId: parallel.run.id });
+  await waitFor(events, (event) => event.type === "run.finished" && event.run.id === parallel.run.id);
+  const remaining = await call<Array<{ run: { id: string } }>>("runs.active");
+  assert.deepEqual(remaining.map((entry) => entry.run.id), [started.run.id], "stopping one session leaves the other running");
 
   // Cancellation is idempotent and the run reaches `interrupted`.
   await call("runs.cancel", { runId: started.run.id });
   await call("runs.cancel", { runId: started.run.id });
   const finished = await waitFor(events, (event) => event.type === "run.finished");
   assert.equal(finished.type === "run.finished" && finished.run.status, "interrupted");
-  assert.equal(events.filter((event) => event.type === "run.cancel_requested").length, 1);
+  assert.equal(events.filter((event) => event.type === "run.cancel_requested").length, 2);
+});
+
+test("workspace mode is chosen before the first message and isolation needs support", async () => {
+  const { api, call, project, session } = await setup();
+  // This host has no worktree provider assembled, so isolation is unavailable.
+  const isolated = await api.dispatch("sessions.create", { projectId: project.id, workspaceMode: "isolated" });
+  assert.equal(!isolated.ok && isolated.error.code, "isolation_unavailable");
+  const change = await api.dispatch("sessions.setWorkspaceMode", { sessionId: session.id, mode: "isolated" });
+  assert.equal(!change.ok && change.error.code, "isolation_unavailable");
+  const shared = await call<{ mode: string; exists: boolean; path: string }>("sessions.workspace", { sessionId: session.id });
+  assert.deepEqual(shared, { mode: "shared", path: "/tmp/demo", exists: true });
+  const invalid = await api.dispatch("sessions.setWorkspaceMode", { sessionId: session.id, mode: "elsewhere" });
+  assert.equal(!invalid.ok && invalid.error.code, "invalid_input");
 });
 
 test("pending questions survive client snapshots and answer through the host in automatic permission mode", { timeout: 3000 }, async () => {

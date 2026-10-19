@@ -32,7 +32,7 @@ import { isActiveStatus } from "./run-format.js";
 import { sideChatPrompt, visiblePrompt } from "./side-chat-prompt.js";
 export { CONTEXT_MARKER, MAX_CONTEXT_CHARS } from "./side-chat-prompt.js";
 
-const STORAGE_KEY = "sideChat.sessions";
+import { loadSessions, saveSession } from "./side-chat-state.js";
 
 export interface SideChatSuggestion { readonly label: string; readonly prompt: string; readonly icon: IconName }
 export interface SideChatContext {
@@ -52,18 +52,6 @@ export interface SideChat {
   /** Sends a prompt as if typed, e.g. from an "Explain with AI" action. */
   send(prompt: string): Promise<void>;
   focus(): void;
-}
-
-function loadSessions(): Record<string, string> {
-  try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as unknown;
-    return value !== null && typeof value === "object" ? value as Record<string, string> : {};
-  } catch { return {}; }
-}
-function saveSession(key: string, sessionId: string | undefined): void {
-  const sessions = loadSessions();
-  if (sessionId === undefined) delete sessions[key]; else sessions[key] = sessionId;
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions)); } catch { /* The chat still works for this window. */ }
 }
 
 /** Docked width bounds; the review keeps at least MIN_REVIEW_WIDTH beside it. */

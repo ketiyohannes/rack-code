@@ -463,3 +463,34 @@ test("history initially fetches only the latest page with bounded concurrency", 
   assert.equal(store.get().transcripts["run-0"], undefined);
   assert.deepEqual(store.get().transcripts["run-20"], []);
 });
+
+test("editor targets default to the selected session directory rather than the main checkout", async () => {
+  const store = new ImmediateStore();
+  store.update(state => ({ ...state, session: { ...session, workspaceMode: "isolated" }, selection: { projectId: "project", sessionId: session.id },
+    projects: [{ id: "project", path: "/main-checkout", createdAt: stamp, updatedAt: stamp }] }));
+  const host = { call: async (command: string, params: unknown) => {
+    assert.equal(command, "sessions.directory"); assert.deepEqual(params, { sessionId: session.id }); return "/session-worktree";
+  } } as unknown as HostClient;
+  assert.deepEqual(await new Controller(host, store).resolveEditorTarget("src/app.ts"), { path: "src/app.ts", base: "/session-worktree" });
+});
+
+test("late workspace inspection cannot replace the newly selected session's directory", async () => {
+  const store = new ImmediateStore();
+  const other = { ...session, id: "other", workspaceMode: "isolated" as const };
+  let finish!: (value: unknown) => void;
+  const host = { call: async (command: string, params: { sessionId: string }) => {
+    if (command === "sessions.get") return params.sessionId === other.id ? other : session;
+    if (command === "sessions.workspace") return params.sessionId === other.id
+      ? { mode: "isolated", exists: true, path: "/other-worktree" }
+      : new Promise(resolve => { finish = resolve; });
+    if (command === "models.list") return { models: [], failures: [] };
+    return [];
+  } } as unknown as HostClient;
+  const controller = new Controller(host, store);
+  await controller.selectSession(session.id);
+  await controller.selectSession(other.id);
+  finish({ mode: "shared", exists: true, path: "/main-checkout" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(store.get().selection.sessionId, other.id);
+  assert.equal(store.get().workspace?.path, "/other-worktree");
+});

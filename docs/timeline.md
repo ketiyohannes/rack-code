@@ -206,3 +206,7 @@ files retain their previous semantics. Tool-boundary checkpoints remain
 serialized and are not dropped. Hiding the panel does not pause recording;
 Pause/Resume remains the explicit host-owned control. Hidden windows skip
 Timeline UI polling.
+
+## Concurrent session capture
+
+Isolated sessions record their own worktree after setup and before provider execution. Timeline enable/disable is blocked only by a run in that same session. Saved session snapshots remain readable through the main repository after a worktree is removed. Project history and background tracking still observe the main checkout. Shared sessions can capture overlapping edits from other shared sessions; these observations do not establish exclusive authorship.

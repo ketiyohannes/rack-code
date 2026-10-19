@@ -121,6 +121,8 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
     renderWarning();
     const modal = openModal({ title: "Delete session?", className: "session-remove-modal", onClose: () => { closed = true; }, content: h("div", { class: "modal-body" },
       h("p", {}, `Are you sure you want to delete “${title}”? You won’t be able to reopen this conversation here.`),
+      store.get().sessions.find((session) => session.id === sessionId)?.workspaceMode === "isolated"
+        ? h("p", { class: "note" }, "Its worktree folder and branch will be kept. To remove the worktree, use its workspace menu before deleting this conversation.") : null,
       warning, error, h("div", { class: "modal-actions" }, cancel, remove)),
     });
   }

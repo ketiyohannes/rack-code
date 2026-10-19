@@ -23,8 +23,10 @@ import {
 } from "../../core/execution/errors.js";
 import {
   InvalidProjectError,
-  ProjectBusyError,
+  IsolationUnavailableError,
   ProjectNotFoundError,
+  SessionBusyError,
+  WorkspaceDirtyError,
 } from "../../core/projects/errors.js";
 import { InvalidSessionError, SessionNotFoundError } from "../../core/sessions/errors.js";
 import { ConnectNotFoundError, ConnectorNotFoundError } from "../../core/connections/errors.js";
@@ -65,11 +67,11 @@ export function toHostError(error: unknown): HostErrorPayload {
       details: { providerId: error.providerId, providerAccountId: error.providerAccountId },
     };
   }
-  if (error instanceof ProjectBusyError) {
+  if (error instanceof SessionBusyError) {
     return {
       ...base,
-      code: "project_busy",
-      details: { projectId: error.projectId, attemptId: error.attemptId },
+      code: "session_busy",
+      details: { sessionId: error.sessionId, attemptId: error.attemptId },
     };
   }
   return { ...base, code: codeFor(error) };
@@ -86,6 +88,8 @@ function codeFor(error: Error): HostErrorCode {
     return "invalid_input";
   }
   if (error instanceof AccountProviderMismatchError) return "provider_mismatch";
+  if (error instanceof IsolationUnavailableError) return "isolation_unavailable";
+  if (error instanceof WorkspaceDirtyError) return "workspace_dirty";
   if (error instanceof AccountNotFoundError) return "account_not_found";
   if (error instanceof NoEligibleAccountError) return "no_eligible_account";
   if (error instanceof ProjectNotFoundError) return "project_not_found";

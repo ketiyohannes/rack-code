@@ -35,6 +35,7 @@ import { ExecutionService } from "../core/execution/service.js";
 import { RuntimeRegistry } from "../core/execution/runtime-registry.js";
 import { ProjectsService } from "../core/projects/service.js";
 import { GitProjectChangesReader } from "../adapters/projects/git-changes.js";
+import { GitWorktreeProvider } from "../adapters/projects/git-worktrees.js";
 import { SessionsService } from "../core/sessions/service.js";
 import { TimelineService } from "../features/timeline/index.js";
 import { GitSnapshotRepository } from "../adapters/timeline/git-snapshots.js";
@@ -105,6 +106,10 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
   const accounts = new AccountsService(new JsonAccountStore(join(dataDirectory, "accounts.json")));
   const projects = new ProjectsService(new JsonProjectStore(join(dataDirectory, "projects.json"), join(dataDirectory, "workspaces.json")), {
     changes: new GitProjectChangesReader(),
+    // Neither runtime exposes worktree management to embedding hosts, so
+    // isolated sessions use Rack-managed worktrees under the data directory
+    // (outside every repository, like Codex's and T3's managed worktrees).
+    isolation: { provider: new GitWorktreeProvider(), worktreesRoot: join(dataDirectory, "worktrees") },
   });
   // Resolve migration aliases through the owning capability before exposing
   // saved sessions or runs. Both histories then group under one folder row.
@@ -126,7 +131,7 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
   runtimes.register(new ClaudeRuntimeAdapter(credentials, runtimeContexts));
   const files = new FilesService((id) => projects.getProject(id), new LocalProjectFiles(), async (id) => {
     const session = await sessions.get(id);
-    return { path: session.projectId === undefined ? await sessions.workspace(id) : (await projects.getProject(session.projectId)).path };
+    return { path: session.projectId === undefined ? await sessions.workspace(id) : await projects.executionPath(session.projectId, id, session.workspaceMode ?? "shared") };
   });
   const terminal = new TerminalService(new LocalPtyBackend());
   const browser = options.browser === undefined ? undefined : new BrowserService((id) => sessions.get(id), options.browser);
@@ -173,12 +178,16 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
         return {
           sessionId: session.id,
           projectId: project.id,
-          projectPath: project.path,
+          // Immutable refs are shared across linked worktrees, so history and
+          // opt-in can use the main checkout before creation or after removal.
+          // Host run-start preparation ensures captures always use the worktree.
+          projectPath: session.workspaceMode === "isolated"
+            ? await projects.executionPath(project.id, session.id, "isolated").catch(() => project.path) : project.path,
           ...(session.importSource?.sourceId === codexSource.sourceId
             ? { importedCodexSessionId: session.importSource.nativeSessionId } : {}),
         };
       },
-      projectBusy: async (projectId) => (await projects.getProject(projectId)).activeWriterAttemptId !== undefined,
+      projectBusy: async (projectId, sessionId) => projects.activeWriters(projectId).some((writer) => sessionId === undefined || writer.sessionId === sessionId),
     },
     new JsonTimelineStore(join(dataDirectory, "timeline.json")),
     new GitSnapshotRepository(),
@@ -186,7 +195,10 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
   );
 
   const reviewInbox = new ReviewInboxService(new GitHubInbox(), () => projects.listProjects());
-  const pullRequests = new PullRequestsService((id) => projects.getProject(id), new RestCodeHosts());
+  const pullRequests = new PullRequestsService(async (id) => ({
+    path: (await projects.getProject(id)).path,
+    busy: projects.activeWriters(id).length > 0,
+  }), new RestCodeHosts());
   const usage = new UsageService(() => execution.listRunUsage());
 
   return {

@@ -236,6 +236,11 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
     const permission = claudePermission(input.permissionMode);
     const options: Options = {
       cwd: input.projectPath,
+      // Isolated sessions run in a Rack-managed worktree. Claude's own
+      // worktree support loads trusted project configuration (hooks,
+      // permissions, .mcp.json, .claude trees) from the main checkout via
+      // `projectConfigRoot`; use that instead of trusting the session branch.
+      ...(input.checkoutRoot === undefined ? {} : { projectConfigRoot: input.checkoutRoot }),
       env: environment,
       abortController,
       permissionMode: permission.mode,

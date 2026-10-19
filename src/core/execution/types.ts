@@ -52,7 +52,18 @@ export interface RuntimeRunInput {
   readonly attemptId: AttemptId;
   readonly sessionId: string;
   readonly account: RuntimeAccountContext;
+  /**
+   * Working directory for the run: the project folder for shared sessions,
+   * or the session's worktree for isolated ones. Adapters pass it as the
+   * provider's cwd and must not substitute another folder.
+   */
   readonly projectPath: string;
+  /**
+   * Root of the main checkout when `projectPath` is an isolated worktree.
+   * Adapters whose provider can load trusted project configuration from the
+   * main checkout (Claude's `projectConfigRoot`) use it; others ignore it.
+   */
+  readonly checkoutRoot?: string;
   readonly prompt: string;
   readonly model?: string;
   /**

@@ -59,6 +59,8 @@ import {
   type TimelineSnapshot,
   type TimelineSnapshotHistory,
   type TimelineSnapshotFileView,
+  type SessionWorkspaceView,
+  type WorkspaceMode,
 } from "./views.js";
 
 /** Opaque credential reference; the host obtains it, never the secret. */
@@ -156,8 +158,9 @@ export interface HostCommandMap {
   /** Sign-ins in progress, for clients that open mid-flow. */
   "auth.active": { params: NoParams; result: readonly ConnectView[] };
   "projects.list": { params: NoParams; result: readonly ProjectView[] };
-  "projects.changes": { params: { readonly projectId: string; readonly repositoryPath?: string }; result: ProjectChanges };
-  "projects.repositories": { params: { readonly projectId: string } & RepositoryDiscoveryOptions; result: ProjectRepositories };
+  /** `sessionId` reads an isolated session's worktree instead of the project folder. */
+  "projects.changes": { params: { readonly projectId: string; readonly repositoryPath?: string; readonly sessionId?: string }; result: ProjectChanges };
+  "projects.repositories": { params: { readonly projectId: string; readonly sessionId?: string } & RepositoryDiscoveryOptions; result: ProjectRepositories };
   "projects.create": {
     params: {
       readonly path: string;
@@ -167,13 +170,20 @@ export interface HostCommandMap {
   };
   /** Omit `projectId` to list sessions from every project. */
   "sessions.list": { params: { readonly projectId?: string }; result: readonly SessionSummaryView[] };
+  /** `workspaceMode` defaults to `shared`; `isolated` requires a Git repository with a commit. */
   "sessions.create": {
-    params: { readonly projectId?: string; readonly title?: string };
+    params: { readonly projectId?: string; readonly title?: string; readonly workspaceMode?: WorkspaceMode };
     result: SessionView;
   };
   "skills.list": { params: { readonly sessionId: string; readonly runtimeId: string; readonly accountId: string }; result: import("../../core/execution/types.js").SkillCatalog };
   "sessions.attachProject": { params: { readonly sessionId: string; readonly projectId: string }; result: SessionView };
   "sessions.directory": { params: { readonly sessionId: string; readonly chatFiles?: boolean }; result: string };
+  /** Allowed only before the session's first message. */
+  "sessions.setWorkspaceMode": { params: { readonly sessionId: string; readonly mode: WorkspaceMode }; result: SessionView };
+  /** Where the session runs, and the state of its isolated worktree. */
+  "sessions.workspace": { params: { readonly sessionId: string }; result: SessionWorkspaceView };
+  /** Removes an isolated session's worktree directory and keeps its branch. */
+  "sessions.removeWorkspace": { params: { readonly sessionId: string; readonly force?: boolean }; result: SessionWorkspaceView };
   "sessions.get": { params: { readonly sessionId: string }; result: SessionView };
   "sessions.attachFiles": { params: { readonly sessionId: string; readonly paths: readonly string[] }; result: readonly SessionAttachment[] };
   "sessions.remove": { params: { readonly sessionId: string; readonly force?: boolean }; result: null };
@@ -235,6 +245,7 @@ export type CommandParams<C extends HostCommand> = HostCommandMap[C]["params"];
 export type CommandResult<C extends HostCommand> = HostCommandMap[C]["result"];
 
 const id = text({ maxLength: 256 });
+const WORKSPACE_MODES: readonly WorkspaceMode[] = ["shared", "isolated"];
 const credential = object({ id, providerId: id, method: id });
 
 /** Runtime validators, one per command, typed against `HostCommandMap`. */
@@ -293,17 +304,20 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "auth.cancel": object({ connectId: id }),
   "auth.active": empty,
   "projects.list": empty,
-  "projects.changes": object({ projectId: id, repositoryPath: optional(text()) }),
-  "projects.repositories": object({ projectId: id, rescan: optional(boolean), deep: optional(boolean), repositoryPath: optional(text()) }),
+  "projects.changes": object({ projectId: id, repositoryPath: optional(text()), sessionId: optional(id) }),
+  "projects.repositories": object({ projectId: id, sessionId: optional(id), rescan: optional(boolean), deep: optional(boolean), repositoryPath: optional(text()) }),
   "projects.create": object({
     path: text(),
     startingRevision: optional(id),
   }),
   "sessions.list": object({ projectId: optional(id) }),
-  "sessions.create": object({ projectId: optional(id), title: optional(text({ maxLength: 256 })) }),
+  "sessions.create": object({ projectId: optional(id), title: optional(text({ maxLength: 256 })), workspaceMode: optional(oneOf(WORKSPACE_MODES)) }),
   "skills.list": object({ sessionId: id, runtimeId: id, accountId: id }),
   "sessions.attachProject": object({ sessionId: id, projectId: id }),
   "sessions.directory": object({ sessionId: id, chatFiles: optional(boolean) }),
+  "sessions.setWorkspaceMode": object({ sessionId: id, mode: oneOf(WORKSPACE_MODES) }),
+  "sessions.workspace": object({ sessionId: id }),
+  "sessions.removeWorkspace": object({ sessionId: id, force: optional(boolean) }),
   "sessions.get": object({ sessionId: id }),
   "sessions.attachFiles": object({ sessionId: id, paths: array(text(), MAX_ATTACHMENTS) }),
   "sessions.remove": object({ sessionId: id, force: optional(boolean) }),

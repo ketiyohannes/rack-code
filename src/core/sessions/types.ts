@@ -23,6 +23,15 @@ export interface NativeContinuationReference {
   readonly seenThroughMessageId?: string;
 }
 
+/**
+ * Where the session's runs execute: the shared project folder, or a
+ * session-owned isolated worktree (resolved by Projects). Absent on records
+ * saved before this field existed, which means `shared`. Changeable only
+ * until the session has messages, because native resume is tied to the
+ * working directory a conversation started in.
+ */
+export type SessionWorkspaceMode = "shared" | "isolated";
+
 export interface SessionRecord {
   /** Retains access to the original file workspace after project attachment. */
   readonly originatedAsChat?: boolean;
@@ -30,6 +39,7 @@ export interface SessionRecord {
   /** Absent for a standalone chat. */
   readonly projectId?: string;
   readonly title?: string;
+  readonly workspaceMode?: SessionWorkspaceMode;
   readonly messages: readonly SessionMessage[];
   readonly continuations: readonly NativeContinuationReference[];
   /** External history provenance; never treated as a native resume handle. */
@@ -48,6 +58,8 @@ export interface CreateSessionInput {
   /** Absent for a standalone chat. */
   readonly projectId?: string;
   readonly title?: string;
+  /** Defaults to `shared`. */
+  readonly workspaceMode?: SessionWorkspaceMode;
 }
 
 /** Normalized import input owned by Sessions; native payloads stay in adapters. */
@@ -77,9 +89,10 @@ export interface SessionImportSnapshot {
 }
 
 /** Navigation metadata; message bodies stay in the selected session read. */
-export type SessionSummary = Pick<SessionRecord, "id" | "projectId" | "title" | "createdAt" | "updatedAt"> & { readonly messageCount: number };
+export type SessionSummary = Pick<SessionRecord, "id" | "projectId" | "title" | "workspaceMode" | "createdAt" | "updatedAt"> & { readonly messageCount: number };
 export function summarizeSession(session: SessionRecord): SessionSummary {
   return { id: session.id, ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
     ...(session.title === undefined ? {} : { title: session.title }), messageCount: session.messages.length,
+    ...(session.workspaceMode === undefined ? {} : { workspaceMode: session.workspaceMode }),
     createdAt: session.createdAt, updatedAt: session.updatedAt };
 }

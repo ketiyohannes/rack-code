@@ -30,6 +30,7 @@ import type {
   JournalEntryView,
   UserQuestionRequest,
   ProjectView,
+  SessionWorkspaceView,
 } from "../../contracts/desktop/index.js";
 
 /** A run the host is executing, as mirrored by this renderer. */
@@ -79,6 +80,8 @@ export interface AppState {
   };
   /** The selected session's full record and persisted runs. */
   readonly session?: SessionView | undefined;
+  /** Where the selected session runs (shared folder or isolated worktree). */
+  readonly workspace?: SessionWorkspaceView | undefined;
   readonly runs: readonly RunView[];
   /** Persisted/current-session activity, retained when a live run finishes. */
   readonly transcripts: Readonly<Record<string, readonly RuntimeEvent[]>>;

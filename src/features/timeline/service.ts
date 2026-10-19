@@ -159,11 +159,11 @@ export class TimelineService {
    */
   async setEnabled(sessionId: string, enabled: boolean): Promise<TimelineStatus> {
     const session = await this.core.session(sessionId);
-    if (await this.core.projectBusy(session.projectId)) throw new TimelineBusyError(sessionId);
+    if (await this.core.projectBusy(session.projectId, sessionId)) throw new TimelineBusyError(sessionId);
     return this.serialize(sessionId, async () => {
       const capability = await this.capability(sessionId, session.projectPath);
       // A run may have started while Git was probed.
-      if (await this.core.projectBusy(session.projectId)) throw new TimelineBusyError(sessionId);
+      if (await this.core.projectBusy(session.projectId, sessionId)) throw new TimelineBusyError(sessionId);
       if (enabled && !capability.supported) throw new TimelineUnsupportedError(capability.reason);
       let imported: { readonly checkpoints: readonly TimelineCheckpoint[]; readonly truncated: boolean } | undefined;
       if (enabled && capability.supported) {

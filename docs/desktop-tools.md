@@ -175,3 +175,7 @@ draft; the existing discard confirmation still protects that draft. Save keeps
 the existing keyboard shortcut, version checks and disabled/pending behavior.
 The + tool menu starts keyboard focus on its first item and supports arrows,
 Home/End, Escape and Tab. Tool enablement and resource lifetimes are unchanged.
+
+## Concurrent session directories
+
+Files and Terminal follow the selected session's execution directory. An isolated session uses its worktree, including for external editor actions; shared sessions use the project folder. Changing the workspace mode or removing a worktree closes the old shell context. A missing isolated worktree produces a create/restore message instead of falling back to project files. Changes and repository discovery also follow the isolated session. See [concurrent sessions](concurrent-sessions.md).

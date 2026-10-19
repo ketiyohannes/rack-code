@@ -60,6 +60,13 @@ export interface ExecutionHandle {
   cancel(): Promise<void>;
 }
 
+/** Host integration point after execution-directory preparation and before
+ * native runtime startup. The run already has a cancelable queued handle.
+ * Optional integrations must contain their own errors to remain non-blocking. */
+export interface RunPreparation {
+  readonly beforeRuntime?: (runId: string, signal: AbortSignal) => Promise<void>;
+}
+
 export interface ExecutionServiceOptions {
   readonly now?: () => Date;
   readonly createId?: () => string;
@@ -71,7 +78,9 @@ export interface ExecutionServiceOptions {
 
 /**
  * Coordinates accounts, sessions, projects, persistence, and runtime
- * adapters for one editing attempt at a time.
+ * adapters. Each session runs one attempt at a time; several sessions of a
+ * project may run concurrently (shared folder or isolated worktrees, see
+ * `ProjectsService`).
  *
  * Provider implementations only emit normalized events. This service owns the
  * durable run/attempt state, approval parking, session associations, and
@@ -118,14 +127,14 @@ export class ExecutionService {
     return runtime.skills?.({ account: { accountId: account.id, providerId: account.providerId, credential: account.credential, runtimeContextId: account.runtimeContextId }, projectPath }) ?? { skills: [], errors: ["This runtime does not expose installed skills."] };
   }
 
-  async start(input: StartRunInput): Promise<ExecutionHandle> {
+  async start(input: StartRunInput, preparation: RunPreparation = {}): Promise<ExecutionHandle> {
     if (this.activeSessions.has(input.sessionId)) throw new InvalidSessionError("This conversation is already running.");
     this.activeSessions.add(input.sessionId);
-    try { return await this.startReserved(input); }
+    try { return await this.startReserved(input, preparation); }
     catch (error) { this.activeSessions.delete(input.sessionId); throw error; }
   }
 
-  private async startReserved(input: StartRunInput): Promise<ExecutionHandle> {
+  private async startReserved(input: StartRunInput, preparation: RunPreparation): Promise<ExecutionHandle> {
     await this.initialize();
     const session = await this.sessions.get(input.sessionId);
     const project = input.projectId === undefined ? undefined : await this.projects.getProject(input.projectId);
@@ -245,6 +254,8 @@ export class ExecutionService {
       account,
       runtime,
       projectPath,
+      workspaceMode: session.workspaceMode ?? "shared",
+      preparation,
       run: currentRun,
       attempt: currentAttempt,
       controller,
@@ -339,6 +350,7 @@ export class ExecutionService {
       input,
       account,
       runtime,
+      workspaceMode,
       projectPath,
       run,
       attempt,
@@ -366,7 +378,11 @@ export class ExecutionService {
     try {
       const attachedPrompt = promptWithAttachments(input.prompt, run.attachments ?? []);
       const workflowPrompt = `${input.projectId === undefined ? "This is a general conversation. Help with questions, research and documents as well as code. Your working folder is this chat’s private file workspace. Save generated files there.\n\n" : ""}${input.interactionMode === "plan" ? "PLAN MODE: Research and propose a complete actionable plan. Do not implement or modify files, execute mutating commands, or perform external mutations. End with the plan for the user to review. Only the user can authorize a later implementation turn.\n\n" : ""}${attachedPrompt}`;
-      if (input.projectId !== undefined) await this.projects.acquireWriter(input.projectId, attempt.id);
+      if (input.projectId !== undefined) await this.projects.acquireWriter(input.projectId, attempt.id, { sessionId: input.sessionId, mode: workspaceMode });
+      const directory = input.projectId === undefined ? { path: projectPath } : await this.projects.prepareExecutionDirectory(input.projectId, input.sessionId, workspaceMode);
+      if (controller.signal.aborted) throw new Error("Run interrupted while preparing its workspace.");
+      await context.preparation.beforeRuntime?.(run.id, controller.signal);
+      if (controller.signal.aborted) throw new Error("Run interrupted before runtime startup.");
       currentRun = await this.updateRun(currentRun, "running");
       currentAttempt = await this.updateAttempt(currentAttempt, "running");
       onRun(currentRun);
@@ -406,7 +422,8 @@ export class ExecutionService {
           credential: account.credential,
           runtimeContextId: account.runtimeContextId,
         },
-        projectPath,
+        projectPath: directory.path,
+        ...("workspace" in directory && directory.workspace !== undefined ? { checkoutRoot: directory.workspace.checkoutRoot } : {}),
         prompt: workflowPrompt,
         interactionMode: input.interactionMode ?? "normal",
         ...(context.skills.length === 0 ? {} : { skills: context.skills }),
@@ -608,6 +625,9 @@ interface ConsumeContext {
   readonly skills: readonly import("./types.js").RuntimeSkill[];
   readonly account: AccountRecord;
   readonly runtime: ReturnType<RuntimeRegistry["get"]>;
+  /** Session workspace mode; resolved to a directory once the writer is held. */
+  readonly workspaceMode: "shared" | "isolated";
+  readonly preparation: RunPreparation;
   readonly projectPath: string;
   readonly run: RunRecord;
   readonly attempt: AttemptRecord;

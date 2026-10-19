@@ -19,9 +19,9 @@ test("restart settles orphaned runs/attempts once, releases even orphaned locks 
     const prior = createApplication({ dataDirectory: directory, timeline: false });
     const project = await prior.projects.createProject({ path: directory });
     const session = await prior.sessions.create({ projectId: project.id });
-    await prior.projects.acquireWriter(project.id, "attempt");
+    await prior.projects.acquireWriter(project.id, "attempt", { sessionId: session.id, mode: "shared" });
     const orphan = await prior.projects.createProject({ path: join(directory, "orphan") });
-    await prior.projects.acquireWriter(orphan.id, "unrecorded-attempt");
+    await prior.projects.acquireWriter(orphan.id, "unrecorded-attempt", { sessionId: "orphan-session", mode: "shared" });
     const store = new JsonExecutionStore(join(directory, "execution.json"));
     const run = { id: "old-run", sessionId: session.id, projectId: project.id, prompt: "work", providerId: "fake", accountId: "account", permissionMode: "ask" as const, status: "running" as const, attemptIds: ["attempt"], createdAt: stamp, updatedAt: stamp };
     await store.saveRun(run);
