@@ -1,3 +1,4 @@
+import { browserAddress } from "../../../features/browser/navigation.js";
 /** Browser chrome lives in the trusted renderer; the actual website is an
  * isolated native view owned by main. Hide that view for app overlays and
  * surface switches, retaining the page for agent use and later reattachment.
@@ -14,33 +15,38 @@ export function createBrowserPanel(store: Store, controller: Controller, isVisib
   let actionError: string | undefined;
   let polling = false;
   let actionVersion = 0;
+  let queuedNavigation: string | undefined;
   const back = h("button", { class: "icon-button", type: "button", aria: { label: "Browser back" }, onClick: () => void control({ action: "back" }) }, icon("arrow-left"));
   const forward = h("button", { class: "icon-button", type: "button", aria: { label: "Browser forward" }, onClick: () => void control({ action: "forward" }) }, icon("caret-right"));
   const reload = h("button", { class: "icon-button", type: "button", aria: { label: "Reload browser page" }, onClick: () => void control({ action: "reload" }) }, icon("arrow-clockwise"));
-  const address = h("input", { type: "text", class: "browser-address", placeholder: "https://example.com", aria: { label: "Browser address" }, onInput: () => { addressDirty = true; } });
+  const address = h("input", { type: "text", class: "browser-address", placeholder: "Search or enter address", aria: { label: "Browser address" }, onInput: () => { addressDirty = true; } });
   address.autocomplete = "off"; address.spellcheck = false;
-  const go = h("button", { class: "button button-small", type: "submit" }, "Go");
-  const form = h("form", { class: "browser-address-bar", onSubmit: (event) => { event.preventDefault(); addressDirty = false; void control({ action: "navigate", url: address.value }); } }, address, go);
-  const agent = h("button", { class: "button button-small", type: "button", onClick: () => void control({ action: "agent", enabled: snapshot?.agentEnabled === false }) }, "Pause agent");
-  const close = h("button", { class: "button button-small", type: "button", onClick: () => void control({ action: "close" }) }, "Close page");
-  const title = h("span", { class: "browser-page-title" });
+  const agent = h("button", { class: "icon-button browser-agent", type: "button", title: "Pause agent control", aria: { label: "Pause agent control" }, onClick: () => void control({ action: "agent", enabled: snapshot?.agentEnabled === false }) }, icon("hand"));
+  const close = h("button", { class: "icon-button", type: "button", title: "Close browser page", aria: { label: "Close browser page" }, onClick: () => void control({ action: "close" }) }, icon("x"));
   const error = h("p", { class: "panel-error", role: "alert" });
-  const help = h("p", { class: "note browser-empty" }, "Open a session, then enter a website address. You and the agent share this page.");
+  const help = h("div", { class: "browser-empty" }, icon("globe"), h("strong", {}, "New tab"), h("p", {}, "Search or enter an address above. You and the agent share this browser."));
   const slot = h("div", { class: "browser-viewport", aria: { label: "Shared browser page" } }, help);
-  const element = h("div", { class: "browser-panel" }, h("div", { class: "browser-navigation" }, back, forward, reload, title), form,
-    h("div", { class: "browser-actions" }, agent, close), error, slot);
+  const form = h("form", { class: "browser-toolbar", aria: { label: "Browser navigation" }, onSubmit: (event) => {
+    event.preventDefault();
+    try { const url = browserAddress(address.value); addressDirty = false; if (busy) queuedNavigation = url; else void control({ action: "navigate", url }); }
+    catch (failure) { error.textContent = failure instanceof Error ? failure.message : String(failure); }
+  } }, back, forward, reload, address, agent, close);
+  const element = h("div", { class: "browser-panel" }, form, error, slot);
 
   function render(): void {
     back.disabled = busy || !snapshot?.canGoBack; forward.disabled = busy || !snapshot?.canGoForward;
-    reload.disabled = busy || !snapshot?.url; go.disabled = busy || sessionId === undefined;
+    reload.disabled = busy || !snapshot?.url;
     address.disabled = sessionId === undefined;
     agent.disabled = busy || sessionId === undefined; close.disabled = busy || sessionId === undefined;
-    agent.textContent = snapshot?.agentEnabled === false ? "Resume agent" : "Pause agent";
+    const agentLabel = snapshot?.agentEnabled === false ? "Resume agent control" : "Pause agent control";
+    agent.title = agentLabel; agent.setAttribute("aria-label", agentLabel);
     agent.setAttribute("aria-pressed", String(snapshot?.agentEnabled === false));
-    title.textContent = snapshot?.loading ? "Loading…" : snapshot?.title || "Shared browser";
-    title.title = snapshot?.title ?? "";
-    if (!addressDirty && !busy && !snapshot?.loading && document.activeElement !== address) address.value = snapshot?.url ?? "";
+    reload.classList.toggle("spin", snapshot?.loading === true);
+    address.title = snapshot?.title ? `${snapshot.title}\n${snapshot.url}` : "Search or enter address";
+    slot.setAttribute("aria-label", snapshot?.title || "Shared browser page");
+    if (!addressDirty && !busy && !snapshot?.loading && address.value !== (snapshot?.url ?? "")) address.value = snapshot?.url ?? "";
     help.hidden = !!snapshot?.url || !!snapshot?.loading;
+    slot.setAttribute("aria-busy", String(snapshot?.loading === true));
     schedulePresentation();
   }
   async function control(request: BrowserRequest): Promise<void> {
@@ -51,7 +57,7 @@ export function createBrowserPanel(store: Store, controller: Controller, isVisib
     // submitted while a state response is in flight. An action supersedes
     // older state reads so they cannot restore its previous URL or title.
     if (background) polling = true;
-    else { busy = true; actionVersion++; render(); }
+    else { busy = true; actionVersion++; if (request.action === "navigate") address.value = request.url ?? ""; render(); }
     const revision = actionVersion;
     try {
       const value = await controller.controlBrowser(target, request);
@@ -69,7 +75,15 @@ export function createBrowserPanel(store: Store, controller: Controller, isVisib
     }
     finally {
       if (background) polling = false; else busy = false;
-      if (version === generation) render();
+      if (version === generation) {
+        render();
+        // Keep the most recent submitted address while a navigation owns the
+        // transport lane; never silently drop Enter during a slow page load.
+        if (!background && queuedNavigation !== undefined) {
+          const url = queuedNavigation; queuedNavigation = undefined;
+          void control({ action: "navigate", url });
+        }
+      }
       // Session changes can occur while a request owns the single transport
       // lane. Load the new page immediately once the old reply is discarded.
       else if (active && store.get().host.status === "ready") void control({ action: "state" });
@@ -80,7 +94,7 @@ export function createBrowserPanel(store: Store, controller: Controller, isVisib
     if (scheduled) return; scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
-      const overlay = document.querySelector(".modal-backdrop, .popover, .settings-overlay:not([hidden])") !== null;
+      const overlay = document.documentElement.classList.contains("resizing") || document.querySelector(".modal-backdrop, .popover, .settings-overlay:not([hidden])") !== null;
       const visible = active && isVisible() && store.get().host.status === "ready" && document.visibilityState !== "hidden" && !overlay && slot.isConnected && sessionId !== undefined && (!!snapshot?.url || !!snapshot?.loading);
       const rect = slot.getBoundingClientRect();
       const request = { visible, ...(sessionId === undefined ? {} : { sessionId }), ...(visible ? { bounds: { x: Math.max(0, Math.round(rect.x)), y: Math.max(0, Math.round(rect.y)), width: Math.max(0, Math.round(rect.width)), height: Math.max(0, Math.round(rect.height)) } } : {}) };
@@ -90,16 +104,25 @@ export function createBrowserPanel(store: Store, controller: Controller, isVisib
   }
   store.watch((state) => [state.selection.sessionId, state.host.status], () => {
     const next = store.get().selection.sessionId;
-    if (next !== sessionId) { sessionId = next; generation++; snapshot = undefined; actionError = undefined; addressDirty = false; address.value = ""; error.textContent = ""; render(); }
+    if (next !== sessionId) { sessionId = next; generation++; snapshot = undefined; queuedNavigation = undefined; actionError = undefined; addressDirty = false; address.value = ""; error.textContent = ""; render(); }
     if (active && store.get().host.status === "ready") void control({ action: "state" });
   });
+  const stopAddressFocus = controller.onBrowserAddressFocus(() => {
+    if (!document.querySelector(".modal-backdrop, .popover, .settings-overlay:not([hidden])") && active && isVisible() && sessionId !== undefined) { address.focus(); address.select(); }
+  });
   new ResizeObserver(schedulePresentation).observe(slot);
+  window.addEventListener("layout-resize", schedulePresentation);
   const overlays = new MutationObserver(schedulePresentation);
   overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class", "style"] });
   window.addEventListener("resize", schedulePresentation);
+  document.addEventListener("keydown", (event) => {
+    if (!event.defaultPrevented && !document.querySelector(".modal-backdrop, .popover, .settings-overlay:not([hidden])") && active && isVisible() && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "l") {
+      event.preventDefault(); address.focus(); address.select();
+    }
+  });
   document.addEventListener("visibilitychange", schedulePresentation);
   const poll = window.setInterval(() => { if (active && isVisible() && document.visibilityState !== "hidden") void control({ action: "state" }); }, 500);
-  window.addEventListener("unload", () => { clearInterval(poll); overlays.disconnect(); });
+  window.addEventListener("unload", () => { clearInterval(poll); overlays.disconnect(); stopAddressFocus(); });
   render();
   return { element, setActive(next: boolean) { const opening = next && !active; active = next; if (opening) void control({ action: "state" }); schedulePresentation(); } };
 }

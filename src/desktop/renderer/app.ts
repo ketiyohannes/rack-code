@@ -37,6 +37,7 @@ if (params.get("view") === "timeline") {
   const store = new Store();
   const host = createHostClient();
   const controller = new Controller(host, store);
+  controller.loadPreferences();
 
   const regions = mountShell(root, store, controller);
   mountNavigator(regions.navigator, store, controller);
@@ -48,9 +49,8 @@ if (params.get("view") === "timeline") {
   mountUsage(usage, store, controller, host);
   mountSessionView(regions.session, regions.sessionHeader, store, controller);
   mountComposer(regions.composer, store, controller);
-  mountWorkbench(regions.workbench, store, regions.isWorkbenchVisible, controller);
+  mountWorkbench(regions.workbench, store, regions.isWorkbenchVisible, controller, host);
   mountSettings(regions.overlay, store, controller);
 
-  controller.loadPreferences();
   void controller.start();
 }

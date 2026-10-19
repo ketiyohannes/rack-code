@@ -1,3 +1,87 @@
+# Performance investigation (2026-10-19)
+
+- Add [the desktop performance audit](performance-audit.md), ranking execution-history rewrites, transcript rebuilds, background Timeline captures, startup model discovery, eager history loading and Changes polling.
+- Validation: benchmarked the actual storage adapter on synthetic histories and a disposable local-history copy, the session renderer in isolated Chromium, and Timeline captures in temporary repositories. The 69.29 MB history copy took a median 954.11 ms per event append; the original data was not modified. The private copy was deleted. Findings distinguish measurements from source-based hypotheses.
+- Documentation only; optimizations, live provider profiling, tests/builds and pending pushes/merges were not performed in this investigation.
+
+# Docked side chat layout (2026-10-19)
+
+- Fix the empty band between a PR review and its docked side chat. With the chat docked, the review's 900–1000 px width caps are lifted and it fills the space beside the chat; header actions align to its right edge. Undocked, the reading width is raised to 1,240 px.
+- Widen the docked chat from a fixed 380 px to a default 460 px. It is resizable from its left edge (saved per device, double-click resets) and clamped so the review keeps at least 520 px. Give side-chat questions an explicit bubble style so they render as bubbles in every palette.
+- Validation: `npm run check` passed (276 tests, both TypeScript configurations, headless build and desktop bundle). In Electron at 2048 × 1066 and 1360 × 860, the review fills to the chat with no gap, dragging the divider resizes from 460 to 699 px and persists, double-click resets to 460 px, and the narrow window clamps the chat with no page overflow.
+
+# Side chat, Explain with AI, Open in Timeline and Timeline UI (2026-10-19)
+
+- Add **Side chat** ([details](side-chat.md)): a read-only conversation beside the main session and docked beside PR reviews. It is a standalone chat session run with `read_only` permissions, so it never takes the project writer lock or interrupts the main run. It carries bounded hidden context: recent session messages and the project path, or PR metadata, description and per-file patches. It has its own model picker, streaming, Stop and New side chat. Escape inside it stops only its own reply. A session-header icon and the right-panel launcher open it. There are no host, contract or core changes.
+- Add **Explain with AI** to PR reviews: it docks the side chat and asks the selected model to explain the PR. Make **Open in Timeline** a labeled primary action.
+- Fix Open in Timeline failing ("Git fetch failed") when reviewing as a GitHub account other than gh's active login. Git fetches now authenticate as the review's credential through a host-scoped `http.extraheader` passed via `GIT_CONFIG_*` environment variables, never argv or config. Verified live on a private repository visible only to the inactive account.
+- Overhaul Timeline UI:
+  - Two-line history rows: kind icon and word, message, file count and relative time.
+  - Labeled icon buttons for Import timeline and Choose a repository folder.
+  - Snapshot window: header with commit chip and readable date, a compact newer/change/older toolbar, an icon toggle for Diff, Before/After and Full context, and count badges.
+- Validation: `npm run check` passed (276 tests, both TypeScript configurations, headless build and desktop bundle); `git diff --check` passed. New tests cover side-chat prompt bounding, visible-text separation, PR context content and patch omission, and per-provider fetch authentication. Live Electron checks covered:
+  - The session side chat: header button, tool tab, suggestions, read-only badge and no-provider guidance.
+  - Explain with AI docking beside a PR with the PR context, in the inbox.
+  - Open in Timeline on `ketiyohannes/yomu` #1 (50 changed files), opening the snapshot window.
+  - Timeline rows and the snapshot window in Diff and Before/After modes.
+- Not performed: live provider runs in a side chat (the disposable test profile has no provider account; running against real accounts would use the user's subscription); approval/question prompts inside side chats (not shown there, documented as a limitation); GitLab/Bitbucket fetch authentication against live hosts.
+
+# Pull request review overhaul (2026-10-19)
+
+- Fix PRs failing to open when their raw diff exceeded 2 MB (seen live on a PR whose diff is 9.7 MB). GitHub now reads per-file changes from `/pulls/{id}/files`, and GitLab maps `/diffs` per file. Each file reports host counts; patches the host omits are labelled per file. Bitbucket raw diffs over the limit are cut to whole files and marked shortened, and GitHub's 406 "diff too large" degrades the same way. New contract field `PullDetail.files` (`ReviewFile`) is preferred over `diff` when present.
+- Structure Activity: `ReviewComment` gains `kind`, `state`, `path` and `line` instead of embedding `[APPROVED]` or `[path:line]` prefixes in the body. Container-only and pending GitHub reviews and GitLab system notes are omitted.
+- Rebuild the shared review renderer:
+  - Markdown descriptions and comments, with a collapsible long description.
+  - State badge, branch chips, icon actions, and tab icons with counts.
+  - Check outcomes as icon plus word, with a summary.
+  - Themed per-file diffs reusing the Changes styles, plus file status icons and a search field.
+  - Icon-plus-label Submit review, Merge and Close/Reopen buttons.
+  - Loading and error states with spinners, icons, Retry and Open on code host.
+- Align the repository page with the inbox. Add a back icon, provider/branch/connection icons, the inbox row design and a state-specific empty state. Rebuild New pull request with labeled fields, a smarter default target branch, a labeled draft toggle, labeled actions, and separate progress and error lines. Replace raw `window.open` calls with the controller's external-link path. Replace hard-coded state colors with palette tokens. Fix a file-name ellipsis that rendered `.gitignore` as `gitignore.`.
+- Validation: `npm run check` passed (272 tests, both TypeScript configurations, headless build and desktop bundle); `git diff --check` passed. New tests cover per-file GitHub changes including omitted patches, structured review activity, and whole-file truncation of an oversized raw diff. Live Electron checks with both signed-in GitHub accounts covered:
+  - Opening the 9.7 MB-diff PR, which previously failed, with 35 files listed.
+  - A PR with two passing checks.
+  - Markdown descriptions, the collapsed description toggle, Code and Activity tabs, and light and dark modes.
+  - The repository page for a disposable project pointed at `ketiyohannes/yomu`, including its PR detail.
+  - New pull request form validation.
+- Not performed: submitting reviews, merging, closing or creating PRs on live repositories (consequential remote actions); GitLab or Bitbucket live accounts; other palettes beyond the default in both modes.
+
+# GitHub browser sign-in, type scale and launcher cleanup (2026-10-19)
+
+- Fix GitHub account discovery. `gh auth status --json hosts` reports the username as `login`, but Rack read only `account`, so it found no gh logins. Both fields are now accepted, and test fixtures use gh's real output shape.
+- Replace GitHub token entry with browser sign-in. `GitHubBrowserLogin` (new, `adapters/code-hosts/github-login.ts`) runs `gh auth login --web` without a TTY. It parses the device code and the same-host `https` verification URL, then reports completed, failed or cancelled. Cancel/close, a 15-minute limit and host shutdown stop gh. New commands `reviews.accountLoginBegin`, `reviews.accountLoginFinish` and `reviews.accountLoginCancel` replace `reviews.accountConnect`. Session-token GitHub identities and their `token` source are removed. A shared `components/github-sign-in.ts` dialog shows the code, copies it, opens GitHub and lists signed-in identities. It is used by the inbox and GitHub repository connections; GitLab/Bitbucket keep their token dialog. Credentials live in gh's keychain-backed store, so accounts persist across restarts.
+- Retry each account's inbox search once before reporting it unavailable. Show "Checking GitHub accounts" instead of the sign-in prompt while discovery is pending. Restyle account warnings as an inset sans-serif card.
+- Fix the repository connection icon button: it previously replaced its icon with text after rendering.
+- Introduce a renderer type scale (10/11/12/13/14/16/18/22 px tokens) and map all 265 literal font sizes onto it, removing half-pixel and one-off sizes. Reduce the conversation content size from 15px to 14px and give code/diffs/Files/terminal a 13px code size.
+- Remove the "Your workbench" heading, tagline and emblem from the blank tab launcher. Draw a single highlight for the selected session row.
+- Validation: `npm run check` passed (270 tests, both TypeScript configurations, headless build and desktop bundle); `git diff --check` passed. New tests cover gh `login`/`account` parsing, device-code start and completion with environment-token isolation, foreign verification-host rejection, cancellation, token redaction in failures, hostname validation, command validation and search retry. Live checks used the installed gh 2.86.0: discovery found both signed-in accounts; the app inbox listed open PRs from both; a real `gh auth login --web` produced a code and `https://github.com/login/device` in the app dialog (browser opening stubbed); Cancel stopped gh with both existing logins unchanged. Electron screenshots reviewed the chat view, launcher, PR inbox, sign-in dialog states and Settings; every rendered element uses a scale size.
+- Not performed: completing a new authorization in the browser, GitHub Enterprise sign-in, packaged-app runs (Finder launches may not include Homebrew's `gh` in PATH; `resolveShellPath` exists but is not wired into startup), or light-palette screenshots for this change.
+
+# UI overhaul (2026-10-19)
+
+- Branch `feat/ui-overhaul` from `feat/desktop-tools-and-scaling`. Keep the existing five palettes, light/dark/system modes, bundled fonts, project-only navigator and framework-free renderer.
+- Refine the shell, project/session rows, conversation spacing, composer, tool panels, Settings, Usage and review pages. Add working project/session/account entry actions to the welcome state. Present the blank workbench as a named, tooltipped six-icon grid; remove preview-only Retrospective/Orchestration entry points.
+- Use accessible Phosphor icons for routine composer, editor, saved-account, review and Timeline actions. Preserve readable choices and consequential form decisions. Include current permission/account values in tooltips. Save/reload retains dirty-draft confirmation, keyboard saving and version checks.
+- Fix composer control wrapping/clipping and warning-icon expansion. Questions, approvals, catalog warnings and completed-plan actions now share a bounded stack above the prompt, preserving the input and send/stop row even at minimum prompt height. Improve muted neutral-text contrast and reduced-motion behavior.
+- Complete Settings with existing-shortcut documentation and an About pane using the built package version and live host status. Omit unimplemented settings. Contain/restore focus, make the background inert, support radio arrow keys, skip hidden/inactive controls in focus loops, and add keyboard focus/navigation plus toggle behavior to the tool-tab menu.
+- Validation: all 267 existing tests passed; final renderer/Node type checks, headless compilation and desktop bundling passed. `git diff --check` passed. Isolated Electron review used disposable data and a disposable project: all five light/dark palettes; Settings focus wrapping/restoration, appearance selection, Accounts/Models/Plugins/Shortcuts/About; permission and tool menus; file browse/edit/save; terminal input; local browser navigation; Timeline and Changes; Usage and PR inbox presentation. Geometry assertions at 980 × 600 with a 148px prompt, a long draft and synthetic stacked requests confirmed no document overflow, visible prompt/send controls, independently scrolling draft and a bounded request stack. No renderer errors were reported.
+- Not performed: provider sign-in, paid/live agent turns, submitting remote reviews/PRs, external editor launches, or packaged Windows/Linux review. Existing host permissions, routing, persistence and tool-resource lifetimes are unchanged.
+
+# Sidebar correction (2026-10-19)
+
+- Start the right workbench with one blank New tab containing the original surface list. Keep the + dropdown for another blank tab or a chosen tool; launcher choices fill the current blank. Enabled plugins and old tab preferences no longer pre-open tools. Reuse existing tool instances and restore a blank tab after the last close.
+- Restore the left project navigator and its shared scroll area. Remove New chat, Chats list and their added resizing UI; retain standalone chat services, controller operations, persistence and the main conversation experience.
+- Validation: both TypeScript configurations and desktop bundling passed; all 20 focused chat-controller/sidebar-order tests passed. Disposable Electron checks confirmed one blank tab despite saved tool preferences, the full launcher including disabled/preview tools, launcher choices replacing their blank tab, + dropdown blank/tool creation, last-tab reset and retained terminal instances. Confirmed the left chat controls/divider are absent. Earlier broader checks below apply to the preceding implementation.
+
+# Desktop scaling, editor launch and integrated tools (2026-10-18)
+
+- Implement on `feat/desktop-tools-and-scaling`, branched from current `dev`. Use a shared 15px content font for prompts, bubbles, replies, inline/fenced code, tool output, diffs, Files and terminal text; retain compact metadata/navigation.
+- Add **Open in** menus for project/chat folders and selected files. Detect common installed editors including VS Code/Insiders, Cursor, Windsurf, Zed, Sublime and JetBrains editors, with a native chooser for other installations. Validate editor IDs and targets in main, pass literal argument arrays and preserve the original target across navigation.
+- Restore the original xterm renderer with bundled CSS, a flush viewport and compact Restart/Close shell actions. Keep existing host/Codex PTYs, cancellation and reconnect behavior. Wait for the actual font, buffer output before terminal attachment, retain focus on session updates, and apply the app palette.
+- Replace the right-panel launcher with persistent, keyboard-accessible tool tabs, a + picker and close actions that retain tool state. Bound chat history and drafts to independent scrolling regions, add a saved horizontal prompt-height splitter, detach the native browser during splitter drags, give the left Chats list its own saved height and scroll area, and compact the New chat action.
+- Consolidate Browser into one navigation/omnibox row above the native page, with search, back/forward/reload, pause/resume and close. Keep shared agent control, handle address submissions during a busy control request, route Cmd/Ctrl+L from native website to trusted chrome and scale native page bounds with app zoom. See [desktop tools](desktop-tools.md).
+- Validation: `npm run check` passed (267 tests, both TypeScript configurations, compilation and desktop bundling). Final focused editor/browser/controller checks passed (23 tests), followed by final types/builds and `npm run test:desktop-features`. Native UI checks used disposable app data: equal computed 15px prompt/prose/code/Files fonts; installed VS Code/Cursor discovery; recorded folder/file launch targets without starting external editors; real key-driven PTY input/output; single browser toolbar and agent form interaction; pause enforcement; bounds alignment at 80%, 100% and 125%; and native-page address focus. Final layout checks covered pointer-driven sidebar/prompt/Chats splitters, tab addition/close/reopen and keyboard navigation, retained PTY output and unsaved Files drafts, restored layout preferences, independently scrolling long history/drafts, 125% zoom with no document overflow, and browser detachment during resizing. Native Chromium/local/Codex PTY smoke checks passed again after the terminal restoration. Live editor process launches, packaged Windows/Linux builds and authenticated model-driven browsing were not exercised.
+
 # General chat, Plan mode and installed skills (2026-10-16)
 
 - Implement on `feat/chat-plan-skills`. Add project-free Chats, separate composer drafts, automatic titles and private file workspaces. Reuse attachments, accounts/models, Browser and terminal lifecycle. Attach a project later while preserving visible history, keeping original chat files accessible and resetting native continuation/cwd state.

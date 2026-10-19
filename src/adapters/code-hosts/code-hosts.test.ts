@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RestCodeHosts } from "./rest.js";
-import { git, parseRemote, savedReview, syncReview, type Remote } from "./repository.js";
+import { fetchAuthEnvironment, git, parseRemote, savedReview, syncReview, type Remote } from "./repository.js";
 import { createApplication } from "../../composition/application.js";
 import { validateCommandParams } from "../../contracts/desktop/commands.js";
 const head = "b".repeat(40), base = "a".repeat(40);
@@ -37,6 +37,7 @@ for (const [provider, url, fixture] of [["github", "https://github.com/team/repo
       if (url.pathname.endsWith("/statuses")) return Response.json({ values: [{ name: "CI", state: "SUCCESSFUL" }] });
       if (url.pathname.endsWith("/user")) return Response.json({ id: 1 });
       if (headers.Accept?.includes("diff") || url.pathname.endsWith("/diff")) return new Response(patch);
+      if (url.pathname.endsWith("/files")) return Response.json([{ filename: "a.ts", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-before\n+after" }, { filename: "bundle.cjs", status: "added", additions: 9000, deletions: 0 }]);
       if (url.pathname.endsWith("/diffs")) return Response.json([{ old_path: "a.ts", new_path: "a.ts", diff: "@@ -1 +1 @@\n-before\n+after" }]);
       if (url.pathname.endsWith("/notes")) return Response.json(method === "POST" ? {} : [{ author: { username: "reviewer" }, body: "Looks good", created_at: "2026-10-16" }]);
       if (url.pathname.endsWith("/comments")) return Response.json(method === "POST" ? {} : provider === "github" ? [{ user: { login: "reviewer" }, body: "Looks good", created_at: "2026-10-16" }] : { values: [{ user: { display_name: "reviewer" }, content: { raw: "Looks good" }, created_on: "2026-10-16" }] });
@@ -51,7 +52,9 @@ for (const [provider, url, fixture] of [["github", "https://github.com/team/repo
       assert.equal(list.items[0]?.id, 12); assert.equal(list.items[0]?.source, "fix/parser");
       const detail = await api.detail(path, "origin", 12);
       if (provider !== "gitlab") assert.equal(detail.checks[0]?.name, "CI");
-      assert.match(detail.diff, /after/); assert.equal(detail.comments[0]?.body, "Looks good");
+      // GitHub and GitLab report per-file changes; Bitbucket supplies a unified diff.
+      assert.match(provider === "bitbucket" ? detail.diff : detail.files?.[0]?.patch ?? "", /after/); assert.equal(detail.comments[0]?.body, "Looks good");
+      if (provider === "github") assert.deepEqual(detail.files?.[1], { path: "bundle.cjs", status: "added", additions: 9000, deletions: 0 });
       await api.create(path, "origin", { title: "New feature", body: "Details", source: "feature/new", target: "main", draft: true });
       const create = calls.find((call) => call.method === "POST" && /(?:pulls|merge_requests|pullrequests)$/.test(call.url.pathname))!;
       assert.equal(provider === "gitlab" ? create.body.title : create.body.draft, provider === "gitlab" ? "Draft: New feature" : true);
@@ -139,4 +142,28 @@ test("desktop PR commands reject paths, invalid page numbers and unknown review 
   assert.throws(() => validateCommandParams("reviews.list", { projectId: "p", remote: "origin", state: "open", query: "", page: 0 }));
   assert.throws(() => validateCommandParams("reviews.sync", { projectId: "p", remote: "origin", id: 1, path: "/tmp" }));
   assert.throws(() => validateCommandParams("reviews.act", { projectId: "p", remote: "origin", id: 1, action: "force_merge", body: "", head }));
+});
+
+test("an oversized raw diff is cut to whole files instead of failing the review", async () => {
+  const path = await repository("https://bitbucket.org/team/repo.git");
+  const big = `diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before\n+after\n` + `diff --git a/gen.js b/gen.js\n--- a/gen.js\n+++ b/gen.js\n@@ -0,0 +1 @@\n+${"x".repeat(2_100_000)}\n`;
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/diff")) return new Response(big);
+    if (url.pathname.endsWith("/comments")) return Response.json({ values: [] });
+    if (url.pathname.endsWith("/statuses")) return Response.json({ values: [] });
+    return Response.json(bitbucket);
+  };
+  const detail = await new RestCodeHosts(fetcher).detail(path, "origin", 12);
+  assert.equal(detail.truncated, true);
+  assert.match(detail.diff, /\+after/); assert.doesNotMatch(detail.diff, /gen\.js/);
+});
+
+test("Timeline fetches authenticate as the review's account, scoped to the code host and kept out of argv", () => {
+  const remote = { name: "origin", host: "github.com", provider: "github" as const, slug: "o/r", api: "https://api.github.com" };
+  const env = fetchAuthEnvironment(remote, "gho_secret");
+  assert.equal(env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
+  assert.equal(env.GIT_CONFIG_VALUE_0, `Authorization: Basic ${Buffer.from("x-access-token:gho_secret").toString("base64")}`);
+  assert.equal(fetchAuthEnvironment({ ...remote, provider: "gitlab", host: "gitlab.com" }, "t").GIT_CONFIG_VALUE_0, `Authorization: Basic ${Buffer.from("oauth2:t").toString("base64")}`);
+  assert.deepEqual(fetchAuthEnvironment(remote, undefined), {});
 });

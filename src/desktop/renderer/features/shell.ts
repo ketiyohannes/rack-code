@@ -85,13 +85,13 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
     h("div", { class: "sidebar-top" }, h("span", { class: "wordmark" }, "thinking & code")),
     regions.navigator,
   );
+  const chatLayout = h("div", { class: "chat-layout" }, regions.session, regions.composer);
   root.append(
     sidebar,
     h("main", { class: "main" },
       h("header", { class: "toolbar" }, leftToggle, regions.sessionHeader, rightToggle),
       regions.page,
-      regions.session,
-      regions.composer,
+      chatLayout,
     ),
     workbench,
     hoverZone,
@@ -99,6 +99,30 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
     notice,
   );
   workbench.append(h("div", { class: "workbench-top" }));
+
+  // The transcript and prompt share a bounded viewport. Resizing the prompt
+  // never grows the window or displaces chat history; each region scrolls.
+  let promptHeight = 200;
+  try {
+    const saved = Number(localStorage.getItem("layout.prompt-height"));
+    if (Number.isFinite(saved) && saved >= 148) promptHeight = saved;
+  } catch { /* Storage is optional; keep the default layout. */ }
+  const maxPromptHeight = () => Math.max(148, Math.min(chatLayout.clientHeight - 120, chatLayout.clientHeight * 0.65));
+  const fitPrompt = () => {
+    const height = Math.max(148, Math.min(promptHeight, maxPromptHeight()));
+    regions.composer.style.setProperty("--composer-height", `${height}px`);
+    const handle = regions.composer.querySelector(".resize-handle");
+    handle?.setAttribute("aria-valuenow", String(Math.round(height)));
+    handle?.setAttribute("aria-valuemax", String(Math.round(maxPromptHeight())));
+  };
+  regions.composer.append(createResizeHandle({
+    label: "Resize prompt area", edge: "top", min: 148, max: maxPromptHeight,
+    defaultWidth: 200, width: () => regions.composer.getBoundingClientRect().height,
+    onResize: (height) => { promptHeight = height; fitPrompt(); },
+    onCommit: () => { try { localStorage.setItem("layout.prompt-height", String(promptHeight)); } catch { /* Keep the current layout for this window. */ } },
+  }));
+  new ResizeObserver(fitPrompt).observe(chatLayout);
+  fitPrompt();
 
   // --- Collapse and peek ------------------------------------------------------
   let hideTimer: number | undefined;
@@ -186,9 +210,12 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
   window.addEventListener("resize", fitWidths);
   fitWidths();
 
+  // A tool request (e.g. the session header's Side chat button) reveals the right panel.
+  store.watch((state) => state.toolRequest?.seq, (seq) => { if (seq !== undefined && layout.right) setCollapsed("right", false); });
   store.watch((state) => state.page, (page) => {
     root.dataset.page = page;
     regions.page.hidden = page === "chat";
+    chatLayout.hidden = page !== "chat";
     regions.session.hidden = page !== "chat";
     regions.composer.hidden = page !== "chat";
     regions.sessionHeader.hidden = page !== "chat";

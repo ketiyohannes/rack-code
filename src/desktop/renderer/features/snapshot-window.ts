@@ -8,7 +8,7 @@
 import type { TimelineSnapshot, TimelineSnapshotFile, TimelineSnapshotFileView, TimelineSnapshotTarget, TimelineSnapshotChoice } from "../../../contracts/desktop/index.js";
 import type { HostClient } from "../host-client.js";
 import { h, replace } from "../dom.js";
-import { icon } from "../icons.js";
+import { icon, type IconName } from "../icons.js";
 import { applyPalette, applyTheme, loadPalette, loadTheme } from "../theme.js";
 import { buildTree, type TreeFolder } from "./timeline-tree.js";
 import { diffRows, type DiffRow } from "./change-diff.js";
@@ -16,7 +16,8 @@ import { afterChangeLines, contextRows, sourceLines } from "./snapshot-context.j
 import { createDropdown } from "../components/dropdown.js";
 
 type Mode = "diff" | "context" | "split";
-const MODES: readonly [Mode, string][] = [["diff", "Diff"], ["split", "Before / After"], ["context", "Full context"]];
+/** View modes are an icon toggle; names appear in tooltips and accessible labels. */
+const MODES: readonly [Mode, string, IconName][] = [["diff", "Diff", "git-diff"], ["split", "Before / After", "square-split-horizontal"], ["context", "Full context", "text-align-left"]];
 const STATUS = { added: "A", modified: "M", deleted: "D", type_changed: "T" } as const;
 /** Prevent a small text file containing millions of empty lines flooding the DOM. */
 const MAX_ROWS = 10_000;
@@ -60,11 +61,10 @@ export function mountSnapshotWindow(root: HTMLElement, host: HostClient, params:
     title: "Older change", aria: { label: "Older change" }, onClick: () => stepChange(1) }, icon("arrow-down"));
   const position = h("span", { class: "snapshot-position", role: "status", aria: { live: "polite" } }, "Loading history…");
   const navigation = h("div", { class: "snapshot-navigation", role: "group", aria: { label: "Timeline change navigation" } },
-    h("div", { class: "snapshot-navigation-label" }, h("span", {}, "Change"), position),
-    h("div", { class: "snapshot-navigation-controls" }, checkpointPicker.element,
-      h("div", { class: "snapshot-steps" }, newer, older)));
+    h("div", { class: "snapshot-navigation-controls" }, newer, checkpointPicker.element, older), position);
   const heading = h("header", { class: "snapshot-header" },
-    h("div", { class: "snapshot-heading" }, h("span", { class: "snapshot-eyebrow" }, "Timeline"), title, metadata),
+    h("div", { class: "snapshot-heading" }, h("span", { class: "snapshot-heading-icon", aria: { hidden: "true" } }, icon("clock-counter-clockwise")),
+      h("div", { class: "snapshot-heading-text" }, title, metadata)),
     navigation,
     h("button", { class: "icon-button", type: "button", title: "Close window", aria: { label: "Close window" }, onClick: () => window.close() }, icon("x")));
   const changed = h("button", { type: "button", onClick: () => setFileScope(true) }, "Changed files");
@@ -75,10 +75,9 @@ export function mountSnapshotWindow(root: HTMLElement, host: HostClient, params:
   const tree = h("div", { class: "snapshot-tree", role: "tree", aria: { label: "Snapshot files" } });
   const sidebar = h("aside", { class: "snapshot-sidebar" }, fileScope, search, tree);
   const filename = h("div", { class: "snapshot-filename" });
-  const modePicker = createDropdown<Mode>({ ariaLabel: "View mode", variant: "pill", menuWidth: 160,
-    onChange: (value) => { mode = value; renderCode(); } });
-  modePicker.setOptions(MODES.map(([value, label]) => ({ value, label })), mode);
-  modePicker.setDisabled(true);
+  const modeButtons = MODES.map(([value, label, name]) => h("button", { type: "button", class: "icon-button", title: label, aria: { label, pressed: String(value === mode) },
+    onClick: () => { mode = value; renderCode(); } }, icon(name)));
+  const modePicker = { element: h("div", { class: "snapshot-modes", role: "group", aria: { label: "View mode" } }, ...modeButtons) };
   const code = h("div", { class: "snapshot-code", role: "region", aria: { label: "Historical file contents" } });
   code.tabIndex = 0;
   const content = h("section", { class: "snapshot-content" }, h("div", { class: "snapshot-toolbar" }, filename, modePicker.element), code);
@@ -96,8 +95,8 @@ export function mountSnapshotWindow(root: HTMLElement, host: HostClient, params:
   function renderTree(): void {
     if (snapshot === undefined) return;
     const count = snapshot.files.filter((file) => file.status !== undefined).length;
-    changed.textContent = `Changed files ${count}`;
-    all.textContent = `All files ${snapshot.files.length}`;
+    replace(changed, "Changed", h("span", { class: "snapshot-count" }, String(count)));
+    replace(all, "All files", h("span", { class: "snapshot-count" }, String(snapshot.files.length)));
     changed.setAttribute("aria-pressed", String(onlyChanged));
     all.setAttribute("aria-pressed", String(!onlyChanged));
     const needle = query.trim().toLowerCase();
@@ -152,8 +151,12 @@ export function mountSnapshotWindow(root: HTMLElement, host: HostClient, params:
   }
 
   function updateModes(): void {
-    modePicker.setValue(mode);
-    modePicker.setDisabled(data === undefined);
+    MODES.forEach(([value], index) => {
+      const button = modeButtons[index]!;
+      button.setAttribute("aria-pressed", String(value === mode));
+      button.classList.toggle("active", value === mode);
+      button.disabled = data === undefined;
+    });
   }
 
   function message(text: string): void {
@@ -228,7 +231,7 @@ export function mountSnapshotWindow(root: HTMLElement, host: HostClient, params:
     const index = choices.findIndex((choice) => choice.id === target.checkpointId);
     newer.disabled = index <= 0;
     older.disabled = index < 0 || index >= choices.length - 1;
-    const text = index < 0 ? "History unavailable" : `${index + 1} of ${choices.length} · newest first`;
+    const text = index < 0 ? "History unavailable" : `${index + 1} of ${choices.length}, newest first`;
     if (position.textContent !== text) position.textContent = text;
   }
 
@@ -253,7 +256,9 @@ export function mountSnapshotWindow(root: HTMLElement, host: HostClient, params:
       snapshot = result;
       title.textContent = result.label;
       document.title = `${result.label} — Timeline`;
-      metadata.textContent = `${result.snapshot.slice(0, 8)} · ${new Date(result.createdAt).toLocaleString()}`;
+      const when = new Date(result.createdAt);
+      replace(metadata, h("code", { class: "snapshot-sha", title: result.snapshot }, result.snapshot.slice(0, 8)),
+        h("time", { title: when.toLocaleString() }, when.toLocaleString([], { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })));
       const requested = result.files.find((file) => file.path === selected);
       const initial = requested ?? result.files.find((file) => file.status !== undefined) ?? result.files[0];
       if (initial?.status === undefined) onlyChanged = false;

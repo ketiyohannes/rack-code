@@ -1,3 +1,4 @@
+import { DesktopEditors } from "./editors.js";
 /**
  * Electron main process: desktop lifecycle and the privileged IPC boundary.
  *
@@ -34,6 +35,7 @@ import { WINDOW_ACTIONS } from "../../contracts/desktop/transport.js";
 import { performWindowAction } from "./window-actions.js";
 
 /** How long quitting waits for cancelled runs to record a terminal state. */
+const editors = new DesktopEditors();
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 // Recovery assumes one live owner of persisted execution. A second launch of
 // the same desktop profile focuses its owner rather than recovering its runs.
@@ -297,6 +299,20 @@ void app.whenReady().then(() => {
   ipcMain.handle(IPC_CHANNELS.selectDirectory, handleSelectDirectory);
   ipcMain.handle(IPC_CHANNELS.selectFiles, handleSelectFiles);
   ipcMain.handle(IPC_CHANNELS.openPath, handleOpenPath);
+  ipcMain.handle(IPC_CHANNELS.editors, (event) => isTrustedSender(event) ? editors.list() : []);
+  ipcMain.handle(IPC_CHANNELS.openInEditor, async (event, request: unknown) => {
+    if (!isTrustedSender(event)) return "invalid";
+    let parsed;
+    try { parsed = object({ editorId: text({ maxLength: 100 }), path: text({ maxLength: 4096 }), base: optional(text({ maxLength: 4096 })) })(request, ""); }
+    catch { return "invalid"; }
+    return editors.open(parsed, async () => {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      if (!owner) return undefined;
+      const result = await dialog.showOpenDialog(owner, { title: "Choose an editor", properties: ["openFile"],
+        ...(process.platform === "darwin" ? { defaultPath: "/Applications", filters: [{ name: "Applications", extensions: ["app"] }] } : process.platform === "win32" ? { filters: [{ name: "Applications", extensions: ["exe"] }] } : {}) });
+      return result.canceled ? undefined : result.filePaths[0];
+    });
+  });
   ipcMain.handle(IPC_CHANNELS.openTimelineWindow, handleTimelineWindow);
   ipcMain.handle(IPC_CHANNELS.presentBrowser, (event, request: unknown) => {
     if (!isTrustedSender(event)) return;

@@ -173,18 +173,19 @@ function renderAccount(account: AccountView, state: AppState, controller: Contro
     ),
     h("div", { class: "card-actions" },
       account.selected ? null : h("button", {
-        class: "button button-small",
-        title: "Selection affects future runs only.",
+        class: "icon-button", type: "button",
+        title: "Select account for future runs", aria: { label: "Select account for future runs" },
         onClick: () => void controller.selectAccount(account.providerId, account.id),
-      }, "Select"),
+      }, icon("check")),
       h("button", {
-        class: account.availability === "reauth_required" ? "button button-small button-primary" : "button button-small",
+        class: account.availability === "reauth_required" ? "icon-button icon-button-primary" : "icon-button", type: "button",
+        title: "Reconnect account", aria: { label: "Reconnect account" },
         disabled: reconnecting,
         onClick: () => void controller.connectAccount(account.providerId, account.id),
-      }, icon("arrow-clockwise"), "Reconnect"),
-      h("button", { class: "quiet-button", type: "button",
+      }, icon("arrow-clockwise")),
+      h("button", { class: "icon-button", type: "button", title: "Connection details", aria: { label: "Connection details" },
         onClick: () => openDiagnostic(account.providerId, account.id, store, controller),
-      }, "Connection details", icon("arrow-right")),
+      }, icon("info")),
     ),
   );
 }

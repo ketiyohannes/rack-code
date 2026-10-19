@@ -31,9 +31,12 @@ export const IPC_CHANNELS = {
    * A desktop-shell operation handled by main, not an application command.
    */
   openPath: "harness:open-path",
+  editors: "harness:editors",
+  openInEditor: "harness:open-in-editor",
   /** Opens a separate read-only snapshot window using only app identities. */
   openTimelineWindow: "harness:open-timeline-window",
   presentBrowser: "harness:present-browser",
+  focusBrowserAddress: "harness:focus-browser-address",
   windowAction: "harness:window-action",
   windowTheme: "harness:window-theme",
 } as const;
@@ -81,8 +84,12 @@ export interface HarnessBridge {
    * file manager when opening could execute it. Main resolves and checks it.
    */
   openPath(request: OpenPathRequest): Promise<OpenPathResult>;
+  listEditors(): Promise<readonly import("./editors.js").EditorTarget[]>;
+  openInEditor(request: import("./editors.js").OpenEditorRequest): Promise<import("./editors.js").OpenEditorResult>;
   openTimelineWindow(request: TimelineWindowRequest): Promise<CommandResponse<null>>;
   presentBrowser(request: BrowserPresentation): Promise<void>;
+  /** Main redirects Cmd/Ctrl+L from the isolated native page to app chrome. */
+  onBrowserAddressFocus(listener: () => void): () => void;
 }
 
 export const WINDOW_ACTIONS = ["undo", "redo", "cut", "copy", "paste", "selectAll", "reload", "devTools", "zoomIn", "zoomOut", "resetZoom", "fullscreen", "close", "quit", "help", "about"] as const;

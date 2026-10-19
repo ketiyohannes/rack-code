@@ -1,4 +1,4 @@
-import type { AccountCatalog, ReviewAccount, InboxQuery, InboxResult, InboxTarget, RepositoryTarget, InboxDetail } from "../../features/pull-requests/index.js";
+import type { AccountCatalog, AccountLogin, AccountLoginResult, InboxQuery, InboxResult, InboxTarget, RepositoryTarget, InboxDetail } from "../../features/pull-requests/index.js";
 import type { ReviewRepository, PullDetail, PullList, PullRequest, CreatePull, PullState, ReviewAction } from "../../features/pull-requests/index.js";
 import type { UsageReport } from "../../features/usage/index.js";
 /**
@@ -102,7 +102,10 @@ type NoParams = Record<string, never>;
 
 export interface HostCommandMap {
   "reviews.accounts": { params: { refresh?: boolean }; result: AccountCatalog };
-  "reviews.accountConnect": { params: { host: string; token: string }; result: ReviewAccount };
+  /** Browser sign-in through gh: begin returns the device code, finish waits for authorization. */
+  "reviews.accountLoginBegin": { params: { host: string }; result: AccountLogin };
+  "reviews.accountLoginFinish": { params: { loginId: string }; result: AccountLoginResult };
+  "reviews.accountLoginCancel": { params: { loginId: string }; result: null };
   "reviews.inbox": { params: InboxQuery; result: InboxResult };
   "reviews.inboxRepository": { params: RepositoryTarget & { query: string; state: PullState; page: number }; result: PullList };
   "reviews.inboxCreate": { params: RepositoryTarget & { input: CreatePull }; result: PullRequest };
@@ -237,7 +240,9 @@ const credential = object({ id, providerId: id, method: id });
 /** Runtime validators, one per command, typed against `HostCommandMap`. */
 export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<CommandParams<C>> } = {
   "reviews.accounts": object({ refresh: optional(boolean) }),
-  "reviews.accountConnect": object({ host: id, token: text({ maxLength: 4096 }) }),
+  "reviews.accountLoginBegin": object({ host: id }),
+  "reviews.accountLoginFinish": object({ loginId: id }),
+  "reviews.accountLoginCancel": object({ loginId: id }),
   "reviews.inbox": object({ accountId: optional(id), involvement: oneOf(["involved", "created", "review_requested", "assigned"]), query: text({ allowEmpty: true, maxLength: 512 }), state: oneOf(["open", "closed", "merged", "all"]), page: integer(1, 20) }),
   "reviews.inboxRepository": object({ accountId: id, repository: id, query: text({ allowEmpty: true, maxLength: 512 }), state: oneOf(["open", "closed", "merged", "all"]), page: integer(1, 1000) }),
   "reviews.inboxCreate": object({ accountId: id, repository: id, input: object({ title: text({ maxLength: 256 }), body: text({ allowEmpty: true, maxLength: 60000 }), source: id, target: id, draft: boolean }) }),
