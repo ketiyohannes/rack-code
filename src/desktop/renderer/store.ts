@@ -63,6 +63,8 @@ export interface AppState {
   readonly runtimes: readonly RuntimeView[];
   /** Unified model catalog; each entry carries hidden host routing metadata. */
   readonly models: readonly ModelView[];
+  /** Provider discovery is independent of local session readiness. */
+  readonly modelsLoading: boolean;
   /** Per-device starred routing keys, retained even while a model is unavailable. */
   readonly favoriteModelKeys: readonly string[];
   readonly modelCatalogFailures: readonly { readonly providerName: string; readonly accountId: string }[];
@@ -110,6 +112,7 @@ export const INITIAL_STATE: AppState = {
   accounts: [],
   runtimes: [],
   models: [],
+  modelsLoading: false,
   favoriteModelKeys: [],
   modelCatalogFailures: [],
   projects: [],

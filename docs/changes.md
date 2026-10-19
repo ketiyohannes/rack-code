@@ -1,3 +1,10 @@
+# Desktop performance improvements (2026-10-19)
+
+- Replace full execution-history rewrites with flushed append-only transactions, indexed journal/usage reads, legacy migration and torn-tail recovery. Preserve persistence-before-delivery and interrupted-run recovery.
+- Scope transcript updates to their conversation, retain completed turns, fold new events incrementally, page older messages and journals, and bound session-cache payload. Publish local sessions before model discovery; cache catalog results, cap discoveries at two and evict settled overflow after bursts.
+- Share Timeline watches, filter ignored event batches, cache private index stat data and reduce healthy root probes. Skip hidden-window tool polling and back off unchanged Changes reads.
+- Validation: `npm run check` passed (283 tests, both type checks and both builds). The final cache-eviction regression and existing cache test passed separately (284 distinct tests in the resulting suite). Chromium checks passed for unrelated-event isolation, paging and retained turns during streaming; `git diff --check` passed. Local benchmark results and remaining limits are recorded in [performance improvements](performance-improvements.md). No live provider turn or packaged-app profiling was performed.
+
 # Performance investigation (2026-10-19)
 
 - Add [the desktop performance audit](performance-audit.md), ranking execution-history rewrites, transcript rebuilds, background Timeline captures, startup model discovery, eager history loading and Changes polling.

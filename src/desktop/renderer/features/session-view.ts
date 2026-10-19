@@ -21,9 +21,8 @@ import { openModal } from "../components/modal.js";
  * navigator (one tick per turn, highlighting those in view), and a
  * "Scroll to end" pill when the view is not at the bottom.
  *
- * The transcript re-renders on every state change (batched per frame), so
- * presentation state that must survive a re-render (expanded prompts,
- * opened tool rows/groups) lives in closure sets keyed by stable IDs.
+ * Completed turns retain their DOM while the active turn changes. History
+ * starts with the newest page; disclosure state survives paging by stable ID.
  */
 import type {
   RunView,
@@ -37,7 +36,8 @@ import { formatTime, h, replace, shortId } from "../dom.js";
 import { icon } from "../icons.js";
 import { renderMarkdown, type MarkdownActions } from "../markdown.js";
 import type { AppState, Store } from "../store.js";
-import { foldEvents, type TranscriptItem, type TranscriptState } from "../transcript.js";
+import { type TranscriptItem, type TranscriptState } from "../transcript.js";
+import { reconcileChildren, TranscriptCache } from "../render-cache.js";
 import { accountLabel, isActiveStatus } from "./run-format.js";
 import { importedTool, presentTool } from "./tool-presentation.js";
 import { formatAttachmentSize } from "./attachments.js";
@@ -68,20 +68,39 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
 
   const memory: ViewMemory = { expandedPrompts: new Set(), openTools: new Set(), openToolGroups: new Set(), collapsedThinking: new Set() };
   let current: AppState | undefined;
+  const folds = new TranscriptCache();
+  const turns = new Map<string, { signature: readonly unknown[]; node: HTMLElement }>();
+  let importedCache: { messages: readonly SessionMessageView[]; nodes: Node[] } | undefined;
+  let visibleRuns = 50;
+  let visibleMessages = 100;
   const rerender = () => {
+    turns.clear(); importedCache = undefined;
     if (current !== undefined) draw(current, false);
   };
-
-  // Folding is memoized per events array: unchanged live runs are not re-folded.
-  const folds = new WeakMap<readonly unknown[], TranscriptState>();
-  const fold = (events: readonly RuntimeEvent[]): TranscriptState => {
-    let state = folds.get(events);
-    if (state === undefined) {
-      state = foldEvents(events);
-      folds.set(events, state);
-    }
-    return state;
+  const fold = (id: string, events: readonly RuntimeEvent[]) => folds.fold(id, events);
+  const renderCachedTurn = (run: RunView, state: AppState): HTMLElement => {
+    const live = state.live[run.id];
+    const signature = [run, live, state.transcripts[run.id], state.accounts, state.session?.messages];
+    const cached = turns.get(run.id);
+    if (cached && signature.every((value, index) => value === cached.signature[index])) return cached.node;
+    const node = renderTurn(run, state, controller, fold, memory, rerender);
+    turns.set(run.id, { signature, node });
+    return node;
   };
+  const renderCachedHistory = (messages: readonly SessionMessageView[], state: AppState): Node[] => {
+    const source = state.session!.messages;
+    if (importedCache?.messages === source) return importedCache.nodes;
+    const nodes = renderImportedHistory(messages.slice(-visibleMessages), memory, rerender, markdownActions(controller));
+    importedCache = { messages: source, nodes };
+    return nodes;
+  };
+  const older = h("button", { class: "icon-button", type: "button", title: "Load earlier messages", aria: { label: "Load earlier messages" }, onClick: () => {
+    visibleRuns += 50; visibleMessages += 100; importedCache = undefined;
+    if (current !== undefined) {
+      void controller.loadSessionActivity(current.runs.slice(-visibleRuns).map((run) => run.id));
+      draw(current, false);
+    }
+  } }, icon("clock-counter-clockwise"));
 
   const isAtEnd = () => transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < AT_END_THRESHOLD;
   const updateChrome = () => {
@@ -94,9 +113,13 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     // Keep following streamed output only when the user is already at the end.
     const follow = jumpToEnd || isAtEnd();
     const scrollTop = transcript.scrollTop;
-    replace(transcript, ...renderTranscript(state, controller, fold, memory, rerender));
+    const children = renderTranscript(state, controller, fold, memory, rerender,
+      (run) => renderCachedTurn(run, state), (messages) => renderCachedHistory(messages, state), visibleRuns);
+    const hasEarlier = state.runs.length > visibleRuns || (state.session?.messages.filter((message) => message.metadata?.["imported"] === "true").length ?? 0) > visibleMessages;
+    reconcileChildren(transcript, hasEarlier ? [older, ...children] : children);
     transcript.scrollTop = follow ? transcript.scrollHeight : scrollTop;
-    renderRail(rail, transcript);
+    const ids = [...transcript.querySelectorAll<HTMLElement>(".turn")].map((turn) => turn.dataset["runId"] ?? turn.id).join("|");
+    if (rail.dataset["turns"] !== ids) { renderRail(rail, transcript); rail.dataset["turns"] = ids; }
     updateChrome();
   }
 
@@ -106,14 +129,16 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
 
   let lastSessionId: string | undefined;
   store.watch(
-    (state) => [state.session, state.runs, state.live, state.transcripts, state.accounts, state.selection.runId, state.journal, state.projects, state.runtimes, state.acknowledgedUnknown],
+    (state) => [state.page, state.session, state.selection.sessionId, state.selection.projectId, state.runs, state.transcripts, state.accounts, state.projects, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId)],
     (_slice, state) => {
       current = state;
       const sessionChanged = state.session?.id !== lastSessionId;
       lastSessionId = state.session?.id;
-      draw(state, sessionChanged);
+      if (sessionChanged) { turns.clear(); folds.clear(); importedCache = undefined; visibleRuns = 50; visibleMessages = 100; }
+      if (state.page === "chat" && !document.hidden) draw(state, sessionChanged);
     },
   );
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && current?.page === "chat") draw(current, false); });
 }
 
 function renderHeader(session: SessionView | undefined, projects: readonly ProjectView[], controller: Controller, projectId?: string): Node[] {
@@ -150,9 +175,12 @@ function renderHeader(session: SessionView | undefined, projects: readonly Proje
 function renderTranscript(
   state: AppState,
   controller: Controller,
-  fold: (events: readonly RuntimeEvent[]) => TranscriptState,
+  fold: (id: string, events: readonly RuntimeEvent[]) => TranscriptState,
   memory: ViewMemory,
   rerender: () => void,
+  renderRun: (run: RunView) => HTMLElement,
+  renderHistory: (messages: readonly SessionMessageView[]) => Node[],
+  visibleRuns: number,
 ): Node[] {
   const session = state.session;
   if (session === undefined || state.selection.sessionId === undefined) {
@@ -189,8 +217,8 @@ function renderTranscript(
   return [
     ...(session.importSource === undefined ? [] : [h("div", { class: "import-history-note note" }, icon("database"),
       `Imported from ${session.importSource.providerName}. Continuing uses recent conversation context in a new runtime session; the original remains unchanged.`)]),
-    ...renderImportedHistory(imported, memory, rerender, markdownActions(controller)),
-    ...runs.map((run) => renderTurn(run, state, controller, fold, memory, rerender)),
+    ...renderHistory(imported),
+    ...runs.slice(-visibleRuns).map(renderRun),
   ];
 }
 
@@ -239,7 +267,7 @@ function renderTurn(
   stored: RunView,
   state: AppState,
   controller: Controller,
-  fold: (events: readonly RuntimeEvent[]) => TranscriptState,
+  fold: (id: string, events: readonly RuntimeEvent[]) => TranscriptState,
   memory: ViewMemory,
   rerender: () => void,
 ): HTMLElement {
@@ -251,7 +279,7 @@ function renderTurn(
   const reply: Node[] = [];
   let copyText = "";
   const events = live?.events ?? state.transcripts[run.id];
-  const folded = events === undefined ? undefined : fold(events);
+  const folded = events === undefined ? undefined : fold(run.id, events);
   if (folded !== undefined) {
     for (const group of groupConsecutiveActivity(folded.items)) {
       const active = live !== undefined && isActiveStatus(run.status);
@@ -492,7 +520,7 @@ function renderRail(rail: HTMLElement, transcript: HTMLElement): void {
     class: "turn-tick",
     title: `Turn ${index + 1}`,
     aria: { label: `Go to turn ${index + 1}` },
-    onClick: () => turn.scrollIntoView({ behavior: "smooth", block: "start" }),
+    onClick: () => transcript.querySelectorAll<HTMLElement>(".turn")[index]?.scrollIntoView({ behavior: "smooth", block: "start" }),
   })));
 }
 

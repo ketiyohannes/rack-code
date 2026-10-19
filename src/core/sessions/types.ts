@@ -75,3 +75,11 @@ export interface SessionImportSnapshot {
   readonly session: SessionImportSource;
   readonly messages: readonly SessionImportMessage[];
 }
+
+/** Navigation metadata; message bodies stay in the selected session read. */
+export type SessionSummary = Pick<SessionRecord, "id" | "projectId" | "title" | "createdAt" | "updatedAt"> & { readonly messageCount: number };
+export function summarizeSession(session: SessionRecord): SessionSummary {
+  return { id: session.id, ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
+    ...(session.title === undefined ? {} : { title: session.title }), messageCount: session.messages.length,
+    createdAt: session.createdAt, updatedAt: session.updatedAt };
+}

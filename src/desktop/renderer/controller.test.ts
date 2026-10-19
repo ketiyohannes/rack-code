@@ -423,3 +423,43 @@ test("explicit chat editor targets keep their workspace when another project is 
   const target = await new Controller(host, store).resolveEditorTarget("report.md", undefined, "original-chat");
   assert.deepEqual(target, { path: "report.md", base: "/chat-files/original-chat" });
 });
+
+test("startup publishes sessions without waiting for a stalled provider catalog", async () => {
+  const store = new ImmediateStore();
+  let finishModels!: (value: unknown) => void;
+  let requested = 0;
+  const host = { onEvent: () => () => {}, call: async (command: string) => {
+    if (command === "models.list") { requested++; return new Promise(resolve => { finishModels = resolve; }); }
+    if (command === "sessions.list") return [{ ...session, messageCount: 0 }];
+    if (command === "sessions.get") return session;
+    return [];
+  } } as unknown as HostClient;
+  await new Controller(host, store).start();
+  assert.equal(store.get().host.status, "ready");
+  assert.equal(store.get().session?.id, session.id);
+  assert.equal(requested, 1, "discovery starts once in the selected context");
+  finishModels({ models: [], failures: [] });
+});
+
+test("history initially fetches only the latest page with bounded concurrency", async () => {
+  const store = new ImmediateStore();
+  const runs = Array.from({ length: 120 }, (_, index) => ({ ...run, id: `run-${index}` }));
+  let reads = 0, active = 0, peak = 0;
+  const host = { call: async (command: string) => {
+    if (command === "sessions.get") return session;
+    if (command === "runs.list") return runs;
+    if (command === "models.list") return { models: [], failures: [] };
+    if (command === "runs.journal") {
+      reads++; active++; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 1)); active--; return [];
+    }
+    return [];
+  } } as unknown as HostClient;
+  const controller = new Controller(host, store);
+  await controller.selectSession(session.id);
+  assert.equal(reads, 50); assert.ok(peak <= 4);
+  await controller.loadSessionActivity(runs.slice(-100).map(run => run.id));
+  assert.equal(reads, 100); assert.ok(peak <= 4);
+  assert.equal(store.get().transcripts["run-0"], undefined);
+  assert.deepEqual(store.get().transcripts["run-20"], []);
+});

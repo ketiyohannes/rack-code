@@ -161,6 +161,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   }
 
   function canRun(state: AppState): boolean {
+    if (state.modelsLoading) return false;
     const selected = model.selected;
     // Settings updates synchronously, while DOM watchers run next frame. Check
     // the current preference here too, so an unstarred model cannot be sent
@@ -305,12 +306,13 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   }
 
   store.watch(
-    (state) => [state.models, state.favoriteModelKeys, state.modelCatalogFailures, state.runtimes, state.accounts, state.capabilities, state.session, state.selection.sessionId, state.runs, state.live, state.acknowledgedUnknown, state.host, activeKey(state)],
+    (state) => [state.models, state.modelsLoading, state.favoriteModelKeys, state.modelCatalogFailures, state.runtimes, state.accounts, state.capabilities, state.session, state.selection.sessionId, state.runs, state.acknowledgedUnknown, state.host, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId).flatMap((live) => [live.run, live.cancelRequested, live.pendingApprovals, live.pendingQuestions])],
     (_slice, state) => refresh(state),
   );
 }
 
 function modelCatalogMessage(state: AppState): string | undefined {
+  if (state.modelsLoading) return "Loading available models…";
   if (state.models.length > 0 && state.modelCatalogFailures.length === 0) return undefined;
   if (state.models.length === 0 && state.modelCatalogFailures.length === 0) {
     return "Connect a provider account to load its available models.";

@@ -308,6 +308,9 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   }
 
   /** Serialize reads and invalidate replies on either workspace or repository changes. */
+  // Keep polling responsive after edits, then back off on stable worktrees.
+  let pollDelay = 2000;
+  let nextPoll = 0;
   async function refresh(): Promise<void> {
     const state = store.get();
     // Read the project this panel's repository state belongs to, never the
@@ -317,7 +320,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     // project with the old repository paths read the wrong folder. When they
     // differ, wait; the watcher resets the panel and refreshes.
     const selected = projectId;
-    if (inFlight || openSurface !== "changes" || !isVisible() || state.host.status !== "ready" || selected === undefined
+    if (inFlight || document.hidden || openSurface !== "changes" || !isVisible() || state.host.status !== "ready" || selected === undefined
       || selected !== state.selection.projectId) return;
     inFlight = true;
     const version = generation;
@@ -343,6 +346,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
         render();
       }
       const paths = repository === "" ? repositories.paths : repository === undefined ? [] : [repository];
+      let changed = false;
       // A failed repository does not hide successful siblings in All repositories.
       for (const path of paths) {
         let result: { snapshot?: ProjectChanges; error?: string };
@@ -351,9 +355,12 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
         if (!current()) return;
         if (JSON.stringify(snapshots.get(path)) !== JSON.stringify(result)) {
           snapshots.set(path, result);
-          render();
+          changed = true;
         }
       }
+      if (changed) render();
+      pollDelay = changed ? 2000 : Math.min(10_000, pollDelay * 2);
+      nextPoll = Date.now() + pollDelay;
     } catch (failure) {
       if (!current()) return;
       error = failure instanceof Error ? failure.message : String(failure);
@@ -426,7 +433,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   // Poll current filesystem changes even when a tool produces no native diff.
   // Refresh also follows project selection and run start/finish, independently
   // of chat deltas, so streaming text never starts a Git process per token.
-  const interval = window.setInterval(() => void refresh(), 2000);
+  const interval = window.setInterval(() => { if (Date.now() >= nextPoll) void refresh(); }, 2000);
   // Hidden windows throttle timers; catch up as soon as the window is shown.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void refresh();
