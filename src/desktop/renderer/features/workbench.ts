@@ -9,9 +9,12 @@ import type { ProjectChanges, ProjectRepositories, RepositoryDiscoveryOptions } 
 import { createDropdown } from "../components/dropdown.js";
 import type { Controller } from "../controller.js";
 import { renderRepositoryChanges, type ChangesMemory } from "./changes-view.js";
-import { openPopover } from "../components/popover.js";
+import { openPopover, type PopoverHandle } from "../components/popover.js";
 import { renderRunDetails } from "./run-detail.js";
 import { createTimelinePanel } from "./timeline-panel.js";
+import { createSideChat } from "./side-chat.js";
+import { sessionSideChatContext } from "./side-chat-contexts.js";
+import type { HostClient } from "../host-client.js";
 import { createFilesPanel } from "./files-panel.js";
 import { createTerminalPanel } from "./terminal-panel.js";
 import { createBrowserPanel } from "./browser-panel.js";
@@ -20,7 +23,7 @@ import { icon } from "../icons.js";
 import type { Store } from "../store.js";
 import { SURFACES, type SurfaceDefinition } from "../surfaces.js";
 
-export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () => boolean, controller: Controller): void {
+export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () => boolean, controller: Controller, host: HostClient): void {
   let nextBlankId = 1;
   let tabs = ["new-tab-1"];
   let openSurface: string | undefined = tabs[0];
@@ -50,22 +53,43 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   });
   const body = h("div", { class: "workbench-body" });
   const tabList = h("div", { class: "workbench-tabs", role: "tablist", aria: { label: "Workbench tools" } });
-  const addTab = h("button", { class: "icon-button workbench-add-tab", type: "button", title: "Add tool tab", aria: { label: "Add tool tab" }, onClick: () => {
-    const menu = h("div", { class: "menu workbench-tool-menu" });
-    const picker = openPopover({ anchor: addTab, content: menu, minWidth: 220, align: "end" });
-    menu.append(h("button", { class: "menu-item", type: "button", onClick: () => { picker.close(); newTab(); focusTab(); } }, icon("plus"), "New tab"), h("div", { class: "menu-divider" }));
+  let toolMenu: PopoverHandle | undefined;
+  const addTab = h("button", { class: "icon-button workbench-add-tab", type: "button", title: "Add tool tab", aria: { label: "Add tool tab", haspopup: "menu", expanded: "false" }, onClick: () => {
+    if (toolMenu) { toolMenu.close(); return; }
+    const menu = h("div", { class: "menu workbench-tool-menu", role: "menu", aria: { label: "Add a tool tab" } });
+    const picker = openPopover({ anchor: addTab, content: menu, minWidth: 220, align: "end", onClose: () => { toolMenu = undefined; addTab.setAttribute("aria-expanded", "false"); } });
+    toolMenu = picker;
+    addTab.setAttribute("aria-expanded", "true");
+    menu.append(h("button", { class: "menu-item", type: "button", role: "menuitem", onClick: () => { picker.close(); newTab(); focusTab(); } }, icon("plus"), "New tab"), h("div", { class: "menu-divider" }));
     for (const surface of SURFACES) menu.append(h("button", {
-      class: "menu-item", type: "button", onClick: () => {
+      class: "menu-item", type: "button", role: "menuitem", onClick: () => {
         picker.close();
         openTool(surface.id);
         tabList.querySelector<HTMLElement>(`[data-tool="${surface.id}"]`)?.focus();
       },
     }, icon(surface.icon), surface.title, tabs.includes(surface.id) ? icon("check") : null));
+    // Populate before measuring; keyboard opening starts inside the menu.
+    picker.reposition();
+    const items = [...menu.querySelectorAll<HTMLButtonElement>("button")];
+    items[0]?.focus();
+    menu.addEventListener("keydown", (event) => {
+      const index = items.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+        : event.key === "ArrowDown" ? (index + 1) % items.length
+          : event.key === "ArrowUp" ? (index + items.length - 1) % items.length : undefined;
+      if (next !== undefined) { event.preventDefault(); items[next]?.focus(); }
+      if (event.key === "Tab") { picker.close(); addTab.focus(); }
+    });
   } }, icon("plus"));
   root.querySelector(".workbench-top")?.append(tabList, addTab);
   root.append(body);
   // Created once so its search field and expansion state survive re-renders.
   const timelinePanel = createTimelinePanel(store, controller, isVisible);
+  // One side chat instance; its context follows the selected main session.
+  const sideChat = createSideChat(store, controller, host);
+  store.watch((state) => [state.session?.id, state.session?.title, state.selection.sessionId, state.projects], (_slice, state) => {
+    sideChat.setContext(state.session && state.selection.sessionId === state.session.id ? sessionSideChatContext(store, state.session.id) : undefined);
+  });
   const filesPanel = createFilesPanel(store, controller, isVisible);
   const terminalPanel = createTerminalPanel(store, controller, isVisible);
   const browserPanel = createBrowserPanel(store, controller, isVisible);
@@ -185,7 +209,8 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     const persistent = surface?.id === "files" ? filesPanel.element
       : surface?.id === "terminal" ? terminalPanel.element
         : surface?.id === "browser" ? browserPanel.element
-          : surface?.id === "timeline" ? timelinePanel.element : undefined;
+          : surface?.id === "timeline" ? timelinePanel.element
+            : surface?.id === "side-chat" ? sideChat.element : undefined;
     if (surface === undefined) {
       replace(body, renderLauncher((id) => { openTool(id, true); focusTab(); }));
     } else if (persistent === undefined || !body.contains(persistent)) {
@@ -194,7 +219,8 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
           : surface.id === "timeline" ? timelinePanel.element
             : surface.id === "files" ? filesPanel.element
               : surface.id === "terminal" ? terminalPanel.element
-                : surface.id === "browser" ? browserPanel.element : undefined));
+                : surface.id === "browser" ? browserPanel.element
+                  : surface.id === "side-chat" ? sideChat.element : undefined));
     }
     timelinePanel.setActive(store.get().page === "chat" && surface?.id === "timeline");
     filesPanel.setActive(store.get().page === "chat" && surface?.id === "files");
@@ -237,7 +263,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   /** Diagnostics move to the side panel, keeping the chat footer quiet. */
   function renderDetails(): HTMLElement {
     const run = selectedRun();
-    return h("div", { class: "changes-content" }, run === undefined ? h("p", { class: "note" }, "No runs in this session yet.")
+    return h("div", { class: "changes-content" }, run === undefined ? h("div", { class: "panel-empty-state" }, icon("list-bullets"), h("strong", {}, "The details behind the work"), h("p", {}, "Run a task to see its model, account, usage and execution history here."))
       : h("div", {}, (() => {
         runPicker.setOptions(sessionRuns().map((candidate) => ({
           value: candidate.id, label: candidate.prompt.slice(0, 60) || "Run", description: candidate.status,
@@ -425,6 +451,12 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
 
   // Settings changes affect availability; enabling a plugin never opens tabs.
   store.watch((state) => [state.enabledPlugins, state.page], () => { render(); void refresh(); });
+  store.watch((state) => state.toolRequest?.seq, (seq) => {
+    const request = store.get().toolRequest;
+    if (seq === undefined || request === undefined) return;
+    openTool(request.id, true);
+    if (request.id === "side-chat") sideChat.focus();
+  });
   store.watch((state) => [state.selection.runId, state.journal, state.live, state.runs, state.session], () => {
     if (openSurface === "run-details") render();
   });
@@ -452,9 +484,8 @@ function isBlankTab(id: string | undefined): boolean { return id?.startsWith("ne
 /** Restore the original tool list as the contents of a blank workbench tab. */
 function renderLauncher(open: (id: string) => void): HTMLElement {
   return h("div", { class: "launcher" },
-    h("p", { class: "launcher-title" }, "Open a surface"),
-    h("div", { class: "launcher-list" }, ...SURFACES.map((surface) => h("button", {
-      class: "launcher-item", type: "button", title: surface.description, onClick: () => open(surface.id),
-    }, icon(surface.icon), h("span", { class: "launcher-label" }, surface.title), surface.preview ? h("span", { class: "soon" }, "Preview") : null))),
+    h("div", { class: "launcher-list", role: "group", aria: { label: "Open a tool" } }, ...SURFACES.map((surface) => h("button", {
+      class: "launcher-item", type: "button", title: `${surface.title} · ${surface.description}`, aria: { label: surface.title }, onClick: () => open(surface.id),
+    }, icon(surface.icon), h("span", { class: "launcher-label sr-only" }, surface.title), surface.preview ? h("span", { class: "soon" }, "Preview") : null))),
   );
 }

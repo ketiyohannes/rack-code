@@ -60,9 +60,9 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   const transcript = h("div", { class: "transcript" });
   const rail = h("nav", { class: "turn-rail", aria: { label: "Turns" } });
   const scrollToEnd = h("button", {
-    class: "scroll-end",
+    class: "scroll-end", title: "Scroll to end", aria: { label: "Scroll to end" },
     onClick: () => transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" }),
-  }, icon("caret-down"), "Scroll to end");
+  }, icon("caret-down"));
   scrollToEnd.hidden = true;
   root.append(transcript, rail, scrollToEnd);
 
@@ -119,7 +119,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
 function renderHeader(session: SessionView | undefined, projects: readonly ProjectView[], controller: Controller, projectId?: string): Node[] {
   if (session === undefined) {
     const project = projects.find((entry) => entry.id === projectId);
-    return [h("span", { class: "session-title muted" }, project?.path.split(/[\\/]/).at(-1) ?? "No session"),
+    return [h("span", { class: "session-title muted" }, project?.path.split(/[\\/]/).at(-1) ?? "Workspace"),
       ...(project ? [createOpenInButton(controller, () => controller.resolveEditorTarget(".", project.path))] : [])];
   }
   const project = projects.find((candidate) => candidate.id === session.projectId);
@@ -131,6 +131,7 @@ function renderHeader(session: SessionView | undefined, projects: readonly Proje
     h("span", { class: "session-title" }, session.title ?? (session.projectId === undefined ? "New chat" : `Session ${shortId(session.id)}`)),
     h("span", { class: "session-meta", title: meta }, meta),
     h("div", { class: "session-chips" },
+      h("button", { class: "icon-button", type: "button", title: "Side chat: ask without interrupting this session", aria: { label: "Open side chat" }, onClick: () => controller.openTool("side-chat") }, icon("chat-circle-text")),
       createOpenInButton(controller, () => controller.resolveEditorTarget(".", project?.path, session.id)),
       session.projectId === undefined ? h("button", { class: "button button-small", type: "button", onClick: () => {
         const content = h("div", { class: "modal-body attach-project-list" },
@@ -155,7 +156,23 @@ function renderTranscript(
 ): Node[] {
   const session = state.session;
   if (session === undefined || state.selection.sessionId === undefined) {
-    return [placeholder("chat-circle-text", "No session selected", "Start a new chat, or choose a project to work with its files.")];
+    const project = state.projects.find((entry) => entry.id === state.selection.projectId);
+    const start = async () => {
+      if (project) { await controller.createSessionForProject(project.id); return; }
+      const path = await controller.selectDirectory("Choose project folder");
+      if (path) await controller.createProject({ path });
+    };
+    return [h("div", { class: "placeholder welcome" },
+      h("span", { class: "welcome-eyebrow" }, "THINKING & CODE"),
+      h("span", { class: "welcome-mark", aria: { hidden: "true" } }, icon("stack")),
+      h("h1", { class: "welcome-title" }, project ? "Ready when you are." : "A little space. A big idea."),
+      h("p", { class: "placeholder-text" }, project
+        ? `Start a session in ${project.path.split(/[\\/]/).at(-1)} and turn your next idea into working code.`
+        : "Open a project, connect your account, and give your next idea room to take shape."),
+      h("div", { class: "welcome-actions" },
+        h("button", { class: "icon-button welcome-primary", type: "button", title: project ? "Start a session" : "Open a project folder", aria: { label: project ? "Start a session" : "Open a project folder" }, onClick: () => void start() }, icon(project ? "plus" : "folder-simple-plus")),
+        h("button", { class: "icon-button", type: "button", title: "Manage provider accounts", aria: { label: "Manage provider accounts" }, onClick: () => controller.openSettings("accounts") }, icon("plugs"))),
+      h("p", { class: "welcome-caption" }, project ? "Your files stay right where they are." : "Your projects. Your accounts. Your workspace."))];
   }
 
   // Live runs of this session that the persisted list does not contain yet.

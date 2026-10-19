@@ -42,8 +42,8 @@ import type {
   TimelineStatus,
 } from "../../../contracts/desktop/index.js";
 import type { Controller } from "../controller.js";
-import { h, replace } from "../dom.js";
-import { icon } from "../icons.js";
+import { h, replace, relativeTime } from "../dom.js";
+import { icon, type IconName } from "../icons.js";
 import type { Store } from "../store.js";
 import { diffRows, type DiffRow } from "./change-diff.js";
 import { buildTree, type TreeFolder } from "./timeline-tree.js";
@@ -110,9 +110,9 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
     onInput: () => { query = search.value; renderList(); },
   });
   const disable = h("button", {
-    class: "button button-small", type: "button", title: "Stop recording and hide this session's timeline. History is kept.",
+    class: "icon-button", type: "button", title: "Stop recording this session. History is kept.", aria: { label: "Stop recording this session" },
     onClick: () => void (scope === "project" ? setProjectRecording() : setEnabled(false)),
-  }, "Disable");
+  }, icon("stop"));
   const projectTab = h("button", {
     type: "button", role: "tab", onClick: () => changeScope("project"),
   }, "Project history");
@@ -131,10 +131,10 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
   const list = h("div", { class: "timeline-list", role: "list", aria: { label: "Recorded changes" } });
   const repositoryName = h("span", { class: "timeline-repository-name" });
   const repositoryContext = h("div", { class: "timeline-repository-context" }, repositoryName,
-    h("button", { class: "button button-small", type: "button", onClick: () => {
+    h("button", { class: "icon-button", type: "button", title: "Back to project", aria: { label: "Back to project" }, onClick: () => {
       projectId = selectedProjectId;
       reset(); render(); void load();
-    } }, "Back to project"));
+    } }, icon("arrow-left")));
   const element = h("div", { class: "git-changes-content timeline-content" }, repositoryContext, tabs, controls, notices, list);
 
   /** Drop state whenever the query identity changes, including during a load. */
@@ -315,8 +315,9 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
     // Native tab semantics: arrows move between the two views.
     projectTab.tabIndex = scope === "project" ? 0 : -1;
     sessionTab.tabIndex = scope === "session" ? 0 : -1;
-    disable.textContent = scope === "project" ? projectHistory?.recording ? "Pause" : "Resume" : "Disable";
-    disable.title = scope === "project" ? "Pause or resume automatic project recording. History is kept." : "Stop recording this session. History is kept.";
+    replace(disable, icon(scope === "project" ? projectHistory?.recording ? "pause" : "play" : "stop"));
+    disable.title = scope === "project" ? `${projectHistory?.recording ? "Pause" : "Resume"} project recording. History is kept.` : "Stop recording this session. History is kept.";
+    disable.setAttribute("aria-label", disable.title);
     controls.hidden = !enabled;
     disable.disabled = changing || (scope === "session" && busy());
     // Polling must not detach focused folder buttons when the discovery and
@@ -347,17 +348,17 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
     if (loadError !== undefined) return [h("p", { class: "error-line timeline-note" }, loadError)];
     if (status === undefined) return [note("Checking timeline support…")];
     if (!status.supported) return [note(status.reason ?? "Timeline is not supported for this project."),
-      h("button", { class: "button button-small", type: "button", onClick: () => changeScope("project") }, "Choose a repository folder")];
+      h("button", { class: "button button-small timeline-action", type: "button", onClick: () => changeScope("project") }, icon("folder-open"), h("span", {}, "Choose a repository folder"))];
     if (!status.enabled) {
       lines.push(
         h("div", { class: "timeline-intro" },
           h("p", {}, "Timeline is optional. It records observed states of this project's repository while runs edit it, so you can inspect intermediate changes later."),
           h("p", {}, "Import timeline brings in recorded changes for this session and records future changes. Snapshots are stored as hidden Git references in this repository; your branch, staging area, and files are not changed."),
           h("button", {
-            class: "button button-primary button-small", type: "button", disabled: changing || busy(),
+            class: "button button-primary button-small timeline-action", type: "button", disabled: changing || busy(),
             title: busy() ? "Stop the current run before changing timeline settings." : "Import recorded changes and record future changes",
             onClick: () => void setEnabled(true),
-          }, changing ? "Importing…" : "Import timeline")),
+          }, icon(changing ? "circle-notch" : "record", changing ? { className: "spin" } : undefined), h("span", {}, changing ? "Importing…" : "Import timeline"))),
       );
     }
     if (actionError !== undefined) lines.push(h("p", { class: "error-line timeline-note" }, actionError));
@@ -389,17 +390,20 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
     const open = expansion.get(entry.id) ?? latest;
     const count = entry.files.length;
     const date = new Date(entry.createdAt);
-    const time = scope === "project" ? date.toLocaleDateString([], { month: "short", day: "numeric" })
-      : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
     const provenance = entry.source === "git" ? `Git commit ${"snapshot" in entry ? entry.snapshot.slice(0, 8) : ""}`
       : "sessionId" in entry ? `Session ${entry.sessionId}` : "Recorded change";
-    const details = h("details", { class: "timeline-entry", open, data: { checkpointId: entry.id } },
+    // Kind is an icon plus a word: a Git commit, an agent run checkpoint, or an observed edit.
+    const kind: { icon: IconName; label: string; tone: string } = entry.source === "git" ? { icon: "git-commit", label: "Commit", tone: "commit" }
+      : entry.runId !== undefined ? { icon: "robot", label: scope === "session" ? `Run · #${entry.position}` : "Agent run", tone: "run" }
+        : { icon: "pulse", label: scope === "session" ? `#${entry.position}` : "Observed edit", tone: "observed" };
+    const details = h("details", { class: `timeline-entry kind-${kind.tone}`, open, data: { checkpointId: entry.id } },
       h("summary", { title: `${entry.label} · ${provenance} · ${date.toLocaleString()}` },
         icon("caret-right", { className: "activity-caret" }),
-        h("span", { class: "timeline-position" }, scope === "project" ? entry.source === "git" ? "Git" : entry.runId === undefined ? "Change" : "Run" : `#${entry.position}`),
-        h("span", { class: "timeline-title" }, `${count} ${count === 1 ? "file" : "files"} changed`),
-        h("span", { class: "timeline-label" }, entry.label),
-        h("time", { class: "timeline-time" }, time),
+        h("span", { class: "timeline-kind", title: kind.label }, icon(kind.icon)),
+        h("span", { class: "timeline-text" },
+          h("span", { class: "timeline-label" }, entry.label),
+          h("span", { class: "timeline-meta" }, h("span", {}, kind.label), h("span", {}, `${count} ${count === 1 ? "file" : "files"}`),
+            h("time", { class: "timeline-time", title: date.toLocaleString() }, relativeTime(entry.createdAt)))),
         openSnapshotButton(entry)),
     );
     if (open) details.append(...renderBody(entry));

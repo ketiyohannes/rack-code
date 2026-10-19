@@ -49,7 +49,7 @@ if (params.get("view") === "timeline") {
   mountUsage(usage, store, controller, host);
   mountSessionView(regions.session, regions.sessionHeader, store, controller);
   mountComposer(regions.composer, store, controller);
-  mountWorkbench(regions.workbench, store, regions.isWorkbenchVisible, controller);
+  mountWorkbench(regions.workbench, store, regions.isWorkbenchVisible, controller, host);
   mountSettings(regions.overlay, store, controller);
 
   void controller.start();

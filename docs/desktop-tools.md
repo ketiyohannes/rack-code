@@ -1,7 +1,8 @@
 # Terminal, Browser and Files
 
-The right sidebar starts with one empty **New tab** showing the surface list,
-including Files, Terminal, Browser, Timeline, Retrospective and the other tools.
+The right sidebar starts with one empty **New tab** showing an icon grid for
+Changes, Run details, Terminal, Browser, Files and Timeline. Tooltips identify
+each tool and its purpose. Planned tools are omitted until implemented.
 Choose an item to fill that tab. **+** keeps its dropdown: choose **New tab**
 for another blank tab, or a tool for another tool tab. Choosing an optional tool
 enables its Settings plugin. Existing tools are focused rather than duplicated,
@@ -129,7 +130,7 @@ Files and Terminal also accept session context without a project. Composition re
 
 ## Opening in an editor
 
-**Open in** in the conversation/project header opens the working folder. The
+The **Open in editor** code icon in the conversation/project header opens the working folder. The
 Files panel's editor button opens the selected file. The menu detects installed
 VS Code/Insiders, Cursor, Windsurf, Zed, Sublime Text, JetBrains editors, and
 other common editors. **Choose application…** invokes the OS picker for other
@@ -146,9 +147,12 @@ project/chat workspace even if navigation changes while the menu is loading.
 
 ## Typography and bundled assets
 
-A shared 15px content scale covers prompts, user bubbles, assistant prose,
-inline/fenced code, tool output, diffs, Files and terminal text. Navigation and
-metadata retain their compact sizes. Normal app zoom scales content together.
+Every font size comes from one type scale defined at the top of `styles.css`:
+10, 11, 12, 13 (interface base), 14, 16, 18 and 22 px steps. Prompts, user
+bubbles, assistant prose and tables use the 14px content size. Inline/fenced
+code, tool output, diffs, Files and terminal text use the 13px code size.
+Navigation and metadata retain the compact steps. Normal app zoom scales
+everything together.
 The original xterm renderer is bundled locally with its CSS, with no external
 terminal application or WASM asset. Its generated style elements supply cell
 geometry and ANSI colors; the trusted renderer still blocks inline scripts,
@@ -161,3 +165,13 @@ minimum is 148px and the maximum keeps conversation history visible. The height
 persists per device. Long drafts, attachments and question cards scroll within
 the prompt area. Sidebars retain their draggable inner-edge width splitters;
 the native browser detaches during a drag and returns at the final bounds.
+
+
+## Compact controls (2026-10-19)
+
+Files uses named icon buttons for save, reload and external editor selection.
+The reload tooltip changes to “Discard changes and reload file” for a dirty
+draft; the existing discard confirmation still protects that draft. Save keeps
+the existing keyboard shortcut, version checks and disabled/pending behavior.
+The + tool menu starts keyboard focus on its first item and supports arrows,
+Home/End, Escape and Tab. Tool enablement and resource lifetimes are unchanged.

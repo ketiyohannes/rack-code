@@ -1,3 +1,6 @@
+import Pause from "@phosphor-icons/core/assets/regular/pause.svg";
+import Play from "@phosphor-icons/core/assets/regular/play.svg";
+import FloppyDisk from "@phosphor-icons/core/assets/regular/floppy-disk.svg";
 import ListChecks from "@phosphor-icons/core/assets/regular/list-checks.svg";
 import Sparkle from "@phosphor-icons/core/assets/regular/sparkle.svg";
 import GitPullRequest from "@phosphor-icons/core/assets/regular/git-pull-request.svg";
@@ -79,6 +82,20 @@ import Brain from "@phosphor-icons/core/assets/regular/brain.svg";
 import Gauge from "@phosphor-icons/core/assets/regular/gauge.svg";
 import FlowArrow from "@phosphor-icons/core/assets/regular/flow-arrow.svg";
 import ArrowLeft from "@phosphor-icons/core/assets/regular/arrow-left.svg";
+import GithubLogo from "@phosphor-icons/core/assets/regular/github-logo.svg";
+import RecordIcon from "@phosphor-icons/core/assets/regular/record.svg";
+import TextAlignLeft from "@phosphor-icons/core/assets/regular/text-align-left.svg";
+import SquareSplitHorizontal from "@phosphor-icons/core/assets/regular/square-split-horizontal.svg";
+import Pulse from "@phosphor-icons/core/assets/regular/pulse.svg";
+import GitCommit from "@phosphor-icons/core/assets/regular/git-commit.svg";
+import FileMinus from "@phosphor-icons/core/assets/regular/file-minus.svg";
+import FilePlus from "@phosphor-icons/core/assets/regular/file-plus.svg";
+import MagnifyingGlass from "@phosphor-icons/core/assets/regular/magnifying-glass.svg";
+import MinusCircle from "@phosphor-icons/core/assets/regular/minus-circle.svg";
+import CircleDashed from "@phosphor-icons/core/assets/regular/circle-dashed.svg";
+import ArrowCounterClockwise from "@phosphor-icons/core/assets/regular/arrow-counter-clockwise.svg";
+import PaperPlaneRight from "@phosphor-icons/core/assets/regular/paper-plane-right.svg";
+import GitMerge from "@phosphor-icons/core/assets/regular/git-merge.svg";
 import Clipboard from "@phosphor-icons/core/assets/regular/clipboard.svg";
 import Image from "@phosphor-icons/core/assets/regular/image.svg";
 import FileText from "@phosphor-icons/core/assets/regular/file-text.svg";
@@ -89,6 +106,9 @@ import Star from "@phosphor-icons/core/assets/regular/star.svg";
 import StarFill from "@phosphor-icons/core/assets/fill/star-fill.svg";
 
 const ICONS = {
+  "floppy-disk": FloppyDisk,
+  "pause": Pause,
+  "play": Play,
   "list-checks": ListChecks,
   "sparkle": Sparkle,
   "git-pull-request": GitPullRequest,
@@ -167,6 +187,20 @@ const ICONS = {
   "gauge": Gauge,
   "flow-arrow": FlowArrow,
   "arrow-left": ArrowLeft,
+  "github-logo": GithubLogo,
+  "record": RecordIcon,
+  "text-align-left": TextAlignLeft,
+  "square-split-horizontal": SquareSplitHorizontal,
+  "pulse": Pulse,
+  "git-commit": GitCommit,
+  "file-minus": FileMinus,
+  "file-plus": FilePlus,
+  "magnifying-glass": MagnifyingGlass,
+  "minus-circle": MinusCircle,
+  "circle-dashed": CircleDashed,
+  "arrow-counter-clockwise": ArrowCounterClockwise,
+  "paper-plane-right": PaperPlaneRight,
+  "git-merge": GitMerge,
 } as const;
 
 export type IconName = keyof typeof ICONS;

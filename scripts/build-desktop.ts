@@ -21,7 +21,7 @@
  *
  * Usage: tsx scripts/build-desktop.ts [--watch]
  */
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,6 +30,8 @@ import { build, context, type BuildOptions } from "esbuild";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outDirectory = join(root, "dist-desktop");
 const watch = process.argv.includes("--watch");
+// About must describe the built release rather than a separately maintained label.
+const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { version: string };
 
 const shared: BuildOptions = {
   bundle: true,
@@ -70,6 +72,7 @@ const targets: BuildOptions[] = [
     platform: "browser",
     format: "iife",
     loader: { ".svg": "text" },
+    define: { __APP_VERSION__: JSON.stringify(version) },
   },
 ];
 

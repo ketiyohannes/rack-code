@@ -3,8 +3,14 @@ import type { CreatePull, PullDetail, PullList, PullRequest, PullState, ReviewAc
 export type Involvement = "involved" | "created" | "review_requested" | "assigned";
 export interface ReviewAccount {
   readonly id: string; readonly host: string; readonly login: string;
-  readonly source: "cli" | "environment" | "token";
+  readonly source: "cli" | "environment";
 }
+/** A browser sign-in waiting for the user to enter `userCode` at `verificationUrl`. */
+export interface AccountLogin { readonly loginId: string; readonly host: string; readonly userCode: string; readonly verificationUrl: string }
+export type AccountLoginResult =
+  | { readonly status: "completed"; readonly account: ReviewAccount }
+  | { readonly status: "failed"; readonly error: string }
+  | { readonly status: "cancelled" };
 export interface AccountCatalog { readonly accounts: readonly ReviewAccount[]; readonly notices: readonly string[] }
 /** Account identity is part of the target even when several accounts can read the same PR. */
 export interface RepositoryTarget { readonly accountId: string; readonly repository: string }
@@ -26,7 +32,11 @@ export interface LocalReview { readonly projectId: string; readonly remote: stri
 export interface InboxDetail extends PullDetail { readonly local?: LocalReview }
 export interface ReviewInboxGateway {
   accounts(refresh: boolean): Promise<AccountCatalog>;
-  connect(host: string, token: string): Promise<ReviewAccount>;
+  /** Browser sign-in; no token passes through Rack. */
+  beginLogin(host: string): Promise<AccountLogin>;
+  finishLogin(loginId: string): Promise<AccountLoginResult>;
+  cancelLogin(loginId: string): void;
+  cancelLogins(): void;
   list(query: InboxQuery): Promise<InboxResult>;
   repositoryList(target: RepositoryTarget, query: string, state: PullState, page: number): Promise<PullList>;
   create(target: RepositoryTarget, input: CreatePull): Promise<PullRequest>;
@@ -44,7 +54,10 @@ export class ReviewInboxService {
   constructor(private readonly gateway: ReviewInboxGateway,
     private readonly projects: () => Promise<readonly { id: string; path: string }[]>) {}
   accounts(refresh = false) { return this.gateway.accounts(refresh); }
-  connect(host: string, token: string) { return this.gateway.connect(host, token); }
+  beginLogin(host: string) { return this.gateway.beginLogin(host); }
+  finishLogin(loginId: string) { return this.gateway.finishLogin(loginId); }
+  cancelLogin(loginId: string) { this.gateway.cancelLogin(loginId); }
+  cancelLogins() { this.gateway.cancelLogins(); }
   list(query: InboxQuery) { return this.gateway.list(query); }
   repositoryList(target: RepositoryTarget, query: string, state: PullState, page: number) { return this.gateway.repositoryList(target, query, state, page); }
   async create(target: RepositoryTarget, input: CreatePull) {

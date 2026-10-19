@@ -210,6 +210,8 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
   window.addEventListener("resize", fitWidths);
   fitWidths();
 
+  // A tool request (e.g. the session header's Side chat button) reveals the right panel.
+  store.watch((state) => state.toolRequest?.seq, (seq) => { if (seq !== undefined && layout.right) setCollapsed("right", false); });
   store.watch((state) => state.page, (page) => {
     root.dataset.page = page;
     regions.page.hidden = page === "chat";

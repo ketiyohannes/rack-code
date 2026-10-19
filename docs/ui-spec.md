@@ -4,6 +4,17 @@ Status: specification for the completed headless MVP, updated 2026-10-14. The fi
 
 The UI talks to an application host through typed commands and serializable snapshots/events. It never reads JSON files, provider credentials, SDK objects, or native runtime protocol messages directly. The host exposes the operations already implemented by `createApplication` and should add thin list/read queries where the current service surface does not yet provide one.
 
+## Desktop presentation update (2026-10-19)
+
+Preserve the paired palettes and bundled typography. Use named, tooltipped
+icons for routine actions and readable text for content, menu options and
+consequential decisions. Empty states must lead to existing actions. The right
+launcher lists only implemented tools. Settings offers General, Accounts,
+Models, Plugins, Shortcuts and About, with focus containment/restoration and
+keyboard-operable appearance radios. Requests and notices stack above the
+composer without reducing the visible prompt or hiding send/stop. See the
+[current desktop presentation](desktop.md#ui-refinement-2026-10-19).
+
 ## Accounts
 
 The account view is provider-scoped. It shows provider name, safe identity fields, availability, quota reset time, selected state, last-used time, and whether an attempt is currently using the account. It never displays credential material, environment variables, runtime-context paths, or native session files.
@@ -105,11 +116,11 @@ Before / After highlights added or replacement lines on the After side using the
 
 Each project row offers an import action. The modal discovers local Codex and Claude sessions for the exact folder, reports source failures separately, previews recent conversation independently of selection, and imports checked sessions. Select all applies only to sessions not already imported. The selected count and partial-failure report remain explicit, and successful imports are preserved for retries. Already imported sessions open their existing Rack conversation. Imported messages appear before new Rack runs with explicit source and fresh-context continuation wording. Tool history is read-only; preview truncation does not truncate stored history. See [local session import](session-import.md).
 
-The composer permission picker shows labels only: Ask me, Approve for me, Full access, Read only. Thinking and tool activity must remain visible when runs finish and after reopening a session; reconstruct persisted activity from its journal rather than only the final assistant message.
+The composer permission icon identifies the selected mode in its tooltip; its menu lists Ask me, Approve for me, Full access and Read only. Thinking and tool activity must remain visible when runs finish and after reopening a session; reconstruct persisted activity from its journal rather than only the final assistant message.
 
 ## Response footer and right-side diff (implemented 2026-10-14)
 
-The response footer contains only the date and time. Copy, account/model/permission labels, Details and Stop are removed from that footer. Stop remains in the composer. Run diagnostics and journal are available from the right-panel Run details surface with a run picker. The Changes surface opens by default and shows the current selected project Git diff, refreshing while visible. It includes pre-existing changes and is not an attribution of edits to a particular run. Additions/deletions are highlighted, files can be collapsed, and non-Git/loading/error/shortened-preview states are explicit. Thinking and response text stream from normalized provider events; final provider messages deduplicate text already streamed.
+The response footer contains only the date and time. Copy, account/model/permission labels, Details and Stop are removed from that footer. Stop remains in the composer. Run diagnostics and journal are available from the right-panel Run details surface with a run picker. Choosing Changes in the blank-tab launcher shows the current selected project Git diff, refreshing while visible. It includes pre-existing changes and is not an attribution of edits to a particular run. Additions/deletions are highlighted, files can be collapsed, and non-Git/loading/error/shortened-preview states are explicit. Thinking and response text stream from normalized provider events; final provider messages deduplicate text already streamed.
 
 ### Active-run footer (2026-10-14)
 
@@ -121,10 +132,11 @@ The right Changes surface follows a compact Source Control file-list layout. Gro
 
 ## Terminal, Browser and Files
 
-Settings > Plugins enables these functional right-panel surfaces; only
-Retrospective and Orchestration remain previews. The launcher offers T/B/F
-shortcuts outside text inputs. Terminal is an interactive project PTY, with
-context reconnection, resize, explicit Close/New shell and exit status. Browser
+Settings > Plugins enables these functional right-panel surfaces.
+Retrospective and Orchestration are omitted until implemented. The launcher and
++ menu open tools; arrows and Home/End navigate focused tool tabs. Terminal is
+an interactive project PTY, with context reconnection, resize, named Restart/Close
+shell icons and exit status. Browser
 is one isolated live page per conversation shared by the user and agent, with
 address/history controls and user-owned Pause/Resume. Files browses the current
 project and edits existing UTF-8 files with explicit Save, conflict-preserved

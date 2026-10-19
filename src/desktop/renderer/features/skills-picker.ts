@@ -12,12 +12,13 @@ export function createSkillsPicker(controller: Controller, changed: () => void) 
   let key = ""; let generation = 0; let modal: ModalHandle | undefined;
   const selections = new Map<string, RuntimeSkill[]>();
   const chips = h("div", { class: "skill-chips" });
-  const trigger = h("button", { class: "dropdown dropdown-pill skills-trigger", type: "button", aria: { label: "Choose installed skills" }, title: "Installed skills (/)" , onClick: () => open() }, icon("sparkle"), "Skills");
+  const trigger = h("button", { class: "icon-button composer-action skills-trigger", type: "button", aria: { label: "Choose installed skills" }, title: "Installed skills (/)" , onClick: () => open() }, icon("sparkle"));
   function renderChips(): void {
     const selected = selections.get(key) ?? [];
     replace(chips, ...selected.map((skill) => h("button", { class: "skill-chip", type: "button", title: `Remove ${skill.name}`, onClick: () => { selections.set(key, selected.filter((entry) => entry.id !== skill.id)); renderChips(); changed(); } }, skill.name, icon("x"))));
     chips.hidden = !selected.length;
     trigger.setAttribute("aria-pressed", String(selected.length > 0));
+    trigger.title = selected.length ? `Installed skills · ${selected.length} selected (/)` : "Installed skills (/)";
   }
   function open(query = ""): void {
     if (!context || trigger.disabled) return;
