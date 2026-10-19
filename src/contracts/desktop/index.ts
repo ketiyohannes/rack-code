@@ -8,3 +8,5 @@ export * from "./events.js";
 export * from "./transport.js";
 export * from "./validation.js";
 export * from "./views.js";
+
+export * from "./editors.js";

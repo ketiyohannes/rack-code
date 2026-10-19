@@ -61,13 +61,15 @@ export function openModal(options: ModalOptions): ModalHandle {
   document.addEventListener("keydown", onKeyDown, true);
 
   document.body.append(backdrop);
-  dialog.querySelector<HTMLElement>("input, button:not(.icon-button), select, textarea")?.focus();
+  const first = [...dialog.querySelectorAll<HTMLElement>("input, button:not(.icon-button), select, textarea")]
+    .find((element) => !element.hasAttribute("disabled") && element.tabIndex >= 0 && element.getClientRects().length > 0);
+  (first ?? dialog.querySelector<HTMLElement>("button"))?.focus();
   return handle;
 }
 
 function trapFocus(container: HTMLElement, event: KeyboardEvent): void {
   const focusable = [...container.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]:not([tabindex='-1'])")]
-    .filter((element) => !element.hasAttribute("disabled"));
+    .filter((element) => !element.hasAttribute("disabled") && element.tabIndex >= 0 && element.getClientRects().length > 0);
   const first = focusable[0];
   const last = focusable.at(-1);
   if (first === undefined || last === undefined) return;

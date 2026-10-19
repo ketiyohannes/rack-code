@@ -36,6 +36,8 @@ export interface DropdownConfig<T extends string> {
   readonly variant?: "field" | "pill";
   /** Icon shown in the trigger before the value. */
   readonly icon?: IconName;
+  /** Compact toolbar control; the current value stays in its accessible name and tooltip. */
+  readonly iconOnly?: boolean;
   /** Text shown when no option is selected. */
   readonly placeholder?: string;
   /** Optional trigger text override, e.g. a shorter form of the label. */
@@ -62,9 +64,10 @@ export function createDropdown<T extends string>(config: DropdownConfig<T>): Dro
   let value: T | undefined;
   let popover: PopoverHandle | undefined;
 
+  const triggerIcon = config.icon === undefined ? undefined : icon(config.icon, { className: "dropdown-icon" });
   const valueText = h("span", { class: "dropdown-value" });
   const trigger = h("button", {
-    class: `dropdown dropdown-${config.variant ?? "field"}`,
+    class: `dropdown dropdown-${config.variant ?? "field"}${config.iconOnly ? " dropdown-icon-only" : ""}`,
     type: "button",
     aria: { haspopup: "listbox", expanded: "false", label: config.ariaLabel },
     onClick: () => (popover === undefined ? open() : close()),
@@ -75,7 +78,7 @@ export function createDropdown<T extends string>(config: DropdownConfig<T>): Dro
       }
     },
   },
-    config.icon === undefined ? null : icon(config.icon, { className: "dropdown-icon" }),
+    triggerIcon,
     valueText,
     icon("caret-up-down", { className: "dropdown-caret" }),
   );
@@ -87,7 +90,11 @@ export function createDropdown<T extends string>(config: DropdownConfig<T>): Dro
       : config.formatValue?.(selected) ?? selected.label;
     replace(valueText, text);
     trigger.classList.toggle("is-placeholder", selected === undefined);
-    trigger.title = selected?.description === undefined ? config.ariaLabel : `${config.ariaLabel}: ${selected.label}`;
+    trigger.title = selected === undefined ? config.ariaLabel : `${config.ariaLabel}: ${selected.label}`;
+    if (config.iconOnly) {
+      trigger.setAttribute("aria-label", trigger.title);
+      if (triggerIcon && (selected?.icon || config.icon)) replace(triggerIcon, icon(selected?.icon ?? config.icon!));
+    }
   }
 
   function open(focus: "selected" | "last" = "selected"): void {

@@ -188,7 +188,7 @@ Subscription authentication has documented technical support for both initial ru
 
 ## Code review and analytics
 
-Pull Requests and Usage are implemented as explicit host services and renderer pages; see [Pull requests and Usage](pull-requests.md). `features/pull-requests` owns the public project and account-inbox gateways, project validation and saved-project resolution. The additive `ReviewInboxService` lists and reviews remote PRs independently of local folders; it uses a narrow project-list port only to find exact repository matches for Timeline. `adapters/code-hosts` owns HTTPS provider APIs, GitHub identities/credential routing, other providers' host-scoped credentials, Git remote discovery, normal branch publishing and isolated review comparison refs. GitHub, GitLab and Bitbucket Cloud share the desktop contract. Provider-specific unsupported controls are disclosed rather than emulated. Tokens entered in Rack stay in host memory; existing CLI credential stores supply reusable logins. `GitHubAccounts` discovers every CLI host/user plus independently verified environment/session-token identities. Account IDs include host/login, tokens never enter desktop views, and per-user credential subprocesses exclude environmental overrides. `GitHubInbox` binds one credential per operation, fans search across accounts, merges duplicate repository/number identities, and returns partial failures and search-window notices. It never switches global CLI authentication. The renderer shares a tabbed review surface between this inbox and repository workflows.
+Pull Requests and Usage are implemented as explicit host services and renderer pages; see [Pull requests and Usage](pull-requests.md). `features/pull-requests` owns the public project and account-inbox gateways, project validation and saved-project resolution. The additive `ReviewInboxService` lists and reviews remote PRs independently of local folders; it uses a narrow project-list port only to find exact repository matches for Timeline. `adapters/code-hosts` owns HTTPS provider APIs, GitHub identities/credential routing, other providers' host-scoped credentials, Git remote discovery, normal branch publishing and isolated review comparison refs. GitHub, GitLab and Bitbucket Cloud share the desktop contract. Provider-specific unsupported controls are disclosed rather than emulated. GitHub has no token entry: new identities are added by browser sign-in, which `GitHubBrowserLogin` delegates to `gh auth login --web` so credentials land in gh's keychain-backed store and persist across restarts without a Rack vault. GitLab/Bitbucket tokens entered in Rack stay in host memory. `GitHubAccounts` discovers every CLI host/user plus independently verified environment identities. Account IDs include host/login, tokens never enter desktop views, and per-user credential subprocesses exclude environmental overrides. `GitHubInbox` binds one credential per operation, fans search across accounts, merges duplicate repository/number identities, and returns partial failures and search-window notices. It never switches global CLI authentication. The renderer shares a tabbed review surface between this inbox and repository workflows.
 
 Timeline reads `refs/rack-pr-timeline/*` through its existing project-history and snapshot membership checks. The review adapter writes immutable merge-base-to-head comparisons, retains prior versions and never changes HEAD, the index or working files. Host freshness events connect the optional capabilities without making either depend on the other's internals.
 
@@ -472,3 +472,44 @@ Shutdown begins cancellation immediately, rejects queued/late starts, drains ses
 ## General conversations and workflow modes
 
 Standalone chats are Sessions with no project reference. Composition supplies a private session workspace through a Sessions port; no fake project or credential directory is used as a model working folder. Execution reserves the conversation, acquires a project writer only when one exists, and validates project attachment, skill references and approved plans at application boundaries. Runtime adapters own native Plan controls, installed-skill discovery and invocation. The renderer only selects workflow and opaque skill/plan IDs. See [the feature contracts and usage](chat-plan-skills.md).
+
+## Desktop tools and content scaling (2026-10-18)
+
+Terminal uses xterm at the presentation boundary. The host-owned Terminal
+service, local/Codex PTY adapters and execution permissions remain the owners
+of processes and input. Right-panel tabs retain tool instances while the window
+is open; closing a tab only hides it, while Close shell terminates the PTY.
+Every window starts with one blank tab containing the surface launcher; tabs
+are not restored from prior device preferences. The + menu adds blank or tool
+tabs. Choosing a launcher item fills that blank tab; selecting an already open
+tool focuses its shared instance. Closing the last tab returns to a blank tab.
+Adding an optional tab uses the existing plugin controller; host observation
+and permission policy are unchanged. The chat layout bounds the transcript and
+prompt to the available viewport, with an independently persisted prompt height.
+The left sidebar returns to the project navigator and its original shared
+scroll area. New chat and Chats navigation UI are deferred; standalone Sessions,
+execution, private files and chat controller operations remain implemented.
+
+The browser keeps its native sandboxed Chromium view and existing agent port,
+with a single toolbar and zoom-aware conversion from renderer CSS rectangles
+to native DIP bounds. It detaches during splitter drags so native content
+cannot consume the renderer's pointer events. A single type scale (`--font-2xs`
+through `--font-display`, plus `--content-font-size` for the conversation and
+`--code-font-size` for code) supplies every renderer font size, so chrome,
+panels and content stay proportional under app zoom. The trusted renderer permits local
+style elements generated by xterm for cell geometry and ANSI colors; scripts
+remain restricted to bundled assets, with no eval or WASM permission.
+
+Editor discovery/opening is a desktop-shell operation alongside safe path
+opening. Main owns a catalog of installed editor applications and a native
+chooser. Typed preload methods expose IDs and results; they accept no executable
+commands from renderer content. Main resolves path suffixes and launches editors
+with argument arrays. Core and runtime adapters do not depend on editor choices.
+See [desktop tools](desktop-tools.md).
+
+
+## Side chat (2026-10-19)
+
+Side chats are a renderer feature built on existing core operations; see [Side chat](side-chat.md). Each is a standalone chat session run with the `read_only` permission mode. This placement is deliberate. The project writer lock is acquired for every project run, including Plan and read-only runs, and only one app-managed writer may hold a project. A second conversation inside the project would therefore block on the main session. Standalone chats take no lock, so a side chat can run concurrently without changing the one-writer rule. Context (session messages, project path, PR patches) is supplied as bounded hidden prompt text rather than a new core field. The context-to-session mapping is a renderer preference. If side chats later need first-class identity (hiding them from a Chats list, linking them to a parent), add an optional, versioned field to `SessionRecord` rather than inferring it from titles.
+
+Timeline PR synchronization authenticates Git fetches with the same credential the review uses. `fetchAuthEnvironment` scopes an HTTPS `Authorization` header to the code host through `GIT_CONFIG_*` environment variables. This keeps the token out of argv and Git config, and stops the global credential helper (the active gh account) from substituting a different identity.

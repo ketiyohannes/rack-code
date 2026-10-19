@@ -52,7 +52,29 @@ export async function savedReview(path: string, remote: Remote, id: number): Pro
   } catch { return undefined; }
 }
 
-export async function syncReview(path: string, remote: Remote, pull: PullRequest): Promise<string> {
+/**
+ * Git environment that authenticates HTTPS fetches to `host` with `token`.
+ *
+ * Without it, a fetch uses the user's global credential helper, which for gh
+ * means the *active* gh account. Reviewing as another account (for example a
+ * private repository only that account can see) then fails with "Repository
+ * not found". The header is scoped to the code host's HTTPS origin and passed
+ * through GIT_CONFIG_* environment variables (Git 2.31+), never argv, so the
+ * token is not visible in process listings and is not written to any config.
+ * SSH remotes ignore it and keep using the user's SSH keys.
+ */
+export function fetchAuthEnvironment(remote: Remote, token: string | undefined): NodeJS.ProcessEnv {
+  if (!token) return {};
+  const user = remote.provider === "gitlab" ? "oauth2" : remote.provider === "bitbucket" ? "x-token-auth" : "x-access-token";
+  return {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: `http.https://${remote.host}/.extraheader`,
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`${user}:${token}`).toString("base64")}`,
+  };
+}
+
+/** `token`, when given, authenticates HTTPS fetches as the account the review uses (see fetchAuthEnvironment). */
+export async function syncReview(path: string, remote: Remote, pull: PullRequest, token?: string): Promise<string> {
   if (!/^[a-f\d]{40,64}$/i.test(pull.head) || !/^[a-f\d]{40,64}$/i.test(pull.base)) throw new Error("The provider has not resolved this PR's commits yet. Refresh and try again.");
   await git(path, ["check-ref-format", `refs/heads/${pull.target}`]);
   const key = reviewKey(remote);
@@ -61,16 +83,17 @@ export async function syncReview(path: string, remote: Remote, pull: PullRequest
   const namespace = `refs/rack-pr-objects/${key}/${pull.id}`;
   const source = remote.provider === "github" ? `refs/pull/${pull.id}/head` : remote.provider === "gitlab" ? `refs/merge-requests/${pull.id}/head` : pull.head;
   const fetchArgs = ["fetch", "--no-tags", "--no-write-fetch-head", "--"];
+  const auth = fetchAuthEnvironment(remote, token);
   if (remote.provider === "bitbucket" && pull.sourceRepository && pull.sourceRepository !== remote.slug) {
     if (!/^[\w.-]+\/[\w.-]+$/.test(pull.sourceRepository) || pull.sourceRepository.split("/").some((part) => part === "." || part === "..")) throw new Error("The provider returned an invalid fork repository.");
     const original = await git(path, ["remote", "get-url", "--", remote.name]);
     // Bitbucket Cloud has no Data Center-style refs/pull-requests namespace.
     // Fetch the exact source SHA from its source repository, preserving SSH transport when used.
     const fork = original.startsWith("git@") || original.startsWith("ssh:") ? `git@bitbucket.org:${pull.sourceRepository}.git` : `https://bitbucket.org/${pull.sourceRepository}.git`;
-    await git(path, [...fetchArgs, fork, `+${source}:${namespace}/head`]);
-    await git(path, [...fetchArgs, remote.name, `+${pull.base}:${namespace}/base`]);
+    await git(path, [...fetchArgs, fork, `+${source}:${namespace}/head`], auth);
+    await git(path, [...fetchArgs, remote.name, `+${pull.base}:${namespace}/base`], auth);
   } else {
-    await git(path, [...fetchArgs, remote.name, `+${source}:${namespace}/head`, `+${pull.base}:${namespace}/base`]);
+    await git(path, [...fetchArgs, remote.name, `+${source}:${namespace}/head`, `+${pull.base}:${namespace}/base`], auth);
   }
   const head = await git(path, ["rev-parse", `${namespace}/head`]);
   if (head !== pull.head) throw new Error("The PR changed while syncing. Refresh it and try again.");

@@ -42,25 +42,25 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   let workflowInitializedFor: string | undefined;
   const drafts = new Map<string, { prompt: string; workflow: "normal" | "plan" }>();
   const skills = createSkillsPicker(controller, () => refresh(store.get()));
-  const planToggle = h("button", { class: "dropdown dropdown-pill plan-toggle", type: "button", aria: { label: "Plan mode", pressed: "false" }, title: "Research and plan before implementing", onClick: () => { workflow = workflow === "plan" ? "normal" : "plan"; refresh(store.get()); } }, icon("list-checks"), "Plan");
+  const planToggle = h("button", { class: "icon-button composer-action plan-toggle", type: "button", aria: { label: "Plan mode", pressed: "false" }, title: "Research and plan before implementing", onClick: () => { workflow = workflow === "plan" ? "normal" : "plan"; refresh(store.get()); } }, icon("list-checks"));
   const planCard = h("div", { class: "plan-ready", role: "region", aria: { label: "Plan ready for review" } });
   const attachments = createAttachmentPicker(controller, () => refresh(store.get()));
 
   const permission = createDropdown<PermissionMode>({
-    ariaLabel: "Permission mode", variant: "pill", icon: "shield", menuWidth: 200,
+    ariaLabel: "Permission mode", variant: "pill", iconOnly: true, icon: "shield", menuWidth: 200,
     onChange: (value) => { mode = value; refresh(store.get()); },
   });
   const account = createDropdown<AccountChoice>({
-    ariaLabel: "Account", variant: "pill", icon: "user", placeholder: "No accounts", menuWidth: 280,
+    ariaLabel: "Account", variant: "pill", iconOnly: true, icon: "user", placeholder: "No accounts", menuWidth: 280,
     formatValue: (option) => option.label.toLowerCase() === "auto" ? "Auto" : option.label,
     onChange: () => refresh(store.get()),
   });
   const model = createModelPicker(() => refresh(store.get()), () => controller.openSettings("models"));
 
   const connectPill = h("button", {
-    class: "dropdown dropdown-pill", type: "button",
+    class: "icon-button composer-action", type: "button", title: "Connect an account", aria: { label: "Connect an account" },
     onClick: () => controller.openSettings("accounts"),
-  }, icon("plugs", { className: "dropdown-icon" }), h("span", { class: "dropdown-value" }, "Connect an account"));
+  }, icon("plugs"));
 
   const prompt = h("textarea", {
     class: "prompt-input", rows: 1, placeholder: "Ask the agent to do something", aria: { label: "Prompt" },
@@ -71,9 +71,9 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     event.preventDefault();
     void submitOrStop();
   } },
-    createQuestionRequests(store, controller),
-    guard,
-    planCard,
+    // Requests and notices share one bounded stack above the prompt. They
+    // must never consume its fixed height or hide the send/stop control.
+    h("div", { class: "composer-overlays" }, createQuestionRequests(store, controller), guard, planCard),
     h("div", { class: "composer-card" },
       attachments.list,
       skills.chips,
@@ -93,7 +93,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       void submitOrStop();
     }
   });
-  prompt.addEventListener("input", () => { autoGrow(); refresh(store.get()); });
+  prompt.addEventListener("input", () => { refresh(store.get()); });
   prompt.addEventListener("keydown", (event) => {
     if (event.key === "/" && prompt.value === "" && !event.ctrlKey && !event.metaKey && !skills.trigger.disabled) { event.preventDefault(); skills.open(); }
   });
@@ -109,11 +109,6 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     event.preventDefault();
     void controller.cancelRun(active);
   });
-
-  function autoGrow(): void {
-    prompt.style.height = "auto";
-    prompt.style.height = `${Math.min(prompt.scrollHeight, window.innerHeight * 0.4)}px`;
-  }
 
   function activeRunId(state: AppState): string | undefined {
     // Navigation selects the new ID before its record finishes loading.
@@ -155,7 +150,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     submitting = false;
     if (ok) {
       attachments.clear(session.id, draft.map((file) => file.id));
-      if (store.get().session?.id === session.id && prompt.value === rawPrompt) { prompt.value = ""; autoGrow(); }
+      if (store.get().session?.id === session.id && prompt.value === rawPrompt) { prompt.value = ""; prompt.scrollTop = 0; }
     }
     refresh(store.get());
   }
@@ -209,7 +204,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       prompt.value = draft?.prompt ?? "";
       workflow = draft?.workflow ?? "normal";
       workflowInitializedFor = draft ? draftSession : undefined;
-      autoGrow();
+      prompt.scrollTop = 0;
     }
     // Session metadata/history arrive after selection. Restore the persisted
     // workflow only once they belong to this chat, without overwriting a draft.
@@ -252,7 +247,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
 
     const unknownRunId = unacknowledgedUnknown(state);
     const approvals = pendingApprovals(state);
-    const catalogMessage = modelCatalogMessage(state);
+    const catalogMessage = state.session === undefined ? undefined : modelCatalogMessage(state);
     const needsFavorites = state.models.length > 0 && selected === undefined;
     replace(guard,
       ...approvals.map(({ run, live, request }) => renderApproval(request, run, live, state, controller)),
@@ -277,6 +272,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     planToggle.disabled = noSession || submitting || activeId !== undefined;
     planToggle.setAttribute("aria-pressed", String(workflow === "plan"));
     planToggle.classList.toggle("active", workflow === "plan");
+    planToggle.title = workflow === "plan" ? "Plan mode on · Research before implementing" : "Plan mode · Research before implementing";
     const latest = state.runs.at(-1);
     const readyPlan = latest?.interactionMode === "plan" && latest.status === "completed" && latest.result?.trim() && activeId === undefined ? latest : undefined;
     planCard.hidden = !readyPlan;

@@ -1,3 +1,5 @@
+import { IPC_CHANNELS } from "../../contracts/desktop/transport.js";
+import { browserViewBounds } from "./browser-bounds.js";
 import { WebContentsView, type BrowserWindow } from "electron";
 import { createHash, randomUUID } from "node:crypto";
 import { browserUrl, type BrowserPresentation, type BrowserRequest, type BrowserSnapshot } from "../../features/browser/index.js";
@@ -120,10 +122,7 @@ export class SharedBrowser {
     const tab = this.tabs.get(request.sessionId);
     if (tab === undefined) return;
     if (tab.owner !== owner) { this.detach(tab); owner.contentView.addChildView(tab.view); tab.owner = owner; }
-    const size = owner.getContentSize();
-    const x = Math.max(0, Math.min(Math.round(request.bounds.x), size[0] ?? 0));
-    const y = Math.max(0, Math.min(Math.round(request.bounds.y), size[1] ?? 0));
-    tab.view.setBounds({ x, y, width: Math.max(0, Math.min(Math.round(request.bounds.width), (size[0] ?? 0) - x)), height: Math.max(0, Math.min(Math.round(request.bounds.height), (size[1] ?? 0) - y)) });
+    tab.view.setBounds(browserViewBounds(request.bounds, owner.getContentSize(), owner.webContents.getZoomFactor()));
     tab.view.setVisible(true);
   }
 
@@ -136,6 +135,14 @@ export class SharedBrowser {
     const partition = `rack-browser-${createHash("sha256").update(sessionId).digest("hex")}`;
     const view = new WebContentsView({ webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, safeDialogs: true, backgroundThrottling: false } });
     const tab: Tab = { view, agentEnabled: true };
+    // Website contents have no preload. Route this user keyboard shortcut to
+    // the owning trusted renderer without exposing its bridge to the page.
+    view.webContents.on("before-input-event", (event, input) => {
+      if (input.type === "keyDown" && (input.control || input.meta) && input.key.toLowerCase() === "l" && tab.owner) {
+        event.preventDefault(); tab.owner.webContents.focus();
+        tab.owner.webContents.send(IPC_CHANNELS.focusBrowserAddress);
+      }
+    });
     const allowed = (url: string) => { try { return url === "about:blank" || browserUrl(url) === new URL(url).href; } catch { return false; } };
     view.webContents.on("will-navigate", (event, url) => { if (!allowed(url)) event.preventDefault(); });
     view.webContents.on("will-frame-navigate", (event) => { if (!allowed(event.url)) event.preventDefault(); });

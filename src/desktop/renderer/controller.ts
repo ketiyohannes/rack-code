@@ -233,6 +233,11 @@ export class Controller {
     this.store.update((state) => ({ ...state, page, ...(reviewProjectId === undefined ? {} : { reviewProjectId }) }));
   }
 
+  /** Shows the right panel with the given tool tab open, e.g. "side-chat". */
+  openTool(id: string): void {
+    this.store.update((state) => ({ ...state, page: "chat", toolRequest: { id, seq: (state.toolRequest?.seq ?? 0) + 1 } }));
+  }
+
   openSettings(section?: SettingsSection): void {
     this.store.update((state) => ({
       ...state,
@@ -457,6 +462,25 @@ export class Controller {
     this.store.update((state) => {
       const { [connectId]: _removed, ...connects } = state.connects;
       return { ...state, connects };
+    });
+  }
+
+  /** Native editor discovery is desktop-shell behavior, separate from runtime tools. */
+  onBrowserAddressFocus(listener: () => void) { return this.host.onBrowserAddressFocus(listener); }
+  listEditors() { return this.host.listEditors(); }
+  async resolveEditorTarget(path = ".", base?: string, sessionId?: string): Promise<import("../../contracts/desktop/transport.js").OpenPathRequest> {
+    const state = this.store.get();
+    const projectPath = base ?? (sessionId === undefined ? state.projects.find((project) => project.id === state.selection.projectId)?.path : undefined);
+    const session = sessionId ?? state.selection.sessionId;
+    const directory = projectPath ?? (session === undefined ? undefined : await this.host.call("sessions.directory", { sessionId: session }));
+    return { path, ...(directory === undefined ? {} : { base: directory }) };
+  }
+  async openInEditor(editorId: string, target: import("../../contracts/desktop/transport.js").OpenPathRequest): Promise<void> {
+    await this.attempt(async () => {
+      const result = await this.host.openInEditor({ editorId, ...target });
+      if (result === "missing") throw new Error("This file or folder no longer exists.");
+      if (result === "unavailable") throw new Error("The editor could not be opened. Choose another application or check its installation.");
+      if (result === "invalid") throw new Error("This file or application cannot be opened.");
     });
   }
 

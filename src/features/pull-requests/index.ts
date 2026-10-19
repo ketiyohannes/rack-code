@@ -26,13 +26,37 @@ export interface PullRequest {
   readonly base: string;
   readonly updatedAt: string;
 }
-export interface ReviewComment { readonly author: string; readonly body: string; readonly createdAt: string }
+/**
+ * One Activity entry. `kind` separates conversation comments, submitted reviews
+ * (with their decision in `state`) and inline code comments (with `path`/`line`).
+ * `body` is the author's Markdown, never annotated by Rack.
+ */
+export interface ReviewComment {
+  readonly author: string; readonly body: string; readonly createdAt: string;
+  readonly kind?: "comment" | "review" | "inline";
+  readonly state?: "approved" | "changes_requested" | "commented" | "dismissed";
+  readonly path?: string; readonly line?: number;
+}
+/**
+ * A changed file as reported by the code host. `patch` holds unified-diff
+ * hunks and is absent when the host omits it (binary or oversized files);
+ * `additions`/`deletions` are the host's counts either way.
+ */
+export interface ReviewFile {
+  readonly path: string; readonly previousPath?: string;
+  readonly status: "added" | "modified" | "removed" | "renamed";
+  readonly additions: number; readonly deletions: number;
+  readonly patch?: string;
+}
 export interface ReviewCheck { readonly name: string; readonly status: string; readonly url: string }
 export interface PullDetail {
   readonly checks: readonly ReviewCheck[];
   readonly checksNotice?: string;
   readonly pull: PullRequest;
+  /** Unified diff text; empty when `files` carries the changes instead. */
   readonly diff: string;
+  /** Per-file changes (GitHub, GitLab). Preferred over `diff` when present. */
+  readonly files?: readonly ReviewFile[];
   readonly comments: readonly ReviewComment[];
   readonly truncated: boolean;
   readonly timelineCheckpointId?: string;

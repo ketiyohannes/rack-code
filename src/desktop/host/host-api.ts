@@ -126,6 +126,7 @@ export class HostApi {
     const stoppingRuns = this.activeRuns.cancelAll(timeoutMs);
     const stoppingTracking = this.app.timeline?.stopProjectTracking();
     await this.app.connections.cancelAll();
+    this.app.reviewInbox?.cancelLogins();
     await Promise.allSettled([...this.sessionMutations.values()]);
     const remaining = await stoppingRuns;
     await stoppingTracking;
@@ -145,7 +146,9 @@ export class HostApi {
     };
     return {
       "reviews.accounts": async (p) => inbox().accounts(p.refresh),
-      "reviews.accountConnect": async (p) => inbox().connect(p.host, p.token),
+      "reviews.accountLoginBegin": async (p) => inbox().beginLogin(p.host),
+      "reviews.accountLoginFinish": async (p) => inbox().finishLogin(p.loginId),
+      "reviews.accountLoginCancel": async (p) => { inbox().cancelLogin(p.loginId); return null; },
       "reviews.inbox": async (p) => inbox().list(p),
       "reviews.inboxRepository": async (p) => inbox().repositoryList(p, p.query, p.state, p.page),
       "reviews.inboxCreate": async (p) => inbox().create(p, p.input),

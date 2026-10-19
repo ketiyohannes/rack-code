@@ -3,12 +3,24 @@ import type { InboxPull, InboxQuery, InboxResult, InboxTarget, RepositoryTarget,
 import type { CreatePull, PullState, ReviewAction } from "../../features/pull-requests/index.js";
 import { GitHubAccounts, githubRemote } from "./github-accounts.js";
 import { RestCodeHosts } from "./rest.js";
-import { remotes, syncReview } from "./repository.js";
+import { remotes } from "./repository.js";
 const PAGE_SIZE = 50;
+const RETRY_DELAY_MS = 1000;
+/** Runs `operation`, retrying once after a short delay; the second failure propagates. */
+async function retryOnce<T>(operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); }
+  catch {
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    return operation();
+  }
+}
 export class GitHubInbox implements ReviewInboxGateway {
   constructor(private readonly identities = new GitHubAccounts(), private readonly fetcher: typeof fetch = fetch) {}
   accounts(refresh: boolean) { return this.identities.accounts(refresh); }
-  connect(host: string, token: string) { return this.identities.connect(host, token); }
+  beginLogin(host: string) { return this.identities.beginLogin(host); }
+  finishLogin(loginId: string) { return this.identities.finishLogin(loginId); }
+  cancelLogin(loginId: string) { this.identities.cancelLogin(loginId); }
+  cancelLogins() { this.identities.cancelLogins(); }
   private async client(target: RepositoryTarget, name?: string) {
     const account = await this.identities.account(target.accountId);
     const remote = githubRemote(account.host, target.repository, name);
@@ -26,7 +38,9 @@ export class GitHubInbox implements ReviewInboxGateway {
     // after settlement, so overlapping PRs keep the same default account across refreshes.
     for (let offset = 0; offset < accounts.length; offset += 4) {
       const batch = accounts.slice(offset, offset + 4);
-      const results = await Promise.allSettled(batch.map(async (account) => {
+      // One delayed retry per account absorbs transient failures (first keychain read, GitHub's
+      // secondary search rate limit) before the account is reported as unavailable.
+      const results = await Promise.allSettled(batch.map((account) => retryOnce(async () => {
         const { client, remote } = await this.client({ accountId: account.id, repository: "owner/repo" });
         const relation = query.involvement === "created" ? "author" : query.involvement === "assigned" ? "assignee" : query.involvement === "review_requested" ? "review-requested" : "involves";
         const state = query.state === "all" ? "" : query.state === "closed" ? "is:closed -is:merged" : `is:${query.state}`;
@@ -53,10 +67,10 @@ export class GitHubInbox implements ReviewInboxGateway {
           pulls.push({ ...client.normalize(repo, { ...entry, merged_at: entry.pull_request?.merged_at }), host: account.host, repository, accounts: [account.id] });
         }
         return { pulls, total: Number(data.total_count), incomplete: Boolean(data.incomplete_results) };
-      }));
+      })));
       for (let index = 0; index < results.length; index++) {
         const account = batch[index]!, result = results[index]!;
-        if (result.status === "rejected") { failed++; notices.push(`${account.login} · ${account.host}: Pull requests could not be loaded. Refresh or reconnect this account.`); continue; }
+        if (result.status === "rejected") { failed++; notices.push(`${account.login} · ${account.host}: Pull requests could not be loaded. Refresh, or sign in to this account again.`); continue; }
         const { pulls, total, incomplete } = result.value;
         hasMore ||= query.page * PAGE_SIZE < Math.min(total, 1000);
         if (total > 1000) notices.push(`${account.login}: GitHub search is limited to 1,000 results. Narrow the search or status to see older PRs.`);
@@ -91,8 +105,8 @@ export class GitHubInbox implements ReviewInboxGateway {
     return client.actRemote(remote, target.id, action, body, head);
   }
   async sync(target: InboxTarget, path: string, name: string): Promise<string> {
+    // The client is bound to the selected account, so the Git fetch authenticates as that account too.
     const { client, remote } = await this.client(target, name);
-    const pull = client.normalize(remote, await client.request(remote, `/repos/${remote.slug}/pulls/${target.id}`));
-    return syncReview(path, remote, pull);
+    return client.syncRemote(path, remote, target.id);
   }
 }

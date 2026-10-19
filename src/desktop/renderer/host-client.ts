@@ -33,8 +33,11 @@ export interface HostClient {
   selectFiles(kind: AttachmentKind): Promise<readonly string[]>;
   /** Opens or reveals a clicked path through Electron main. */
   openPath(request: OpenPathRequest): Promise<OpenPathResult>;
+  listEditors(): Promise<readonly import("../../contracts/desktop/editors.js").EditorTarget[]>;
+  openInEditor(request: import("../../contracts/desktop/editors.js").OpenEditorRequest): Promise<import("../../contracts/desktop/editors.js").OpenEditorResult>;
   openTimelineWindow(request: TimelineWindowRequest): Promise<void>;
   presentBrowser(request: BrowserPresentation): Promise<void>;
+  onBrowserAddressFocus(listener: () => void): () => void;
 }
 
 export function createHostClient(bridge: HarnessBridge = window.harness): HostClient {
@@ -49,7 +52,10 @@ export function createHostClient(bridge: HarnessBridge = window.harness): HostCl
     onEvent: (listener) => bridge.onEvent(listener),
     selectDirectory: (options) => bridge.selectDirectory(options),
     selectFiles: (kind) => bridge.selectFiles(kind),
+    listEditors: () => bridge.listEditors(),
+    openInEditor: (request) => bridge.openInEditor(request),
     openPath: (request) => bridge.openPath(request),
+    onBrowserAddressFocus: (listener) => bridge.onBrowserAddressFocus(listener),
     presentBrowser: (request) => bridge.presentBrowser(request),
     async openTimelineWindow(request) {
       const response = await bridge.openTimelineWindow(request);

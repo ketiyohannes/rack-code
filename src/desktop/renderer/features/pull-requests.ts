@@ -5,8 +5,11 @@ import type { Controller } from "../controller.js";
 import type { HostClient } from "../host-client.js";
 import type { Store } from "../store.js";
 import { h, replace, relativeTime } from "../dom.js";
-import { icon } from "../icons.js";
+import { icon, type IconName } from "../icons.js";
 import { openModal } from "../components/modal.js";
+import { openGitHubSignIn } from "../components/github-sign-in.js";
+import { createSideChat } from "./side-chat.js";
+import { EXPLAIN_PROMPT, pullRequestSideChatContext } from "./side-chat-contexts.js";
 import { createDropdown } from "../components/dropdown.js";
 import { mountRepositoryPullRequests } from "./repository-reviews.js";
 import { renderReviewDetail, type ReviewTab } from "./review-detail.js";
@@ -18,11 +21,20 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
   let target: InboxTarget | undefined, detail: InboxDetail | undefined, tab: ReviewTab = "overview";
   let involvement: Involvement = "involved", state: PullState = "open", accountId = "", page = 1;
   let queryGeneration = 0, detailGeneration = 0, accountGeneration = 0;
+  // `accountsKnown` stays false until the first discovery settles, so the sign-in
+  // prompt is never shown while existing gh logins are still being read.
+  let accountsKnown = false;
   let loading = false, busy = false, hasMore = false, unavailable = false, repositoryMode = false, searchTimer: ReturnType<typeof setTimeout> | undefined;
   const drafts = new Map<string, string>();
   const decisions = new Map<string, ReviewAction>();
   const draftKey = () => target ? `${target.accountId}/${target.repository}#${target.id}` : "";
-  const button = (title: string, action: () => void | Promise<void>, primary = false) => h("button", { class: `button button-small${primary ? " button-primary" : ""}`, type: "button", onClick: () => void action() }, title);
+  // Routine toolbar actions use icons; form decisions retain explicit wording.
+  const actionIcons: Readonly<Record<string, IconName>> = { Refresh: "arrow-clockwise", "GitHub accounts": "github-logo", Repositories: "folder-simple", "New PR": "plus",
+    "Back to pull requests": "arrow-left", Retry: "arrow-clockwise", "Open on code host": "arrow-up-right", "Load more": "caret-down" };
+  const button = (title: string, action: () => void | Promise<void>, primary = false) => {
+    const name = actionIcons[title];
+    return h("button", { class: name ? `icon-button${primary ? " icon-button-primary" : ""}` : `button button-small${primary ? " button-primary" : ""}`, type: "button", title, aria: { label: title }, onClick: () => void action() }, name ? icon(name) : title);
+  };
   const inboxRoot = h("div", { class: "pr-inbox workspace-page-content" }), repositoryRoot = h("div", { class: "workspace-page-content pr-repository-page" });
   repositoryRoot.hidden = true;
   const repositories = mountRepositoryPullRequests(repositoryRoot, store, controller, host, () => {
@@ -30,19 +42,24 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
   });
   const notice = h("p", { class: "pr-notice", role: "status", aria: { live: "polite" } });
   const list = h("div", { class: "pr-inbox-list", aria: { label: "Pull requests" } });
-  const detailRoot = h("div", { class: "pr-inbox-detail" }); detailRoot.hidden = true;
+  // The review and its docked side chat share the detail area; only the review re-renders.
+  const detailMain = h("div", { class: "pr-detail-main" });
+  let sideChatOpen = false;
+  const sideChat = createSideChat(store, controller, host, { onClose: () => toggleSideChat(false), resizable: true });
+  const detailRoot = h("div", { class: "pr-inbox-detail pr-review-layout" }, detailMain, sideChat.element); detailRoot.hidden = true;
+  sideChat.element.hidden = true;
   const search = h("input", { type: "search", class: "review-search", placeholder: "Search pull requests…", aria: { label: "Search pull requests" } });
   const accountFilter = createDropdown<string>({ ariaLabel: "GitHub accounts", variant: "pill", onChange(value) { accountId = value; reset(); void loadList(); } });
   const stateFilter = createDropdown<PullState>({ ariaLabel: "Pull request state", variant: "pill", onChange(value) { state = value; reset(); void loadList(); } });
   stateFilter.setOptions(["open", "merged", "closed", "all"].map((value) => ({ value: value as PullState, label: value === "all" ? "Any status" : value[0]!.toUpperCase() + value.slice(1) })), state);
   const refresh = button("Refresh", () => loadAccounts(true));
-  const loadMore = button("Load more", () => loadList(true));
+  const loadMore = h("button", { class: "button button-small pr-action", type: "button", onClick: () => void loadList(true) }, icon("caret-down"), h("span", {}, "Load more"));
   const pagination = h("div", { class: "pr-load-more" }, loadMore);
   const relations: readonly [Involvement, string][] = [["involved", "All my PRs"], ["created", "Created"], ["review_requested", "Review requested"], ["assigned", "Assigned"]];
   const tabs = h("nav", { class: "pr-inbox-tabs", aria: { label: "Pull request involvement" } });
   const summary = h("span", { class: "pr-inbox-summary note" });
   const heading = h("header", { class: "pr-inbox-heading" }, h("div", { class: "pr-inbox-title" }, icon("git-pull-request"), h("h1", {}, "Pull requests"), summary),
-    h("div", { class: "page-actions" }, button("Accounts", accountForm), button("Repositories", () => openRepository()), button("New PR", () => openRepository(true), true),
+    h("div", { class: "page-actions" }, button("GitHub accounts", accountForm), button("Repositories", () => openRepository()), button("New PR", () => openRepository(true), true),
       h("button", { class: "icon-button", type: "button", title: "Back to session", aria: { label: "Back to session" }, onClick: () => controller.openPage("chat") }, icon("x"))));
   const toolbar = h("div", { class: "pr-inbox-toolbar" }, search, accountFilter.element, stateFilter.element, refresh);
   const index = h("div", { class: "pr-inbox-index" }, tabs, toolbar, list, pagination);
@@ -77,7 +94,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
     try {
       const catalog = await host.call("reviews.accounts", { refresh: refreshAccounts });
       if (request !== accountGeneration || repositoryMode || root.hidden) return;
-      accounts = catalog.accounts;
+      accounts = catalog.accounts; accountsKnown = true;
       if (target && !accounts.some((account) => account.id === target!.accountId)) back();
       if (accountId && !accounts.some((entry) => entry.id === accountId)) accountId = "";
       accountFilter.setOptions([{ value: "", label: "All accounts" }, ...accounts.map((entry) => ({ value: entry.id, label: entry.login, description: entry.host }))], accountId);
@@ -85,7 +102,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
       // Re-discovery does not discard an open review/draft. The list refresh starts from page one.
       if (!accounts.length) { reset(); setNotice(catalog.notices.join(" ")); renderList(); }
       else await loadList();
-    } catch (error) { if (request === accountGeneration) setNotice(message(error), true); }
+    } catch (error) { if (request === accountGeneration) { accountsKnown = true; renderList(); setNotice(message(error), true); } }
     finally { refresh.disabled = false; }
   }
   async function loadList(more = false): Promise<void> {
@@ -105,7 +122,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
       page = nextPage; hasMore = result.hasMore; unavailable = result.unavailable; loading = false;
       setNotice(result.notices.join(" "), result.notices.length > 0); renderList();
       // Polling never replaces a focused review input or changes the chosen account.
-      if (selected && target && !busy && !detailRoot.contains(document.activeElement) && !document.querySelector(".popover, .modal-backdrop")) void select(selected, target.accountId, false);
+      if (selected && target && !busy && !detailMain.contains(document.activeElement) && !document.querySelector(".popover, .modal-backdrop")) void select(selected, target.accountId, false);
     } catch (error) { if (request === queryGeneration) setNotice(message(error), true); }
     finally {
       if (request === queryGeneration) { loading = false; list.setAttribute("aria-busy", "false"); renderList(); }
@@ -113,10 +130,14 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
   }
   function renderList(): void {
     loadMore.disabled = loading; pagination.hidden = !hasMore;
+    if (!accounts.length && !accountsKnown) {
+      replace(list, h("div", { class: "pr-inbox-empty", role: "status" }, icon("circle-notch", { className: "spin" }), h("p", {}, "Checking GitHub accounts…"))); return;
+    }
     if (!accounts.length) {
       replace(list, h("div", { class: "pr-inbox-empty" }, icon("git-pull-request"), h("h2", {}, "Your reviews, in one place"),
-        h("p", {}, "Connect GitHub to see pull requests across all your repositories and accounts."), button("Connect GitHub", accountForm, true),
-        h("p", { class: "note" }, "Existing gh logins are detected automatically. GitLab and Bitbucket are available in Repositories."))); return;
+        h("p", {}, "Sign in to GitHub to see pull requests across all your repositories and accounts."),
+        h("button", { class: "button button-primary github-sign-in-start", type: "button", onClick: accountForm }, icon("github-logo"), h("span", {}, "Sign in with GitHub")),
+        h("p", { class: "note" }, "Existing GitHub CLI logins are detected automatically. GitLab and Bitbucket are available in Repositories."))); return;
     }
     replace(list, ...pulls.map((pull) => h("button", { type: "button", class: "pr-inbox-row", onClick: () => void select(pull) },
       h("span", { class: `pr-row-icon review-state ${pull.state}`, title: pull.draft ? "Draft" : pull.state }, icon("git-pull-request")),
@@ -124,7 +145,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
       h("span", { class: "pr-row-accounts note" }, pull.accounts.map((id) => accounts.find((account) => account.id === id)?.login ?? "").filter(Boolean).join(", ")),
       h("time", { class: "pr-row-time note", title: pull.updatedAt }, relativeTime(pull.updatedAt)), icon("caret-right"))),
       pulls.length ? null : h("div", { class: "pr-inbox-empty" }, icon("check"), h("h2", {}, loading ? "Loading pull requests…" : unavailable ? "Pull requests unavailable" : "You're all caught up"),
-        h("p", {}, loading ? "Checking your connected accounts." : unavailable ? "Refresh or reconnect your GitHub accounts to try again." : "No pull requests match these filters.")));
+        h("p", {}, loading ? "Checking your connected accounts." : unavailable ? "Refresh, or sign in to your GitHub accounts again." : "No pull requests match these filters.")));
   }
   function back(): void {
     detailGeneration++; selected = undefined; target = undefined; detail = undefined; index.hidden = false; detailRoot.hidden = true;
@@ -135,19 +156,23 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
     selected = pull; target = { accountId: usingAccount, repository: pull.repository, id: pull.id };
     index.hidden = true; detailRoot.hidden = false;
     if (showLoading) {
-      detail = undefined; replace(detailRoot, button("Back to pull requests", back), h("p", { class: "page-empty" }, "Loading review…"));
+      detail = undefined;
+      replace(detailMain, h("div", { class: "pr-detail-navigation" }, button("Back to pull requests", back)),
+        h("div", { class: "pr-inbox-empty", role: "status" }, icon("circle-notch", { className: "spin" }), h("p", {}, "Loading review…")));
     }
     try {
       const result = await host.call("reviews.inboxDetail", target);
       if (request !== detailGeneration || repositoryMode || root.hidden) return;
       detail = result;
-      if (showLoading || (!busy && !detailRoot.contains(document.activeElement) && !document.querySelector(".popover, .modal-backdrop"))) renderDetail();
+      if (showLoading || (!busy && !detailMain.contains(document.activeElement) && !document.querySelector(".popover, .modal-backdrop"))) renderDetail();
     } catch (error) {
       if (request !== detailGeneration) return;
       // A failed background refresh must not remove a review the user is reading or editing.
       if (!showLoading && detail) { setNotice(message(error), true); return; }
-      replace(detailRoot, button("Back to pull requests", back), h("p", { class: "page-empty error-line", role: "alert" }, message(error)), button("Retry", () => select(pull, usingAccount)),
-        pull.url.startsWith("https://") ? button("Open on code host", () => { window.open(pull.url, "_blank", "noopener"); }) : null);
+      replace(detailMain, h("div", { class: "pr-detail-navigation" }, button("Back to pull requests", back)),
+        h("div", { class: "pr-inbox-empty", role: "alert" }, icon("warning-circle"), h("h2", {}, "This review could not be loaded"), h("p", {}, message(error)),
+          h("div", { class: "page-actions" }, button("Retry", () => select(pull, usingAccount)),
+            pull.url.startsWith("https://") ? button("Open on code host", () => controller.openExternal(pull.url)) : null)));
     }
   }
   function renderDetail(): void {
@@ -156,10 +181,22 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
     const account = createDropdown<string>({ ariaLabel: "Review as GitHub account", variant: "pill", onChange: (id) => { void select(selectedPull, id); } });
     account.setOptions(accounts.filter((entry) => entry.host === selectedPull.host).map((entry) => ({ value: entry.id, label: `Review as ${entry.login}`, description: entry.host })), target.accountId);
     account.setDisabled(busy);
-    renderReviewDetail(detailRoot, { detail, provider: "github", authenticated: true, busy, repository: `${selected.host}/${selected.repository}`, tab, account: account.element,
+    if (sideChatOpen) sideChat.setContext(pullRequestSideChatContext(`${selected.host}/${selected.repository}`, detail));
+    renderReviewDetail(detailMain, { detail, provider: "github", authenticated: true, busy, repository: `${selected.host}/${selected.repository}`, tab, account: account.element,
       draft: drafts.get(reviewDraftKey) ?? "", decision: decisions.get(reviewDraftKey) ?? "comment",
       onDraft: (value) => drafts.set(reviewDraftKey, value), onDecision: (value) => decisions.set(reviewDraftKey, value), onTab: (value) => { tab = value; renderDetail(); }, onBack: back,
-      onReview: (action, body) => void act(action, body), onState: confirmAction, onTimeline: () => void timeline(), onRefresh: () => { if (!busy) void select(selectedPull, selectedAccount); } });
+      onReview: (action, body) => void act(action, body), onState: confirmAction, onTimeline: () => void timeline(), onRefresh: () => { if (!busy) void select(selectedPull, selectedAccount); },
+      openLink: (href) => controller.openExternal(href),
+      sideChatOpen, onSideChat: () => toggleSideChat(!sideChatOpen),
+      onExplain: () => { toggleSideChat(true); void sideChat.send(EXPLAIN_PROMPT); } });
+  }
+  /** Docks or hides the side chat; its context follows the selected PR. */
+  function toggleSideChat(open: boolean): void {
+    sideChatOpen = open;
+    sideChat.element.hidden = !open;
+    detailRoot.classList.toggle("with-side-chat", open);
+    if (open && detail && selected) { sideChat.setContext(pullRequestSideChatContext(`${selected.host}/${selected.repository}`, detail)); sideChat.focus(); }
+    renderDetail();
   }
   async function act(action: ReviewAction, body = ""): Promise<void> {
     if (!detail || !target || !selected || busy) return;
@@ -197,21 +234,11 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
     } catch (error) { setNotice(message(error), true); }
     finally { busy = false; renderDetail(); }
   }
+  /** GitHub identities are added by browser sign-in through gh; Rack never asks for a token. */
   function accountForm(): void {
-    const hostname = h("input", { value: "github.com", placeholder: "github.com", aria: { label: "GitHub hostname" } });
-    const token = h("input", { type: "password", placeholder: "GitHub access token", aria: { label: "GitHub access token" } }); token.autocomplete = "off";
-    const error = h("p", { class: "error-line", role: "alert" });
-    const connect = button("Connect account", async () => {
-      connect.disabled = true; error.textContent = "";
-      try { await host.call("reviews.accountConnect", { host: hostname.value.trim(), token: token.value }); token.value = ""; modal.close(); await loadAccounts(true); }
-      catch (reason) { error.textContent = message(reason); connect.disabled = false; }
-    }, true);
-    const modal = openModal({ title: "GitHub accounts", onClose: () => { token.value = ""; }, content: h("div", { class: "modal-body review-form" },
-      h("div", { class: "pr-connected-accounts" }, ...accounts.map((account) => h("div", {}, h("strong", {}, account.login), h("span", { class: "note" }, `${account.host} · ${account.source === "cli" ? "GitHub CLI" : account.source === "environment" ? "Environment" : "Session token"}`)))),
-      h("p", { class: "note" }, "All gh logins are detected, including multiple accounts on one host. Refresh after signing in with gh auth login. You can also connect another account below."),
-      h("label", {}, "Hostname", hostname), token,
-      h("p", { class: "note" }, "Tokens stay in memory until Rack closes. Grant access to the repositories and pull request actions you need."), error,
-      h("div", { class: "modal-actions" }, button("Close", () => modal.close()), button("Refresh accounts", async () => { await loadAccounts(true); modal.close(); }), connect)) });
+    openGitHubSignIn({ host, controller, hostEditable: true, accounts,
+      onRefresh: () => loadAccounts(true),
+      onSignedIn: async (account) => { setNotice(`Signed in to GitHub as ${account.login}.`); await loadAccounts(true); } });
   }
   store.watch((app) => app.page, (_slice, app) => {
     const wasHidden = root.hidden; root.hidden = app.page !== "pull-requests";
