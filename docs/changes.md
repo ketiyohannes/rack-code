@@ -1,3 +1,18 @@
+# Reopen saved PR side chats (2026-10-19)
+
+- Automatically display a PR's existing side chat in both the inbox and repository view when its saved session has messages. Keep empty/deleted chats closed, ignore stale history replies after navigation and respect manual closing during refreshes. Reopening reads saved history without sending an AI request or moving keyboard focus.
+- Share the existing per-device mapping through `side-chat-state.ts`; no host or persistence schema changes.
+- Validation: `npm run check` passed (303 tests, both type checks and both builds); `git diff --check` passed. Chromium fixture checks confirmed saved explanations reopen in the inbox and repository view, PRs without history stay closed, and refresh respects manual closing. No provider run was started and no browser errors were reported. Unit coverage includes empty/deleted history, stale replies and revisit behavior. Live provider turns were not exercised.
+
+# Concurrent workflows port (2026-10-19)
+
+- Port shared-folder and isolated-worktree sessions from `rack-code-concurrent` onto `feat/concurrent-workflows`, created from `dev` after the performance release was pushed and merged into `dev` and `main`. Preserve append-only execution storage, paged history and scoped rendering.
+- Replace the project-wide writer lock with live session ownership: different sessions can run together, while a second turn in the same session is refused. Expose queued handles during worktree preparation; cancellation prevents provider startup. Claude receives the main checkout as its project configuration root.
+- Route Files, Terminal, Changes, repository discovery, editor targets and side-chat context to the selected session's worktree. Missing worktrees report a create/restore message. Capture Timeline baselines after worktree setup and retain readable saved snapshots after removal. Project background history remains tied to the main checkout. PR publishing consults live writers rather than the retired lock field.
+- Add a compact workspace icon before the first message, an isolated branch menu, a shared-writer warning count, and dirty-worktree removal confirmation. Bound branch labels so headers fit at minimum width. Worktree removal keeps the branch; session removal preserves the worktree and its files.
+- Validation: `npm run check` passed (302 tests, both type checks and both builds); `git diff --check` passed. The new multi-worktree integration fixture has bounded waits sized for concurrent Git test processes; it passed in the full suite and alone. Real temporary Git repositories cover creation, restoration, dirty removal, independent concurrent file writes, Files/Terminal paths, Timeline attribution and durable history. Focused controller/host regressions cover late workspace replies and stopping one session without stopping another. Chromium fixture checks cover mode selection/locking, shared and isolated headers at 980 × 600 and 1360 × 860, no document overflow and dirty-removal confirmation.
+- Not performed: live provider turns, real remote publication, or packaged application checks. Git worktrees isolate working files; shared sessions can edit the same files. In-app worktree merge/apply and automatic cleanup remain outside this port. See [concurrent sessions](concurrent-sessions.md).
+
 # Desktop performance improvements (2026-10-19)
 
 - Replace full execution-history rewrites with flushed append-only transactions, indexed journal/usage reads, legacy migration and torn-tail recovery. Preserve persistence-before-delivery and interrupted-run recovery.

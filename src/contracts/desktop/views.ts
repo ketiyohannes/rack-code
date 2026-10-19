@@ -23,7 +23,8 @@ import type {
   RuntimeEvent,
   RuntimeModel,
 } from "../../core/execution/types.js";
-import type { ProjectRecord } from "../../core/projects/types.js";
+import type { ProjectRecord, ProjectWriter } from "../../core/projects/types.js";
+export type { IsolatedWorkspace, ProjectWriter, SessionWorkspaceState as SessionWorkspaceView, WorkspaceMode } from "../../core/projects/types.js";
 export type { ProjectChanges, ProjectChangeFile, ProjectChangeGroup, ProjectChangeStatus, ProjectRepositories, RepositoryDiscoveryOptions } from "../../core/projects/types.js";
 import type { ConnectView } from "../../core/connections/types.js";
 import type { SessionMessage, SessionRecord } from "../../core/sessions/types.js";
@@ -80,7 +81,13 @@ export interface AccountView {
   readonly activeAttempts: number;
 }
 
-export type ProjectView = ProjectRecord;
+/**
+ * A project with the runs currently writing in it. The legacy persisted
+ * writer field is omitted; `activeWriters` is the live, in-memory state.
+ */
+export type ProjectView = Omit<ProjectRecord, "activeWriterAttemptId"> & {
+  readonly activeWriters: readonly ProjectWriter[];
+};
 
 /** Navigator row for a session; messages are loaded separately. */
 export interface SessionSummaryView {
@@ -88,6 +95,8 @@ export interface SessionSummaryView {
   /** Absent for a standalone chat. */
   readonly projectId?: string;
   readonly title?: string;
+  /** Absent means `shared`. */
+  readonly workspaceMode?: "shared" | "isolated";
   readonly messageCount: number;
   readonly createdAt: string;
   readonly updatedAt: string;

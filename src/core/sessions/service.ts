@@ -11,6 +11,7 @@ import type {
   SessionId,
   SessionMessage,
   SessionRecord,
+  SessionWorkspaceMode,
 } from "./types.js";
 
 export interface SessionsServiceOptions {
@@ -37,6 +38,7 @@ export class SessionsService {
   }
 
   async create(input: CreateSessionInput): Promise<SessionRecord> {
+    if (input.workspaceMode === "isolated" && input.projectId === undefined) throw new InvalidSessionError("An isolated session needs a project.");
     if (input.projectId !== undefined && input.projectId.trim() === "") {
       throw new InvalidSessionError("Project ID is required.");
     }
@@ -49,6 +51,7 @@ export class SessionsService {
       createdAt: timestamp,
       updatedAt: timestamp,
       ...(input.title === undefined ? {} : { title: input.title }),
+      ...(input.workspaceMode === undefined || input.workspaceMode === "shared" ? {} : { workspaceMode: input.workspaceMode }),
     };
     await this.store.save(session);
     return session;
@@ -67,6 +70,29 @@ export class SessionsService {
     if (!projectId.trim()) throw new InvalidSessionError("Project ID is required.");
     if (session.projectId !== undefined) throw new InvalidSessionError("This session already belongs to a project.");
     const updated = { ...session, projectId, continuations: [], updatedAt: this.now().toISOString() };
+    await this.store.save(updated);
+    return updated;
+  }
+
+  /**
+   * Changes where a new session will run. Rejected once the session has any
+   * message: providers tie native conversations to their working directory,
+   * so moving an existing conversation would break resume (T3 Code locks the
+   * choice the same way).
+   */
+  async setWorkspaceMode(sessionId: SessionId, mode: SessionWorkspaceMode): Promise<SessionRecord> {
+    const session = await this.get(sessionId);
+    if (mode === "isolated" && session.projectId === undefined) throw new InvalidSessionError("An isolated session needs a project.");
+    if ((session.workspaceMode ?? "shared") === mode) return session;
+    if (session.messages.length > 0) {
+      throw new InvalidSessionError("The workspace can only be changed before the session's first message.");
+    }
+    const { workspaceMode: _previous, ...rest } = session;
+    const updated: SessionRecord = {
+      ...rest,
+      ...(mode === "shared" ? {} : { workspaceMode: mode }),
+      updatedAt: this.now().toISOString(),
+    };
     await this.store.save(updated);
     return updated;
   }

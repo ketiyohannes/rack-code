@@ -60,7 +60,7 @@ cursor. Arrow keys and double-click reset remain supported.
 - `commands.ts`: `HostCommandMap` (command name to params and result) plus a runtime validator per command. Main validates every renderer request and the host validates again. Unknown keys are rejected.
 - `events.ts`: `HostEvent`, facts the host broadcasts (`run.started`, `run.updated`, indexed `run.event`, `run.approval_resolved`, `run.cancel_requested`, `run.finished`, and `*.changed` refresh signals, including the optional `timeline.changed`). Main adds `host.status`.
 - `views.ts`: read models. They reuse core types through type-only imports, except `AccountView`, which omits the credential reference and runtime-context ID.
-- `errors.ts`: stable `HostErrorCode`s with structured `details` (for example, the owning attempt for `project_busy`). Clients branch on codes and never parse messages.
+- `errors.ts`: stable `HostErrorCode`s with structured `details` (for example, the owning attempt for `session_busy`). Clients branch on codes and never parse messages.
 
 To add a command, add an entry to `HostCommandMap` and `COMMAND_VALIDATORS`, then add a handler in `HostApi`. The handler table is typed against the map, so a missing handler is a compile error.
 
@@ -73,7 +73,7 @@ The folder commands are `projects.list` and `projects.create`. Sessions, runs, a
 - Each event is broadcast with its index within the run, and the host keeps a copy of every event for active runs. `runs.active` returns those snapshots with pending approvals. A client that reconnects subscribes first, renders the snapshot, and then applies only live events whose index is not yet in it. Reloading the renderer never restarts or duplicates a run.
 - Approvals stay pending in the host until any client answers them. A renderer disconnect is not a cancellation.
 - `runs.cancel` is idempotent. The run stays active until the runtime reports a terminal state.
-- Before starting, `runs.start` refuses a project that already has a writer and returns `project_busy` with the owning attempt. The core lock remains the authoritative guard. When no account is named and the provider's selected account was not used, the result reports `fallbackFromAccountId`.
+- Before starting, `runs.start` refuses a second run in the same session and returns `session_busy` with the owning attempt. Other sessions of the project may be running: shared sessions concurrently in the project folder, and isolated sessions in their own worktrees (see [concurrent sessions](concurrent-sessions.md)). The core writer registry remains the authoritative guard. When no account is named and the provider's selected account was not used, the result reports `fallbackFromAccountId`.
 
 ## Exit behavior
 
@@ -116,7 +116,7 @@ Local session import supports per-row checkboxes, Select all for not-yet-importe
 
 Thinking and tool activity remain visible after a run finishes. The recent-session renderer cache retains live events at completion and rebuilds saved activity from the execution journal after reload. Tool IDs correlate parallel calls; output deltas do not mark a tool complete.
 
-Links and paths are clickable. Bare http(s) URLs in replies are linked (both schemes open in the default browser; other schemes are refused). File paths in replies, inline code, file activity targets, approval targets, and the Changes file list call `openPath`; relative paths resolve against the session's project or private chat workspace (or the repository folder in Changes), and a `:line[:col]` suffix is ignored when opening. Electron main (`main/open-path.ts`) opens documents and folders with their default application but only reveals in Finder anything whose default open could execute code (execute bit, scripts, `.app` and other bundles, installers, `.py`). A missing path shows a notice.
+Links and paths are clickable. Bare http(s) URLs in replies are linked (both schemes open in the default browser; other schemes are refused). File paths in replies, inline code, file activity targets, approval targets, and the Changes file list call `openPath`; relative paths resolve against the session's isolated worktree, shared project folder or private chat workspace (or the repository folder in Changes), and a `:line[:col]` suffix is ignored when opening. Electron main (`main/open-path.ts`) opens documents and folders with their default application but only reveals in Finder anything whose default open could execute code (execute bit, scripts, `.app` and other bundles, installers, `.py`). A missing path shows a notice.
 
 Scrollbars are minimal: 4 px rounded thumbs with no track, shown only while the pointer is over the scrolling region.
 

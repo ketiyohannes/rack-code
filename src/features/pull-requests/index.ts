@@ -78,10 +78,11 @@ export interface PullRequestGateway {
 
 /** Resolves saved project identities on every request; never accepts renderer paths. */
 export class PullRequestsService {
-  constructor(private readonly project: (id: string) => Promise<{ path: string; activeWriterAttemptId?: string }>, private readonly gateway: PullRequestGateway) {}
+  /** Composition supplies live ownership; persisted legacy locks are not authoritative. */
+  constructor(private readonly project: (id: string) => Promise<{ path: string; busy: boolean }>, private readonly gateway: PullRequestGateway) {}
   private async path(id: string, mutation = false): Promise<string> {
     const project = await this.project(id);
-    if (mutation && project.activeWriterAttemptId) throw new Error("Wait for the project's active run before publishing a branch.");
+    if (mutation && project.busy) throw new Error("Wait for the project's active runs before publishing a branch.");
     return project.path;
   }
   async repositories(id: string) { return this.gateway.repositories(await this.path(id)); }

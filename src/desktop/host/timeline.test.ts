@@ -79,7 +79,7 @@ async function setup(options: { timeline?: boolean; snapshots?: SnapshotReposito
         const project = await projects.getProject(session.projectId!);
         return { sessionId, projectId: project.id, projectPath: project.path };
       },
-      projectBusy: async (projectId) => (await projects.getProject(projectId)).activeWriterAttemptId !== undefined,
+      projectBusy: async (projectId, sessionId) => projects.activeWriters(projectId).some((writer) => sessionId === undefined || writer.sessionId === sessionId),
     },
     new JsonTimelineStore(join(data, "timeline.json")),
     options.snapshots ?? new GitSnapshotRepository(),

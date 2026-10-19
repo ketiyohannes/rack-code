@@ -11,9 +11,12 @@ import type { UsageService } from "../../features/usage/index.js";
  *
  * Responsibilities kept here (and not in the renderer):
  * - stripping credential references and runtime-context IDs from accounts;
- * - refusing to start a run on a shared project that already has a writer,
- *   so the UI gets `project_busy` with the owning attempt instead of a
- *   failed run (the core lock remains the authoritative guard);
+ * - refusing to start a second run in a session that already has one, so
+ *   the UI gets `session_busy` with the owning attempt instead of a failed
+ *   run (the core writer registry remains the authoritative guard). Runs of
+ *   different sessions in one project may run concurrently;
+ * - adding live writer state to project views and resolving session
+ *   workspaces (shared folder or isolated worktree) through Projects;
  * - reporting whether the Accounts service fell back from the selected
  *   account when the caller did not name one;
  * - connecting optional features that were assembled at startup. Timeline,
@@ -27,10 +30,12 @@ import type { ExecutionService } from "../../core/execution/service.js";
 import type { RuntimeRegistry } from "../../core/execution/runtime-registry.js";
 import type { RunRecord } from "../../core/execution/types.js";
 import type { ProjectsService } from "../../core/projects/service.js";
+import { IsolationUnavailableError } from "../../core/projects/errors.js";
+import type { ProjectRecord } from "../../core/projects/types.js";
 import type { ConnectionsService } from "../../core/connections/service.js";
 import type { SessionsService } from "../../core/sessions/service.js";
 import type { SessionImportsService } from "../../core/session-imports/service.js";
-import type { TimelineService } from "../../features/timeline/index.js";
+import type { TimelineRunObserver, TimelineService } from "../../features/timeline/index.js";
 import {
   isHostCommand,
   validateCommandParams,
@@ -44,6 +49,7 @@ import {
   PERMISSION_MODES,
   type AccountView,
   type PermissionMode,
+  type ProjectView,
   type RunView,
   type SessionSummaryView,
 } from "../../contracts/desktop/views.js";
@@ -212,7 +218,7 @@ export class HostApi {
             } catch { /* Missing historical runtime/account can use the local shell. */ }
           }
         }
-        return this.terminals().open(params.sessionId === undefined ? `project:${project!.id}` : `session:${params.sessionId}`, project?.path ?? await sessions.workspace(params.sessionId!), params.cols, params.rows, native);
+        return this.terminals().open(params.sessionId === undefined ? `project:${project!.id}` : `session:${params.sessionId}`, (params.sessionId === undefined ? project!.path : await this.sessionDirectory(params.sessionId)), params.cols, params.rows, native);
       }),
       "terminal.read": async (params) => this.terminals().read(params.terminalId, params.after),
       "terminal.write": async (params) => { await this.terminals().write(params.terminalId, params.data); return null; },
@@ -222,8 +228,8 @@ export class HostApi {
         if (this.app.browser === undefined) throw new HostOperationError("feature_unavailable", "The shared browser requires the desktop app.");
         return this.app.browser.control(params.sessionId, params.request);
       }),
-      "projects.changes": async (params) => projects.getChanges(params.projectId, params.repositoryPath),
-      "projects.repositories": async ({ projectId, ...options }) => projects.discoverRepositories(projectId, options),
+      "projects.changes": async (params) => projects.getChanges(params.projectId, params.repositoryPath, await this.ownSessionId(params.projectId, params.sessionId)),
+      "projects.repositories": async ({ projectId, sessionId, ...options }) => projects.discoverRepositories(projectId, options, await this.ownSessionId(projectId, sessionId)),
       "auth.providers": async () => connections.providers(),
       "auth.diagnose": async (params) => connections.diagnose(params),
       "auth.connect": async (params) => connections.connect(params),
@@ -265,9 +271,9 @@ export class HostApi {
         return this.accountView(account);
       },
 
-      "projects.list": async () => projects.listProjects(),
+      "projects.list": async () => (await projects.listProjects()).map((project) => this.projectView(project)),
       "projects.create": async (params) => {
-        const project = await projects.createProject(params);
+        const project = this.projectView(await projects.createProject(params));
         void this.app.timeline?.refreshProjects();
         this.emit({ type: "projects.changed" });
         return project;
@@ -280,10 +286,40 @@ export class HostApi {
       "sessions.create": async (params) => {
         // Validate the project before persisting the session.
         const project = params.projectId === undefined ? undefined : await projects.getProject(params.projectId);
+        if (params.workspaceMode === "isolated") {
+          if (!project) throw new IsolationUnavailableError("Attach a project before choosing an isolated worktree.");
+          await this.requireIsolation(project.id);
+        }
         const session = await sessions.create({ ...params, ...(project === undefined ? {} : { projectId: project.id }) });
         this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId: session.id });
         return session;
       },
+      "sessions.setWorkspaceMode": async (params) => this.mutateSession(params.sessionId, async () => {
+        const current = await sessions.get(params.sessionId);
+        if (this.activeRuns.list().some((active) => active.run.sessionId === current.id)) throw new HostOperationError("session_busy", "Stop this session before changing its workspace.");
+        if (params.mode === "isolated") {
+          if (!current.projectId) throw new IsolationUnavailableError("Attach a project before choosing an isolated worktree.");
+          await this.requireIsolation(current.projectId);
+        }
+        const session = await sessions.setWorkspaceMode(current.id, params.mode);
+        await this.app.terminal?.closeContext(`session:${session.id}`);
+        this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId: session.id });
+        return session;
+      }),
+      "sessions.workspace": async ({ sessionId }) => {
+        const session = await sessions.get(sessionId);
+        return session.projectId === undefined ? { mode: "shared", path: await sessions.workspace(session.id), exists: true }
+          : projects.workspaceState(session.projectId, session.id, session.workspaceMode ?? "shared");
+      },
+      "sessions.removeWorkspace": async (params) => this.mutateSession(params.sessionId, async () => {
+        const session = await sessions.get(params.sessionId);
+        if (!session.projectId || session.workspaceMode !== "isolated") throw new HostOperationError("invalid_input", "This session has no isolated worktree.");
+        if (this.activeRuns.list().some((active) => active.run.sessionId === session.id)) throw new HostOperationError("session_busy", "Stop this session before removing its worktree.");
+        await projects.removeIsolatedWorkspace(session.projectId, session.id, params.force === true);
+        await this.app.terminal?.closeContext(`session:${session.id}`);
+        this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId: session.id });
+        return projects.workspaceState(session.projectId, session.id, session.workspaceMode);
+      }),
       "skills.list": async (p) => execution.listSkills(p.sessionId, p.runtimeId, p.accountId),
       "sessions.attachProject": async (p) => this.mutateSession(p.sessionId, async () => {
         if (this.activeRuns.list().some((active) => active.run.sessionId === p.sessionId)) throw new HostOperationError("session_busy", "Stop the conversation before attaching a project.");
@@ -295,7 +331,7 @@ export class HostApi {
       }),
       "sessions.directory": async (p) => {
         const session = await sessions.get(p.sessionId);
-        return p.chatFiles || session.projectId === undefined ? sessions.workspace(session.id) : (await projects.getProject(session.projectId)).path;
+        return p.chatFiles || session.projectId === undefined ? sessions.workspace(session.id) : projects.executionPath(session.projectId, session.id, session.workspaceMode ?? "shared");
       },
       "sessions.get": async (params) => sessions.get(params.sessionId),
       "sessions.attachFiles": async (params) => this.mutateSession(params.sessionId, () => sessions.attachFiles(params.sessionId, params.paths)),
@@ -392,26 +428,41 @@ export class HostApi {
       "runs.start": async (params) => this.mutateSession(params.sessionId, async () => {
         if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
         const project = params.projectId === undefined ? undefined : await projects.getProject(params.projectId);
-        if (project?.activeWriterAttemptId !== undefined) {
+        const running = this.activeRuns.list().find((active) => active.run.sessionId === params.sessionId);
+        if (running !== undefined) {
+          const attemptId = running.run.attemptIds.at(-1) ?? running.run.id;
           throw new HostOperationError(
-            "project_busy",
-            `Project '${project.id}' is already being edited by attempt '${project.activeWriterAttemptId}'.`,
-            { projectId: project.id, attemptId: project.activeWriterAttemptId },
+            "session_busy",
+            `Session '${params.sessionId}' already has an active run.`,
+            { sessionId: params.sessionId, attemptId },
           );
         }
-        if (this.activeRuns.list().some((active) => active.run.sessionId === params.sessionId)) throw new HostOperationError("session_busy", "This conversation is already running.");
+        const session = await sessions.get(params.sessionId);
+        if (session.projectId !== project?.id) throw new HostOperationError("invalid_input", "The run's project must match its session's project.");
         // Read the selection before starting so a fallback can be reported.
         const selected = params.accountId === undefined
           ? await accounts.selected(params.providerId)
           : undefined;
-        // Timeline (optional) records the run-start state before the runtime
-        // can edit files. It resolves to undefined when the session has not
-        // opted in, and never rejects, so it cannot prevent the run.
-        const observer = project === undefined ? undefined : await this.app.timeline?.beginRun({ sessionId: params.sessionId });
+        // Attach the optional observer only after execution creates/restores
+        // the worktree, while still capturing before any provider can edit it.
+        // The forwarding object is stable while the queued run prepares; its
+        // event stream cannot begin until beforeRuntime has completed.
+        let preparedObserver: TimelineRunObserver | undefined;
+        const observer: TimelineRunObserver | undefined = project === undefined || !this.app.timeline ? undefined : {
+          bindRun: (id) => preparedObserver?.bindRun(id),
+          observe: (event) => preparedObserver?.observe(event),
+          finish: async () => { await preparedObserver?.finish(); },
+          abandon: () => preparedObserver?.abandon(),
+        };
         let handle: Awaited<ReturnType<typeof execution.start>>;
         try {
           if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
-          handle = await execution.start(params);
+          handle = await execution.start(params, { beforeRuntime: async (runId, signal) => {
+            if (!observer || signal.aborted) return;
+            preparedObserver = await this.app.timeline?.beginRun({ sessionId: params.sessionId });
+            preparedObserver?.bindRun(runId);
+            if (signal.aborted) preparedObserver?.abandon();
+          } });
         } catch (error) {
           observer?.abandon();
           throw error;
@@ -492,6 +543,33 @@ export class HostApi {
       throw new HostOperationError("feature_unavailable", "Timeline is not available in this application.");
     }
     return this.app.timeline;
+  }
+
+  /** Adds live writer state; the legacy persisted writer field never reaches clients. */
+  private projectView(project: ProjectRecord): ProjectView {
+    const { activeWriterAttemptId: _legacy, ...rest } = project;
+    return { ...rest, activeWriters: this.app.projects.activeWriters(project.id) };
+  }
+
+  /** Resolve a selected session without silently falling back to the main
+   * checkout when its isolated worktree has not been created or was removed. */
+  private async sessionDirectory(sessionId: string): Promise<string> {
+    const session = await this.app.sessions.get(sessionId);
+    return session.projectId === undefined ? this.app.sessions.workspace(session.id)
+      : this.app.projects.executionPath(session.projectId, session.id, session.workspaceMode ?? "shared");
+  }
+
+  private async requireIsolation(projectId: string): Promise<void> {
+    const reason = await this.app.projects.isolationUnavailableReason(projectId);
+    if (reason !== undefined) throw new IsolationUnavailableError(reason);
+  }
+
+  /** A view may name a session only within the same project. */
+  private async ownSessionId(projectId: string, sessionId: string | undefined): Promise<string | undefined> {
+    if (sessionId === undefined) return undefined;
+    const [project, session] = await Promise.all([this.app.projects.getProject(projectId), this.app.sessions.get(sessionId)]);
+    if (session.projectId !== project.id) throw new HostOperationError("invalid_input", "The session belongs to another project.");
+    return session.workspaceMode === "isolated" ? session.id : undefined;
   }
 
   private async listAccounts(): Promise<readonly AccountView[]> {

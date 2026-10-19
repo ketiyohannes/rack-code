@@ -9,6 +9,7 @@ import { icon, type IconName } from "../icons.js";
 import { openModal } from "../components/modal.js";
 import { openGitHubSignIn } from "../components/github-sign-in.js";
 import { createSideChat } from "./side-chat.js";
+import { createSideChatVisibility } from "./side-chat-state.js";
 import { EXPLAIN_PROMPT, pullRequestSideChatContext } from "./side-chat-contexts.js";
 import { createDropdown } from "../components/dropdown.js";
 import { mountRepositoryPullRequests } from "./repository-reviews.js";
@@ -46,6 +47,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
   const detailMain = h("div", { class: "pr-detail-main" });
   let sideChatOpen = false;
   const sideChat = createSideChat(store, controller, host, { onClose: () => toggleSideChat(false), resizable: true });
+  const chatVisibility = createSideChatVisibility(host, (open) => toggleSideChat(open, false));
   const detailRoot = h("div", { class: "pr-inbox-detail pr-review-layout" }, detailMain, sideChat.element); detailRoot.hidden = true;
   sideChat.element.hidden = true;
   const search = h("input", { type: "search", class: "review-search", placeholder: "Search pull requests…", aria: { label: "Search pull requests" } });
@@ -73,6 +75,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
     }
     if (root.hidden) return;
     queryGeneration++; detailGeneration++; accountGeneration++; loading = false; repositoryMode = true; inboxRoot.hidden = true;
+    chatVisibility.select(undefined);
     repositories.open(create);
   }
   function renderTabs(): void {
@@ -82,6 +85,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
   }
   function reset(): void {
     queryGeneration++; detailGeneration++; loading = false; page = 1; hasMore = false; unavailable = false; pulls = []; selected = undefined; target = undefined; detail = undefined;
+    chatVisibility.select(undefined);
     index.hidden = false; detailRoot.hidden = true; renderList();
   }
   search.addEventListener("input", () => {
@@ -149,6 +153,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
   }
   function back(): void {
     detailGeneration++; selected = undefined; target = undefined; detail = undefined; index.hidden = false; detailRoot.hidden = true;
+    chatVisibility.select(undefined);
   }
   async function select(pull: InboxPull, usingAccount = pull.accounts[0]!, showLoading = true): Promise<void> {
     const request = ++detailGeneration;
@@ -164,6 +169,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
       const result = await host.call("reviews.inboxDetail", target);
       if (request !== detailGeneration || repositoryMode || root.hidden) return;
       detail = result;
+      chatVisibility.select(pullRequestSideChatContext(`${pull.host}/${pull.repository}`, detail).key);
       if (showLoading || (!busy && !detailMain.contains(document.activeElement) && !document.querySelector(".popover, .modal-backdrop"))) renderDetail();
     } catch (error) {
       if (request !== detailGeneration) return;
@@ -181,7 +187,8 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
     const account = createDropdown<string>({ ariaLabel: "Review as GitHub account", variant: "pill", onChange: (id) => { void select(selectedPull, id); } });
     account.setOptions(accounts.filter((entry) => entry.host === selectedPull.host).map((entry) => ({ value: entry.id, label: `Review as ${entry.login}`, description: entry.host })), target.accountId);
     account.setDisabled(busy);
-    if (sideChatOpen) sideChat.setContext(pullRequestSideChatContext(`${selected.host}/${selected.repository}`, detail));
+    const chatContext = pullRequestSideChatContext(`${selected.host}/${selected.repository}`, detail);
+    if (sideChatOpen) sideChat.setContext(chatContext);
     renderReviewDetail(detailMain, { detail, provider: "github", authenticated: true, busy, repository: `${selected.host}/${selected.repository}`, tab, account: account.element,
       draft: drafts.get(reviewDraftKey) ?? "", decision: decisions.get(reviewDraftKey) ?? "comment",
       onDraft: (value) => drafts.set(reviewDraftKey, value), onDecision: (value) => decisions.set(reviewDraftKey, value), onTab: (value) => { tab = value; renderDetail(); }, onBack: back,
@@ -191,11 +198,12 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
       onExplain: () => { toggleSideChat(true); void sideChat.send(EXPLAIN_PROMPT); } });
   }
   /** Docks or hides the side chat; its context follows the selected PR. */
-  function toggleSideChat(open: boolean): void {
+  function toggleSideChat(open: boolean, manual = true): void {
+    if (manual) { chatVisibility.set(open); if (open) sideChat.focus(); return; }
     sideChatOpen = open;
     sideChat.element.hidden = !open;
     detailRoot.classList.toggle("with-side-chat", open);
-    if (open && detail && selected) { sideChat.setContext(pullRequestSideChatContext(`${selected.host}/${selected.repository}`, detail)); sideChat.focus(); }
+    if (open && detail && selected) { sideChat.setContext(pullRequestSideChatContext(`${selected.host}/${selected.repository}`, detail)); }
     renderDetail();
   }
   async function act(action: ReviewAction, body = ""): Promise<void> {
@@ -242,7 +250,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
   }
   store.watch((app) => app.page, (_slice, app) => {
     const wasHidden = root.hidden; root.hidden = app.page !== "pull-requests";
-    if (root.hidden) { repositories.close(); repositoryMode = false; queryGeneration++; detailGeneration++; accountGeneration++; loading = false; clearTimeout(searchTimer); return; }
+    if (root.hidden) { chatVisibility.select(undefined); repositories.close(); repositoryMode = false; queryGeneration++; detailGeneration++; accountGeneration++; loading = false; clearTimeout(searchTimer); return; }
     if (wasHidden) { repositoryMode = false; repositories.close(); inboxRoot.hidden = false; back(); void loadAccounts(false); }
   });
   window.setInterval(() => { if (!root.hidden && !repositoryMode && !document.hidden && !loading && !busy && page === 1) void loadList(); }, 30_000);

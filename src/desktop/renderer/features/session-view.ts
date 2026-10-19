@@ -30,6 +30,7 @@ import type {
   ProjectView,
   RuntimeEvent,
   SessionMessageView,
+  SessionWorkspaceView,
 } from "../../../contracts/desktop/index.js";
 import type { Controller } from "../controller.js";
 import { formatTime, h, replace, shortId } from "../dom.js";
@@ -42,6 +43,7 @@ import { accountLabel, isActiveStatus } from "./run-format.js";
 import { importedTool, presentTool } from "./tool-presentation.js";
 import { formatAttachmentSize } from "./attachments.js";
 import { compacts, groupConsecutiveActivity, type ActivityItem } from "./tool-groups.js";
+import { renderWorkspaceChip } from "./workspace.js";
 
 /** Prompts longer than this (characters or lines) start clipped. */
 const LONG_PROMPT_CHARS = 600;
@@ -123,8 +125,8 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     updateChrome();
   }
 
-  store.watch((state) => [state.session, state.projects, state.selection.sessionId, state.selection.projectId], (_slice, state) => {
-    replace(header, ...renderHeader(state.session, state.projects, controller, state.selection.projectId));
+  store.watch((state) => [state.session, state.projects, state.selection.sessionId, state.selection.projectId, state.workspace], (_slice, state) => {
+    replace(header, ...renderHeader(state.session, state.projects, controller, state.selection.projectId, state.workspace));
   });
 
   let lastSessionId: string | undefined;
@@ -141,7 +143,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   document.addEventListener("visibilitychange", () => { if (!document.hidden && current?.page === "chat") draw(current, false); });
 }
 
-function renderHeader(session: SessionView | undefined, projects: readonly ProjectView[], controller: Controller, projectId?: string): Node[] {
+function renderHeader(session: SessionView | undefined, projects: readonly ProjectView[], controller: Controller, projectId?: string, workspace?: SessionWorkspaceView): Node[] {
   if (session === undefined) {
     const project = projects.find((entry) => entry.id === projectId);
     return [h("span", { class: "session-title muted" }, project?.path.split(/[\\/]/).at(-1) ?? "Workspace"),
@@ -157,7 +159,7 @@ function renderHeader(session: SessionView | undefined, projects: readonly Proje
     h("span", { class: "session-meta", title: meta }, meta),
     h("div", { class: "session-chips" },
       h("button", { class: "icon-button", type: "button", title: "Side chat: ask without interrupting this session", aria: { label: "Open side chat" }, onClick: () => controller.openTool("side-chat") }, icon("chat-circle-text")),
-      createOpenInButton(controller, () => controller.resolveEditorTarget(".", project?.path, session.id)),
+      createOpenInButton(controller, () => controller.resolveEditorTarget(".", undefined, session.id)),
       session.projectId === undefined ? h("button", { class: "button button-small", type: "button", onClick: () => {
         const content = h("div", { class: "modal-body attach-project-list" },
           h("p", { class: "note" }, "Keep this conversation and continue in a project. Chat files remain in their original workspace."),
@@ -166,8 +168,9 @@ function renderHeader(session: SessionView | undefined, projects: readonly Proje
         const modal = openModal({ title: "Attach a project", content });
       } }, icon("folder-simple-plus"), "Attach project") : null,
       (session.originatedAsChat || session.projectId === undefined) ? h("button", { class: "icon-button", type: "button", title: "Open chat files", aria: { label: "Open chat files" }, onClick: () => void controller.openSessionPath(session.id, "", true) }, icon("folder-open")) : null,
-      project?.activeWriterAttemptId === undefined ? null : h("span", { class: "chip" },
-        icon("pencil-simple"), `writer ${shortId(project.activeWriterAttemptId)}`),
+      // Where this session runs: its isolated worktree, or a warning while
+      // other shared sessions edit the same folder.
+      renderWorkspaceChip(session, workspace?.mode === (session.workspaceMode ?? "shared") ? workspace : undefined, project, controller),
     ),
   ];
 }
@@ -295,7 +298,8 @@ function renderTurn(
   if (live !== undefined) {
     if (isActiveStatus(run.status) && (reply.length === 0 || live.cancelRequested)) {
       reply.push(h("div", { class: "note working" }, icon("circle-notch", { className: "spin" }),
-        live.cancelRequested ? "Stopping" : run.status === "queued" ? "Waiting for the runtime" : "Working"));
+        live.cancelRequested ? "Stopping" : run.status === "queued"
+          ? (state.session?.workspaceMode === "isolated" ? "Preparing worktree" : "Starting") : "Working"));
     }
   } else {
     if (copyText === "") {

@@ -14,6 +14,7 @@ import { openGitHubSignIn } from "../components/github-sign-in.js";
 import { createDropdown } from "../components/dropdown.js";
 import { createCheckbox } from "../components/checkbox.js";
 import { createSideChat } from "./side-chat.js";
+import { createSideChatVisibility } from "./side-chat-state.js";
 import { EXPLAIN_PROMPT, pullRequestSideChatContext } from "./side-chat-contexts.js";
 import { renderReviewDetail, type ReviewTab } from "./review-detail.js";
 
@@ -38,6 +39,7 @@ export function mountRepositoryPullRequests(root: HTMLElement, store: Store, con
   // The review and its docked side chat; only `detailBody` re-renders.
   let sideChatOpen = false;
   const sideChat = createSideChat(store, controller, host, { onClose: () => toggleSideChat(false), resizable: true });
+  const chatVisibility = createSideChatVisibility(host, (open) => toggleSideChat(open, false));
   sideChat.element.hidden = true;
   const detailPane = h("div", { class: "review-detail-pane pr-review-layout" }, detailBody, sideChat.element);
   const search = h("input", { type: "search", class: "review-search", placeholder: "Search pull requests…", aria: { label: "Search pull requests" } });
@@ -83,6 +85,7 @@ export function mountRepositoryPullRequests(root: HTMLElement, store: Store, con
   }
   function resetQuery(): void {
     generation++; listGeneration++; detailGeneration++; loading = false; page = 1; selected = undefined; detail = undefined; pulls = []; hasMore = false;
+    chatVisibility.select(undefined);
     renderList(); renderDetail();
   }
   function configureGithub(): void {
@@ -173,7 +176,10 @@ export function mountRepositoryPullRequests(root: HTMLElement, store: Store, con
       const account = githubTarget();
       const result = account ? await host.call("reviews.inboxDetail", { ...account, id }) : await host.call("reviews.detail", { projectId, remote: remoteName, id });
       if (identity !== generation || request !== detailGeneration) return;
-      detail = result; if (showLoading || (!busy && !detailBody.contains(document.activeElement) && !document.querySelector(".popover, .modal-backdrop"))) renderDetail();
+      detail = result;
+      const repo = currentRepository();
+      chatVisibility.select(repo ? pullRequestSideChatContext(`${repo.host}/${repo.slug}`, detail).key : undefined);
+      if (showLoading || (!busy && !detailBody.contains(document.activeElement) && !document.querySelector(".popover, .modal-backdrop"))) renderDetail();
     } catch (reason) {
       if (identity === generation && request === detailGeneration) {
         if (!showLoading && detail) { notice(message(reason), true); return; }
@@ -185,7 +191,7 @@ export function mountRepositoryPullRequests(root: HTMLElement, store: Store, con
       }
     }
   }
-  function back(): void { selected = undefined; detail = undefined; detailGeneration++; renderDetail(); }
+  function back(): void { selected = undefined; detail = undefined; detailGeneration++; chatVisibility.select(undefined); renderDetail(); }
   function renderDetail(): void {
     workspace.classList.toggle("is-reading", selected !== undefined);
     detailPane.hidden = selected === undefined;
@@ -196,7 +202,8 @@ export function mountRepositoryPullRequests(root: HTMLElement, store: Store, con
     }
     const reviewDraftKey = draftKey();
     const repo = currentRepository();
-    if (sideChatOpen && repo) sideChat.setContext(pullRequestSideChatContext(`${repo.host}/${repo.slug}`, detail));
+    const chatContext = repo ? pullRequestSideChatContext(`${repo.host}/${repo.slug}`, detail) : undefined;
+    if (sideChatOpen) sideChat.setContext(chatContext);
     renderReviewDetail(detailBody, { detail, repository: currentRepository()?.slug ?? "", provider: currentRepository()?.provider ?? "github", authenticated: authenticated(),
       busy, tab, draft: drafts.get(reviewDraftKey) ?? "", decision: decisions.get(reviewDraftKey) ?? "comment",
       onDraft: (value) => drafts.set(reviewDraftKey, value), onDecision: (value) => decisions.set(reviewDraftKey, value),
@@ -207,12 +214,13 @@ export function mountRepositoryPullRequests(root: HTMLElement, store: Store, con
       onExplain: () => { toggleSideChat(true); void sideChat.send(EXPLAIN_PROMPT); } });
   }
   /** Docks or hides the side chat; its context follows the selected PR. */
-  function toggleSideChat(open: boolean): void {
+  function toggleSideChat(open: boolean, manual = true): void {
+    if (manual) { chatVisibility.set(open); if (open) sideChat.focus(); return; }
     sideChatOpen = open;
     sideChat.element.hidden = !open;
     detailPane.classList.toggle("with-side-chat", open);
     const repo = currentRepository();
-    if (open && detail && repo) { sideChat.setContext(pullRequestSideChatContext(`${repo.host}/${repo.slug}`, detail)); sideChat.focus(); }
+    if (open && detail && repo) { sideChat.setContext(pullRequestSideChatContext(`${repo.host}/${repo.slug}`, detail)); }
     renderDetail();
   }
   async function mutate(action: () => Promise<void>, success: string): Promise<void> {
@@ -360,7 +368,7 @@ export function mountRepositoryPullRequests(root: HTMLElement, store: Store, con
       projectId = store.get().reviewProjectId ?? store.get().selection.projectId ?? store.get().projects[0]?.id ?? "";
       void loadRepositories().then(() => { if (create && enabled) createForm(); });
     },
-    close() { enabled = false; root.hidden = true; generation++; listGeneration++; detailGeneration++; },
+    close() { chatVisibility.select(undefined); enabled = false; root.hidden = true; generation++; listGeneration++; detailGeneration++; },
   };
 }
 function message(reason: unknown): string { return reason instanceof Error ? reason.message : String(reason); }

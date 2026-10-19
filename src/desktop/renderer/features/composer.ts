@@ -16,6 +16,7 @@ import {
   type RunView,
   type RuntimeCapabilities,
 } from "../../../contracts/desktop/index.js";
+import { createWorkspacePill } from "./workspace.js";
 import { createDropdown, type DropdownOption } from "../components/dropdown.js";
 import { createModelPicker } from "../components/model-picker.js";
 import type { Controller } from "../controller.js";
@@ -56,6 +57,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     onChange: () => refresh(store.get()),
   });
   const model = createModelPicker(() => refresh(store.get()), () => controller.openSettings("models"));
+  const workspace = createWorkspacePill(controller);
 
   const connectPill = h("button", {
     class: "icon-button composer-action", type: "button", title: "Connect an account", aria: { label: "Connect an account" },
@@ -80,7 +82,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       prompt,
       h("div", { class: "composer-toolbar" },
         attachments.trigger,
-        h("div", { class: "composer-pills" }, planToggle, permission.element, skills.trigger, account.element, connectPill, model.element),
+        h("div", { class: "composer-pills" }, planToggle, workspace.element, permission.element, skills.trigger, account.element, connectPill, model.element),
         send,
       ),
     ),
@@ -213,6 +215,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       workflow = state.runs.at(-1)?.interactionMode ?? "normal";
       workflowInitializedFor = draftSession;
     }
+    workspace.refresh(state);
     const activeId = activeRunId(state);
     if (activeId !== undefined) { mode = state.live[activeId]!.run.permissionMode; workflow = state.live[activeId]!.run.interactionMode ?? "normal"; }
     model.update(state.models, state.favoriteModelKeys);
@@ -267,6 +270,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     guard.hidden = approvals.length === 0 && catalogMessage === undefined && !needsFavorites && unknownRunId === undefined;
     guard.classList.toggle("approval-open", approvals.length > 0);
 
+    workspace.element.disabled ||= submitting;
     const noSession = state.session === undefined || state.selection.sessionId !== state.session.id || state.host.status !== "ready";
     const targetAccount = effectiveAccount(state);
     skills.update(state.session && selected && targetAccount ? { sessionId: state.session.id, runtimeId: selected.runtimeId, accountId: targetAccount.id, ...(state.session.projectId === undefined ? {} : { projectId: state.session.projectId }) } : undefined, noSession || submitting || activeId !== undefined);

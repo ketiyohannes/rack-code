@@ -40,11 +40,15 @@ export function sessionSideChatContext(store: Store, sessionId: string): SideCha
       const live = current.session?.id === sessionId ? current.session : undefined;
       const recent = (live?.messages ?? []).filter((message) => message.role === "user" || message.role === "assistant").slice(-RECENT_MESSAGES)
         .map((message) => `[${message.role === "user" ? "User" : "Assistant"}] ${message.content.length > MESSAGE_CHARS ? `${message.content.slice(0, MESSAGE_CHARS)}…` : message.content}`);
-      const folder = current.projects.find((entry) => entry.id === live?.projectId)?.path;
+      const isolated = live?.workspaceMode === "isolated";
+      const folder = isolated ? (current.workspace?.mode === "isolated" && current.workspace.exists ? current.workspace.path : undefined)
+        : current.projects.find((entry) => entry.id === live?.projectId)?.path;
       return [
         "Rack side chat. The user is asking a side question about their main agent conversation while it may still be working. Do not modify any files; answer concisely.",
         `Main session: ${live?.title ?? "Untitled"}`,
-        folder ? `Project folder (read files here if useful): ${folder}` : "The main session is a standalone chat without a project folder.",
+        folder ? `Project folder (read files here if useful): ${folder}` : isolated
+          ? "This session's isolated worktree is not available yet. Do not use the shared checkout as its working files."
+          : "The main session is a standalone chat without a project folder.",
         recent.length ? `Recent main conversation, oldest first:\n${recent.join("\n\n")}` : "The main conversation has no messages yet.",
       ].join("\n\n");
     },

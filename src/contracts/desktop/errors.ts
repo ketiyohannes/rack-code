@@ -14,7 +14,12 @@ export type HostErrorCode =
   | "account_not_found"
   | "no_eligible_account"
   | "project_not_found"
-  | "project_busy"
+  /** The session already has an active run; each session runs one turn at a time. */
+  | "session_busy"
+  /** Isolated sessions need Git and a repository with at least one commit. */
+  | "isolation_unavailable"
+  /** A worktree with uncommitted changes needs an explicit force to remove. */
+  | "workspace_dirty"
   | "session_not_found"
   | "session_busy"
   | "file_conflict"

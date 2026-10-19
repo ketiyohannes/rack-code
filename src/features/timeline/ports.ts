@@ -155,6 +155,7 @@ export interface TimelineCoreAccess {
     /** Native Codex session ID for sessions imported from local Codex history. */
     readonly importedCodexSessionId?: string;
   }>;
-  /** True while an app-managed run holds the project's writer lock. */
-  projectBusy(projectId: string): Promise<boolean>;
+  /** True while the named session has an app-managed writer. Omitting the
+   * session checks the project; older embedders may conservatively do that. */
+  projectBusy(projectId: string, sessionId?: string): Promise<boolean>;
 }

@@ -76,7 +76,7 @@ export function createFilesPanel(store: Store, controller: Controller, isVisible
   }
   function renderList(): void {
     const project = store.get().projects.find((project) => project.id === projectId);
-    folderName.textContent = path || project?.path.split(/[\\/]/).at(-1) || (projectId?.startsWith("chat:") ? "Chat files" : "Select a project");
+    folderName.textContent = path || project?.path.split(/[\\/]/).at(-1) || (projectId?.startsWith("chat:") ? (store.get().session?.workspaceMode === "isolated" ? "Worktree files" : "Chat files") : "Select a project");
     folderName.title = path || project?.path || "";
     up.disabled = path === ""; refresh.disabled = loading || projectId === undefined;
     filter.disabled = projectId === undefined;
@@ -143,9 +143,11 @@ export function createFilesPanel(store: Store, controller: Controller, isVisible
     catch (failure) { if (target === projectId && file === selected) error.textContent = message(failure); }
     finally { saving = false; renderEditorStatus(); }
   }
-  store.watch((state) => [state.selection.projectId, state.selection.sessionId, state.host.status], () => {
+  store.watch((state) => [state.selection.projectId, state.selection.sessionId, state.host.status, state.session, state.workspace], () => {
     const state = store.get();
-    const next = state.selection.projectId ?? (state.selection.sessionId === undefined ? undefined : `chat:${state.selection.sessionId}`);
+    const session = state.session?.id === state.selection.sessionId ? state.session : state.sessions.find((entry) => entry.id === state.selection.sessionId);
+    const next = session?.workspaceMode === "isolated" && state.selection.sessionId !== undefined ? `chat:${state.selection.sessionId}`
+      : state.selection.projectId ?? (state.selection.sessionId === undefined ? undefined : `chat:${state.selection.sessionId}`);
     if (next !== projectId) { projectId = next; generation++; fileGeneration++; readingKey = undefined; loading = false; path = next === undefined ? "" : folders.get(next) ?? ""; selected = next === undefined ? undefined : selectedFiles.get(next); listing = undefined; filter.value = ""; error.textContent = ""; showEditor(); renderList(); }
     if (active) void load();
   });
