@@ -26,6 +26,7 @@ import {
   type ProjectView,
   type RuntimeEvent,
   type UserQuestionResponse,
+  type WorkspaceMode,
 } from "../../contracts/desktop/index.js";
 import type { HostClient } from "./host-client.js";
 import { loadEnabledPlugins, saveEnabledPlugins } from "./surfaces.js";
@@ -66,8 +67,13 @@ export class Controller {
   ) {}
 
   /** Read-only project snapshot; the Changes panel owns loading/error display. */
-  getProjectChanges(projectId: string, repositoryPath?: string) {
-    return this.host.call("projects.changes", { projectId, ...(repositoryPath === undefined ? {} : { repositoryPath }) });
+  /** `sessionId` reads an isolated session's worktree instead of the project folder. */
+  getProjectChanges(projectId: string, repositoryPath?: string, sessionId?: string) {
+    return this.host.call("projects.changes", {
+      projectId,
+      ...(repositoryPath === undefined ? {} : { repositoryPath }),
+      ...(sessionId === undefined ? {} : { sessionId }),
+    });
   }
 
   listFiles(projectId: string, path: string) { return projectId.startsWith("chat:") ? this.host.call("sessions.files.list", { sessionId: projectId.slice(5), path }) : this.host.call("files.list", { projectId, path }); }
@@ -84,8 +90,36 @@ export class Controller {
   presentBrowser(request: BrowserPresentation) { return this.host.presentBrowser(request); }
 
   /** Discovery is cached by the host; explicit rescan bypasses that cache. */
-  discoverProjectRepositories(projectId: string, options: import("../../contracts/desktop/views.js").RepositoryDiscoveryOptions = {}) {
-    return this.host.call("projects.repositories", { projectId, ...options });
+  discoverProjectRepositories(projectId: string, options: import("../../contracts/desktop/views.js").RepositoryDiscoveryOptions = {}, sessionId?: string) {
+    return this.host.call("projects.repositories", { projectId, ...options, ...(sessionId === undefined ? {} : { sessionId }) });
+  }
+
+  /**
+   * Chooses where a session without messages will run. The host rejects the
+   * change after the first message, and `isolated` without Git support.
+   */
+  async setSessionWorkspaceMode(sessionId: string, mode: WorkspaceMode): Promise<boolean> {
+    return this.attempt(async () => {
+      await this.host.call("sessions.setWorkspaceMode", { sessionId, mode });
+      await Promise.all([this.reloadSessions(), this.reloadSession(sessionId)]);
+    });
+  }
+
+  /**
+   * Removes an isolated session's worktree directory; its branch is kept and
+   * the next run recreates the worktree. Returns the host error code when the
+   * worktree has uncommitted changes, so the caller can confirm `force`.
+   */
+  async removeSessionWorkspace(sessionId: string, force: boolean): Promise<"removed" | "dirty" | "failed"> {
+    try {
+      await this.host.call("sessions.removeWorkspace", { sessionId, force });
+      await this.reloadSession(sessionId);
+      return "removed";
+    } catch (error) {
+      if (error instanceof HostCommandError && error.code === "workspace_dirty") return "dirty";
+      this.notify(describeError(error, this.store.get()));
+      return "failed";
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -192,6 +226,7 @@ export class Controller {
       page: "chat",
       selection: { projectId, sessionId: undefined, runId: undefined },
       session: undefined,
+      workspace: undefined,
       runs: [],
       transcripts: {},
       journal: undefined,
@@ -214,6 +249,7 @@ export class Controller {
       runs: cached?.runs ?? [],
       transcripts: cached?.transcripts ?? {},
       journal: undefined,
+      workspace: state.selection.sessionId === sessionId ? state.workspace : undefined,
     }));
     if (projectChanged || !this.modelDiscoveryStarted) void this.reloadModels().catch((error) => this.report(error));
     await Promise.all([
@@ -314,11 +350,12 @@ export class Controller {
     return this.createSession(project.id);
   }
 
-  async createSession(projectId?: string, title?: string): Promise<boolean> {
+  async createSession(projectId?: string, title?: string, workspaceMode?: WorkspaceMode): Promise<boolean> {
     return this.attempt(async () => {
       const session = await this.host.call("sessions.create", {
         ...(projectId === undefined ? {} : { projectId }),
         ...(title === undefined ? {} : { title }),
+        ...(workspaceMode === undefined ? {} : { workspaceMode }),
       });
       await this.reloadSessions();
       await this.selectSession(session.id);
@@ -473,9 +510,10 @@ export class Controller {
   listEditors() { return this.host.listEditors(); }
   async resolveEditorTarget(path = ".", base?: string, sessionId?: string): Promise<import("../../contracts/desktop/transport.js").OpenPathRequest> {
     const state = this.store.get();
-    const projectPath = base ?? (sessionId === undefined ? state.projects.find((project) => project.id === state.selection.projectId)?.path : undefined);
     const session = sessionId ?? state.selection.sessionId;
-    const directory = projectPath ?? (session === undefined ? undefined : await this.host.call("sessions.directory", { sessionId: session }));
+    const directory = base ?? (session === undefined
+      ? state.projects.find((project) => project.id === state.selection.projectId)?.path
+      : await this.host.call("sessions.directory", { sessionId: session }));
     return { path, ...(directory === undefined ? {} : { base: directory }) };
   }
   async openInEditor(editorId: string, target: import("../../contracts/desktop/transport.js").OpenPathRequest): Promise<void> {
@@ -494,14 +532,15 @@ export class Controller {
 
   /**
    * Opens a path the user clicked. Relative paths resolve against `base`,
-   * defaulting to the selected session's project folder. A path that no
+   * defaulting to the selected session's working directory: its isolated
+   * worktree when it has one, otherwise the project folder. A path that no
    * longer exists is reported as a notice rather than failing silently.
    */
   async openPath(path: string, base?: string): Promise<void> {
     const state = this.store.get();
     try {
-      const chatBase = base === undefined && state.session?.projectId === undefined && state.session ? await this.host.call("sessions.directory", { sessionId: state.session.id }) : undefined;
-      const projectPath = base ?? chatBase ?? state.projects.find((project) => project.id === (state.session?.projectId ?? state.selection.projectId))?.path;
+      const target = await this.resolveEditorTarget(path, base);
+      const projectPath = target.base;
       const result = await this.host.openPath({ path, ...(projectPath === undefined ? {} : { base: projectPath }) });
       if (result === "missing") this.notify({ kind: "info", message: `${path} was not found.` });
       else if (result === "invalid") this.notify({ kind: "info", message: `${path} cannot be opened.` });
@@ -577,11 +616,11 @@ export class Controller {
         });
       }
     }, (error) => {
-      if (error instanceof HostCommandError && error.code === "project_busy") {
+      if (error instanceof HostCommandError && error.code === "session_busy") {
         return {
           kind: "error",
           code: error.code,
-          message: `This project is being edited by attempt ${error.details["attemptId"] ?? "unknown"}. Retry after it finishes.`,
+          message: "This session is still running. Wait for it to finish, or start another session to work in parallel.",
           action: { label: "Retry", run: () => void this.startRun(params) },
         };
       }
@@ -834,8 +873,24 @@ export class Controller {
     if (failure?.status === "rejected") this.report(failure.reason);
   }
 
+  /** Workspace inspection may run Git; keep it off the history-loading path
+   * and reject replies from a removed or subsequently changed conversation. */
+  private reloadWorkspace(sessionId: string): Promise<void> {
+    return this.coalesce(`workspace:${sessionId}`, async () => {
+      for (;;) {
+        const revision = this.sessionRevisions.get(sessionId);
+        const workspace = await this.host.call("sessions.workspace", { sessionId }).catch(() => undefined);
+        if (this.removedSessions.has(sessionId) || this.store.get().selection.sessionId !== sessionId) return;
+        if (this.sessionRevisions.get(sessionId) !== revision) continue;
+        this.store.update((state) => ({ ...state, workspace }));
+        return;
+      }
+    });
+  }
+
   private reloadSession(sessionId: string): Promise<void> {
     if (this.removedSessions.has(sessionId)) return Promise.resolve();
+    void this.reloadWorkspace(sessionId);
     return this.coalesce(`session:${sessionId}`, async () => {
       const revision = this.sessionRevisions.get(sessionId) ?? 0;
       try {
@@ -1008,12 +1063,14 @@ export function describeError(error: unknown, state: AppState): Notice {
       return { ...base, message: "That account belongs to a different provider than the one selected." };
     case "no_eligible_account":
       return { ...base, message: "No account for this provider is marked available. Choose an account explicitly." };
-    case "project_busy":
-      return { ...base, message: `Project is being edited by attempt ${error.details["attemptId"] ?? "unknown"}. Retry after it finishes.` };
-    case "session_busy":
-      return { ...base, message: "Stop this session's active run before removing it." };
     case "file_conflict":
       return { ...base, message: "This file changed on disk. Reload before saving; your draft is kept." };
+    case "session_busy":
+      return { ...base, message: "This session is still running. Wait for it to finish, or start another session to work in parallel." };
+    case "isolation_unavailable":
+      return { ...base, message: error.message };
+    case "workspace_dirty":
+      return { ...base, message: error.message };
     case "account_not_found":
     case "project_not_found":
     case "session_not_found":

@@ -12,17 +12,33 @@ export class ProjectNotFoundError extends ProjectError {
   }
 }
 
-export class ProjectBusyError extends ProjectError {
-  /** Exposed so clients can show the owning attempt without parsing text. */
-  constructor(readonly projectId: string, readonly attemptId: string) {
-    super(`Project '${projectId}' is already being edited by attempt '${attemptId}'.`);
-    this.name = "ProjectBusyError";
-  }
-}
-
 export class InvalidProjectError extends ProjectError {
   constructor(message: string) {
     super(message);
     this.name = "InvalidProjectError";
+  }
+}
+
+/** A session already has an active run; each session runs one turn at a time. */
+export class SessionBusyError extends ProjectError {
+  constructor(readonly sessionId: string, readonly attemptId: string) {
+    super(`Session '${sessionId}' already has an active run (attempt '${attemptId}').`);
+    this.name = "SessionBusyError";
+  }
+}
+
+/** Isolated sessions need a Git repository with at least one commit. */
+export class IsolationUnavailableError extends ProjectError {
+  constructor(message: string) {
+    super(message);
+    this.name = "IsolationUnavailableError";
+  }
+}
+
+/** Removing a worktree with uncommitted changes requires an explicit force. */
+export class WorkspaceDirtyError extends ProjectError {
+  constructor(readonly path: string) {
+    super("This worktree has uncommitted changes. Commit them, or remove the worktree anyway to discard them.");
+    this.name = "WorkspaceDirtyError";
   }
 }

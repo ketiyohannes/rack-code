@@ -36,13 +36,13 @@ If a provider stream ends without a terminal event, Execution records an `unknow
 
 ## Project identity and data upgrades
 
-A workspace is the same concept as a project. `Application.projects` owns the selected folder's path and writer lock; sessions, runs, and model discovery share its `projectId`. There is no second workspace ID or shared/isolated kind. Isolated execution directories for future parallel work will remain associated with a project and are not implemented by this change.
+A workspace is the same concept as a project. `Application.projects` owns the selected folder's path and its execution directories; sessions, runs, and model discovery share its `projectId`. Since 2026-10-15, a session's shared or isolated workspace mode selects either the project folder or a session-owned worktree recorded on the project; there is still no second project identity (see [concurrent sessions](concurrent-sessions.md)).
 
 The project store migrates older `projects.json` project/child-workspace data and standalone `workspaces.json` data into `projects.json` schema 4. Distinct folders retain their IDs; duplicate normalized paths use the oldest project ID and retain other IDs as aliases; if both files contain that ID, the newer standalone folder metadata wins. Legacy project roots without a saved folder are retained. All folders are imported before saving a new project, including when the earlier workspace-only migration imported only some records.
 
 Sessions and runs migrate their former `workspaceId` to `projectId`, taking precedence over an obsolete parent project ID, then resolve any duplicate folder alias to its canonical ID. The two session and run histories remain distinct records grouped under the same project. Existing schema 3 projects and schema 2 session/execution documents also upgrade, so duplicates already saved by the earlier rename are repaired. Messages, native continuation IDs, attempts, execution journal, run outcomes, starting revisions, and active writer IDs are preserved. The legacy `workspaces.json` file is left intact; the canonical projects, sessions, and execution documents are upgraded in place. New schema documents are authoritative and do not repeatedly import old folders. Malformed legacy JSON causes a visible storage error rather than an empty import.
 
-The public API and host contracts use the new names only: `projects.list`/`projects.create`, `projectId`, `projectPath`, `projects.changed`, `project_busy`, and `project_not_found`. The renderer also uses Projects labels and retains the previous sidebar expansion preference. Provider-native permission names such as Codex's `workspace-write` are unchanged.
+The public API and host contracts use the new names only: `projects.list`/`projects.create`, `projectId`, `projectPath`, `projects.changed`, `session_busy` (formerly `project_busy`), and `project_not_found`. The renderer also uses Projects labels and retains the previous sidebar expansion preference. Provider-native permission names such as Codex's `workspace-write` are unchanged.
 
 ## Local history import
 

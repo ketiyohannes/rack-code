@@ -29,6 +29,8 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   let openSurface: string | undefined = tabs[0];
   let tabSignature = "";
   let projectId: string | undefined;
+  // Isolated session whose worktree the panel reads; undefined reads the project folder.
+  let viewSessionId: string | undefined;
   let repositories: ProjectRepositories | undefined;
   // Empty selection means All repositories; undefined means discovery pending.
   let repository: string | undefined;
@@ -302,9 +304,10 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
 
   async function chooseFolder(): Promise<void> {
     const selected = projectId;
+    const session = viewSessionId;
     const project = store.get().projects.find((candidate) => candidate.id === selected);
-    const path = await controller.selectDirectory("Choose a repository folder inside this workspace", project?.path);
-    if (path !== undefined && selected === projectId) rescan({ repositoryPath: path });
+    const path = await controller.selectDirectory("Choose a repository folder inside this workspace", viewSessionId === undefined ? project?.path : store.get().workspace?.path);
+    if (path !== undefined && selected === projectId && session === viewSessionId) rescan({ repositoryPath: path });
   }
 
   /** Serialize reads and invalidate replies on either workspace or repository changes. */
@@ -321,20 +324,21 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     // differ, wait; the watcher resets the panel and refreshes.
     const selected = projectId;
     if (inFlight || document.hidden || openSurface !== "changes" || !isVisible() || state.host.status !== "ready" || selected === undefined
-      || selected !== state.selection.projectId) return;
+      || selected !== state.selection.projectId || (viewSessionId !== undefined && viewSessionId !== state.selection.sessionId)) return;
     inFlight = true;
     const version = generation;
-    const current = () => generation === version && projectId === selected && store.get().selection.projectId === selected;
+    const viewing = viewSessionId;
+    const current = () => generation === version && projectId === selected && store.get().selection.projectId === selected && viewSessionId === viewing && (viewing === undefined || store.get().selection.sessionId === viewing);
     try {
       if (repositories === undefined) {
-        let found = await controller.discoverProjectRepositories(selected, discoveryOptions);
+        let found = await controller.discoverProjectRepositories(selected, discoveryOptions, viewSessionId);
         if (!current()) return;
         let saved: string | null = null;
         try { saved = localStorage.getItem(`changes.repository.${selected}`); } catch { /* Use discovery order. */ }
         // Manually selected/deep repositories may not be in the shallow scan
         // after restarting. Revalidate that preference through the host.
         if (found.selectedPath === undefined && saved && !found.paths.includes(saved)) {
-          try { found = await controller.discoverProjectRepositories(selected, { repositoryPath: saved }); }
+          try { found = await controller.discoverProjectRepositories(selected, { repositoryPath: saved }, viewSessionId); }
           catch { found = { ...found, warnings: [...found.warnings, "The previous repository is unavailable. Choose another repository."] }; }
           if (!current()) return;
         }
@@ -350,7 +354,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
       // A failed repository does not hide successful siblings in All repositories.
       for (const path of paths) {
         let result: { snapshot?: ProjectChanges; error?: string };
-        try { result = { snapshot: await controller.getProjectChanges(selected, path) }; }
+        try { result = { snapshot: await controller.getProjectChanges(selected, path, viewSessionId) }; }
         catch (failure) { result = { error: failure instanceof Error ? failure.message : String(failure) }; }
         if (!current()) return;
         if (JSON.stringify(snapshots.get(path)) !== JSON.stringify(result)) {
@@ -425,7 +429,11 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
       key: `${projectId}:${path}`, label: path === "." ? project?.path.split("/").at(-1) ?? "Repository" : path,
       ...(result?.snapshot === undefined ? {} : { snapshot: result.snapshot }), ...(result?.error === undefined ? {} : { error: result.error }),
       memory: changesMemory, redraw: render, openFile: (filePath) => {
-        if (project !== undefined) void controller.openPath(filePath, path === "." ? project.path : `${project.path}/${path}`);
+        // Resolve the session directory through the host even when workspace
+        // inspection is still loading. Never open an isolated diff in the
+        // main checkout because its cached workspace path is unavailable.
+        if (viewSessionId !== undefined) void controller.openSessionPath(viewSessionId, path === "." ? filePath : `${path}/${filePath}`);
+        else if (project !== undefined) void controller.openPath(filePath, path === "." ? project.path : `${project.path}/${path}`);
       },
     });
   }
@@ -438,11 +446,17 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void refresh();
   });
-  window.addEventListener("unload", () => window.clearInterval(interval), { once: true });
-  store.watch((state) => [state.selection.projectId, state.host.status, state.runs, Object.keys(state.live).join("|")], () => {
-    const selected = store.get().selection.projectId;
-    if (selected !== projectId) {
+  window.addEventListener("beforeunload", () => window.clearInterval(interval), { once: true });
+  store.watch((state) => [state.selection.projectId, state.host.status, state.runs, Object.keys(state.live).join("|"), state.workspace, state.selection.sessionId, state.session], () => {
+    const state = store.get();
+    const selected = state.selection.projectId;
+    const selectedSession = state.session?.id === state.selection.sessionId ? state.session : state.sessions.find((entry) => entry.id === state.selection.sessionId);
+    const isolatedSession = selectedSession?.workspaceMode === "isolated" ? state.selection.sessionId : undefined;
+    // A different folder (project, or isolated worktree versus project
+    // folder) invalidates repository discovery, selections, and replies.
+    if (selected !== projectId || isolatedSession !== viewSessionId) {
       projectId = selected;
+      viewSessionId = isolatedSession;
       repositories = undefined;
       repository = undefined;
       discoveryOptions = {};

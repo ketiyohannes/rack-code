@@ -183,7 +183,7 @@ test("executes a run end to end, persists transcript and journal, and releases t
   assert.equal(run.result, "done");
   assert.deepEqual(events.map((event) => event.type), ["tool_result", "message_delta", "completed"]);
   assert.equal((await fixture.sessions.get(fixture.session.id)).messages.length, 2);
-  assert.equal((await fixture.projects.getProject(fixture.project.id)).activeWriterAttemptId, undefined);
+  assert.deepEqual(fixture.projects.activeWriters(fixture.project.id), []);
   const journal = await fixture.executions.listJournal(run.id);
   assert.ok(journal.some((entry) => entry.type === "approval_request"));
   assert.equal(fixture.runtime.started.length, 1);
@@ -299,7 +299,7 @@ test("cancellation interrupts the attempt and releases the project", async () =>
   const run = await handle.completed;
 
   assert.equal(run.status, "interrupted");
-  assert.equal((await fixture.projects.getProject(fixture.project.id)).activeWriterAttemptId, undefined);
+  assert.deepEqual(fixture.projects.activeWriters(fixture.project.id), []);
 });
 
 test("records the eligible fallback account on a new attempt", async () => {
@@ -376,7 +376,7 @@ test("rejects a run in another project before recording work or calling a runtim
   }), /project must match its session/);
   assert.deepEqual(await fixture.service.listRuns(fixture.session.id), []);
   assert.deepEqual(fixture.runtime.started, []);
-  assert.equal((await fixture.projects.getProject(other.id)).activeWriterAttemptId, undefined);
+  assert.deepEqual(fixture.projects.activeWriters(other.id), []);
 });
 
 test("an imported conversation starts fresh with visible context and preserves the user's prompt", async () => {
@@ -442,4 +442,79 @@ test("a failed terminal save closes events and relinquishes live ownership inste
   await drained;
   assert.equal(execution.isActive(handle.runId), false);
   assert.equal((await fixture.projects.getProject(fixture.project.id)).activeWriterAttemptId, undefined);
+});
+
+test("isolated sessions run in their worktree; a preparation failure fails the run and frees the session", async () => {
+  const now = () => new Date("2026-10-15T00:00:00.000Z");
+  let fail = false;
+  const provider: import("../projects/ports.js").IsolatedWorkspaceProvider = {
+    unsupportedReason: async () => undefined,
+    create: async (request) => {
+      if (fail) throw new Error("worktree add failed");
+      return {
+        sessionId: request.sessionId, worktreePath: `${request.worktreesRoot}/wt`, path: `${request.worktreesRoot}/wt/app`,
+        branch: "rack/0000abcd", baseRef: "main", baseCommit: "b".repeat(40), checkoutRoot: "/repo",
+      };
+    },
+    exists: async () => true,
+    restore: async () => undefined,
+    status: async () => ({ dirty: false, commitsAhead: 0 }),
+    remove: async () => undefined,
+  };
+  const accounts = new AccountsService(new InMemoryAccountStore(), { now });
+  const projects = new ProjectsService(new InMemoryProjectStore(), { now, isolation: { provider, worktreesRoot: "/data/worktrees" } });
+  const sessions = new SessionsService(new InMemorySessionStore(), { now });
+  const runtimes = new RuntimeRegistry();
+  const runtime = new NoTerminalRuntime();
+  runtimes.register(runtime);
+  const service = new ExecutionService(new InMemoryExecutionStore(), accounts, sessions, projects, runtimes, { now });
+  await accounts.register({
+    id: "account-1", providerId: "fake", identity: { providerAccountId: "p1" },
+    credential: { id: "c1", providerId: "fake", method: "test" }, runtimeContextId: "ctx-1", availability: "available",
+  });
+  const project = await projects.createProject({ id: "project-1", path: "/repo/app" });
+  const isolated = await sessions.create({ id: "iso", projectId: project.id, workspaceMode: "isolated" });
+  const shared = await sessions.create({ id: "shared", projectId: project.id });
+  const start = (sessionId: string) => service.start({
+    sessionId, projectId: project.id, providerId: "fake", runtimeId: runtime.runtimeId, prompt: "go", permissionMode: "full_access",
+  });
+  const drain = async (handle: Awaited<ReturnType<typeof start>>) => {
+    for await (const _event of handle.events) { /* consume */ }
+    return handle.completed;
+  };
+
+  const seen: RuntimeRunInput[] = [];
+  const original = runtime.startRun.bind(runtime);
+  runtime.startRun = (input) => { seen.push(input); return original(input); };
+  await drain(await start(isolated.id));
+  await drain(await start(shared.id));
+  assert.equal(seen[0]?.projectPath, "/data/worktrees/wt/app");
+  assert.equal(seen[0]?.checkoutRoot, "/repo");
+  assert.equal(seen[1]?.projectPath, "/repo/app");
+  assert.equal(seen[1]?.checkoutRoot, undefined);
+
+  fail = true;
+  const other = await sessions.create({ id: "iso-2", projectId: project.id, workspaceMode: "isolated" });
+  const failed = await drain(await start(other.id));
+  assert.equal(failed.status, "failed");
+  assert.match(failed.error ?? "", /worktree add failed/);
+  assert.deepEqual(projects.activeWriters(project.id), []);
+});
+
+test("a queued run can be cancelled during host preparation without starting the runtime", async () => {
+  const fixture = await createFixture();
+  let release!: () => void;
+  let entered!: () => void;
+  const prepared = new Promise<void>(resolve => { entered = resolve; });
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const handle = await fixture.service.start({ sessionId: fixture.session.id, projectId: fixture.project.id,
+    providerId: "fake", runtimeId: fixture.runtime.runtimeId, prompt: "work", permissionMode: "read_only" }, {
+    beforeRuntime: async () => { entered(); await wait; },
+  });
+  await prepared;
+  assert.equal((await fixture.service.getRun(handle.runId)).status, "queued");
+  await handle.cancel(); release();
+  assert.equal((await handle.completed).status, "interrupted");
+  assert.deepEqual(fixture.runtime.started, []);
+  assert.deepEqual(fixture.projects.activeWriters(fixture.project.id), []);
 });

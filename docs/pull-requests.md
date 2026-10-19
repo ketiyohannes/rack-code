@@ -21,7 +21,7 @@ Repositories selects a saved project and its code-host remote. New PR opens crea
 - Debounced search, open/merged/closed/all filters, pagination, explicit refresh and a 30-second refresh while visible.
 - A tabbed review with description, changed files, file filtering, collapsible patches, line numbers, discussion, reviews, inline GitHub review annotations and available CI checks. Provider text is rendered as text, never injected HTML.
 - Summary comments, approval, request changes where supported, merge, close and reopen where supported. Merge/close/reopen require confirmation in the app. Reviews recheck the head commit; GitHub/GitLab merge requests include the reviewed SHA. Code-host protection rules remain authoritative.
-- Creation with title, description, source/target branch and draft status. Publishing a local source branch is a separate explicit normal push with no force. It pushes committed changes only and is blocked while an app-managed run owns the project writer lock. Creation never commits files or silently publishes a branch.
+- Creation with title, description, source/target branch and draft status. Publishing a local source branch is a separate explicit normal push with no force. It pushes committed changes only and is blocked while any app-managed session has an active writer in the project (shared or isolated). Creation never commits files or silently publishes a branch.
 - An external code-host link for controls outside Rack and for large reviews.
 
 GitHub and Bitbucket support request-changes reviews. GitLab's version-dependent blocking review behavior is not represented as a portable action; use comments or the GitLab link. Bitbucket Cloud cannot reopen declined PRs through the implemented API. GitLab is presented under the shared Pull Requests name and uses merge-request APIs. Bitbucket Data Center has a different API and is not supported.
@@ -86,3 +86,7 @@ The earlier PR implementation passed 216 tests and native Electron checks for fo
 The earlier zero-account discovery result was caused by the `login` field bug described in Connections. After the fix, live discovery found both gh logins on this machine, and the inbox aggregated their open PRs.
 
 Live authenticated provider mutations, enterprise deployments and a packaged distribution are not exercised by these fixtures.
+
+### Restore existing explanations
+
+Opening a PR in the inbox or repository view automatically displays its saved side chat when it has messages. The same PR identity and conversation mapping are used in both views. Empty/deleted chats remain closed, and manual closing is respected through refreshes until the next visit. No model request is sent just by opening the PR.

@@ -4357,3 +4357,13 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px color-mix(in
 .snapshot-count { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--overlay); color: var(--text-2); font-size: var(--font-2xs); line-height: 16px; }
 .snapshot-segments button { display: inline-flex; align-items: center; font-size: var(--font-sm); }
 .side-chat-question .bubble { padding: 9px 13px; border-radius: 14px 14px 4px 14px; background: var(--card); border: 1px solid var(--border); color: var(--text); line-height: 1.6; }
+/* Session workspace chip (shared-folder warning or isolated worktree). */
+.session-chips:has(.workspace-chip) { flex-shrink: 1; min-width: 0; }
+.session-chips:has(.workspace-chip) > .icon-button { flex-shrink: 0; }
+.toolbar-title:has(.workspace-chip) .session-title { flex-shrink: 1; }
+.workspace-chip { max-width: 200px; min-width: 0; white-space: nowrap; }
+.workspace-chip-label { overflow: hidden; text-overflow: ellipsis; }
+button.workspace-chip { cursor: pointer; }
+button.workspace-chip:hover { border-color: var(--border-strong); color: var(--text); }
+.workspace-chip.warning { color: var(--danger, #b44a4a); }
+.menu-note { padding: 6px 10px 8px; color: var(--text-3); font-size: 11px; line-height: 1.5; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
