@@ -37,6 +37,8 @@ export interface ShellRegions {
   readonly overlay: HTMLElement;
   /** Whether the right panel is currently shown. */
   readonly isWorkbenchVisible: () => boolean;
+  /** Collapse the right panel and return focus to its visible toolbar toggle. */
+  readonly closeWorkbench: () => void;
 }
 
 const LAYOUT_KEY = "layout.collapsed";
@@ -74,6 +76,7 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
     workbench,
     overlay: h("div", { class: "overlay-root" }),
     isWorkbenchVisible: () => !layout.right && store.get().page === "chat",
+    closeWorkbench: () => { setCollapsed("right", true); rightToggle.focus(); },
   };
 
   const leftToggle = toggleButton("Toggle sidebar", "sidebar-simple", () => setCollapsed("left", !layout.left));
