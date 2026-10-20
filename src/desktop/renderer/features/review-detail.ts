@@ -19,6 +19,8 @@ import { icon, type IconName } from "../icons.js";
 import { createDropdown } from "../components/dropdown.js";
 import { renderMarkdown } from "../markdown.js";
 import { diffFiles, diffRows } from "./change-diff.js";
+import { bindContentMenu } from "../components/context-menu.js";
+import { selectionQuestion } from "./side-chat-prompt.js";
 
 export type ReviewTab = "overview" | "code" | "activity";
 interface Options {
@@ -32,6 +34,8 @@ interface Options {
   onExplain(): void;
   /** Shows or hides the side chat docked beside the review. */
   onSideChat(): void;
+  /** Opens the dock, optionally appending a selected-text question without sending. */
+  onOpenSideChat(draft?: string): void;
   sideChatOpen: boolean;
   /** Opens an http(s) link outside the app. */
   openLink(href: string): void;
@@ -75,6 +79,15 @@ const stripHtmlComments = (text: string) => text.replace(/<!--[\s\S]*?-->/g, "")
 
 export function renderReviewDetail(root: HTMLElement, options: Options): void {
   const { detail, provider, authenticated, busy } = options, { pull } = detail;
+  bindContentMenu(root, ({ selection }) => [
+    { label: "Open side chat", icon: "chat-circle-text", run: () => options.onOpenSideChat() },
+    ...(selection ? [{ label: "Ask about selection", icon: "sparkle" as const, run: () => options.onOpenSideChat(selectionQuestion(selection)) }] : []),
+    { label: "Explain with AI", icon: "sparkle", run: options.onExplain },
+    null,
+    { label: "Open in Timeline", icon: "clock-counter-clockwise", disabled: busy, run: options.onTimeline },
+    { label: "Open on code host", icon: "arrow-up-right", run: () => options.openLink(pull.url) },
+    { label: "Copy PR link", icon: "copy", run: () => navigator.clipboard.writeText(pull.url) },
+  ]);
   const iconButton = (title: string, name: IconName, action: () => void) =>
     h("button", { type: "button", class: "icon-button", title, aria: { label: title }, onClick: action }, icon(name));
   const labeledButton = (title: string, name: IconName, action: () => void, primary = false) =>

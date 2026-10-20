@@ -19,6 +19,8 @@
 
 export interface PopoverOptions {
   readonly anchor: HTMLElement;
+  /** Cursor position for context menus; anchor still owns dismissal/focus. */
+  readonly point?: { readonly x: number; readonly y: number };
   readonly content: HTMLElement;
   /** Minimum width in pixels; defaults to the anchor's width. */
   readonly minWidth?: number;
@@ -59,13 +61,14 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
   let closed = false;
   const onPointerDown = (event: PointerEvent) => {
     const target = event.target as Node;
-    if (!element.contains(target) && !options.anchor.contains(target)) handle.close();
+    if (!element.contains(target) && (options.point || !options.anchor.contains(target))) handle.close();
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
+      event.preventDefault();
       event.stopPropagation();
       handle.close();
-      options.anchor.focus();
+      options.anchor.focus({ preventScroll: true });
     }
   };
   const onViewportChange = (event: Event) => {
@@ -106,7 +109,9 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
 function position(element: HTMLElement, options: PopoverOptions): void {
   const gap = 6;
   const margin = 8;
-  const rect = options.anchor.getBoundingClientRect();
+  const rect = options.point
+    ? { left: options.point.x, right: options.point.x, top: options.point.y, bottom: options.point.y, width: 0 }
+    : options.anchor.getBoundingClientRect();
   const maxWidth = Math.min(Math.max(options.maxWidth ?? 400, options.minWidth ?? 0), window.innerWidth - margin * 2);
   element.style.minWidth = `${Math.min(Math.max(options.minWidth ?? 0, rect.width), maxWidth)}px`;
   element.style.maxWidth = `${maxWidth}px`;

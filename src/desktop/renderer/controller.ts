@@ -273,8 +273,8 @@ export class Controller {
   }
 
   /** Shows the right panel with the given tool tab open, e.g. "side-chat". */
-  openTool(id: string): void {
-    this.store.update((state) => ({ ...state, page: "chat", toolRequest: { id, seq: (state.toolRequest?.seq ?? 0) + 1 } }));
+  openTool(id: string, draft?: string): void {
+    this.store.update((state) => ({ ...state, page: "chat", toolRequest: { id, seq: (state.toolRequest?.seq ?? 0) + 1, ...(draft === undefined ? {} : { draft }) } }));
   }
 
   openSettings(section?: SettingsSection): void {

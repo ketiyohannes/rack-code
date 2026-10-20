@@ -106,7 +106,7 @@ export interface AppState {
   readonly acknowledgedUnknown: Readonly<Record<string, true>>;
   readonly notice?: Notice | undefined;
   /** A request to show a right-panel tool (e.g. Side chat); `seq` makes repeated requests distinct. */
-  readonly toolRequest?: { readonly id: string; readonly seq: number } | undefined;
+  readonly toolRequest?: { readonly id: string; readonly seq: number; readonly draft?: string } | undefined;
 }
 
 export const INITIAL_STATE: AppState = {

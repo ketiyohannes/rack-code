@@ -195,6 +195,7 @@ export function mountPullRequests(root: HTMLElement, store: Store, controller: C
       onReview: (action, body) => void act(action, body), onState: confirmAction, onTimeline: () => void timeline(), onRefresh: () => { if (!busy) void select(selectedPull, selectedAccount); },
       openLink: (href) => controller.openExternal(href),
       sideChatOpen, onSideChat: () => toggleSideChat(!sideChatOpen),
+      onOpenSideChat: (draft) => { toggleSideChat(true); if (draft) sideChat.addDraft(draft); },
       onExplain: () => { toggleSideChat(true); void sideChat.send(EXPLAIN_PROMPT); } });
   }
   /** Docks or hides the side chat; its context follows the selected PR. */

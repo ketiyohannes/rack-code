@@ -519,6 +519,8 @@ See [desktop tools](desktop-tools.md).
 
 Side chats are a renderer feature built on existing core operations; see [Side chat](side-chat.md). Each is a standalone chat session run with the `read_only` permission mode. Side chats retain separate session identity and history. Project sessions also support concurrency; only a second run in the same session is refused. Side-chat context uses the selected isolated worktree when available and never substitutes the shared checkout for a missing worktree. Context (session messages, project path, PR patches) is supplied as bounded hidden prompt text rather than a new core field. The context-to-session mapping is a renderer preference. If side chats later need first-class identity (hiding them from a Chats list, linking them to a parent), add an optional, versioned field to `SessionRecord` rather than inferring it from titles.
 
+Reading-region context menus live entirely in the renderer. A delegated binding captures text only from the selected region or clicked block, then invokes existing review callbacks or a tool request carrying an optional side-chat draft. Opening a draft never starts execution. The shared popover owns cursor placement, dismissal and focus restoration; host and core contracts are unchanged.
+
 Timeline PR synchronization authenticates Git fetches with the same credential the review uses. `fetchAuthEnvironment` scopes an HTTPS `Authorization` header to the code host through `GIT_CONFIG_*` environment variables. This keeps the token out of argv and Git config, and stops the global credential helper (the active gh account) from substituting a different identity.
 
 
