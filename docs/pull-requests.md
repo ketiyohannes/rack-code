@@ -4,6 +4,8 @@ Implemented on `feature/pr-support` (2026-10-16).
 
 The sidebar footer contains icon-only Settings, Usage and Pull Requests buttons, each with a tooltip and accessible name. Notices appear at the bottom left above this footer. Usage and Pull Requests occupy the main area; closing either returns to the selected conversation. Hidden workbench panels pause polling and the shared browser view is hidden.
 
+Right-click PR details, descriptions, code or activity to open side chat, ask about selected text, explain the PR, open Timeline/the code host or copy its link. The same actions work in inbox and repository reviews. **Ask about selection** appends an editable draft; **Explain with AI** starts the existing provider-backed explanation.
+
 ## Account-wide GitHub inbox
 
 Pull Requests opens a unified inbox across every connected GitHub identity, including multiple logins on the same host and GitHub Enterprise accounts. No saved project or local checkout is required. The compact list shows repository, PR number, author, account and update time; selecting a row opens a focused review with Overview, Code and Activity tabs. This layout follows the involvement filters and compact list in [T3's PR route](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/routes/_chat.pull-requests.tsx).

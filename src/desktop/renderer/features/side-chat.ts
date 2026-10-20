@@ -51,6 +51,8 @@ export interface SideChat {
   setContext(context: SideChatContext | undefined): void;
   /** Sends a prompt as if typed, e.g. from an "Explain with AI" action. */
   send(prompt: string): Promise<void>;
+  /** Appends a question to the current draft without sending or replacing it. */
+  addDraft(text: string): void;
   focus(): void;
 }
 
@@ -258,6 +260,10 @@ export function createSideChat(store: Store, controller: Controller, host: HostC
       render(); void load();
     },
     send,
+    addDraft(text) {
+      input.value = input.value ? `${input.value}\n\n${text}` : text;
+      renderComposer(); input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+    },
     focus() { input.focus(); },
   };
 }

@@ -18,6 +18,16 @@ const run: RunView = { id: "run", sessionId: "session", projectId: "project", pr
   permissionMode: "ask", status: "completed", attemptIds: [], attempts: [], createdAt: stamp, updatedAt: stamp };
 const session = { id: "session", projectId: "project", messages: [], continuations: [], createdAt: stamp, updatedAt: stamp };
 
+test("opening a side-chat draft performs no host calls and plain reopening does not replay it", () => {
+  const store = new ImmediateStore();
+  const controller = new Controller({ call: () => { throw new Error("Opening a draft must not contact a provider"); } } as unknown as HostClient, store);
+  controller.openTool("side-chat", "Explain this excerpt");
+  assert.deepEqual(store.get().toolRequest, { id: "side-chat", seq: 1, draft: "Explain this excerpt" });
+  controller.openTool("side-chat");
+  assert.deepEqual(store.get().toolRequest, { id: "side-chat", seq: 2 });
+  assert.equal(store.get().page, "chat");
+});
+
 test("provider diagnostics suppress duplicate clicks and clear stale successes on retry failure", async () => {
   const store = new ImmediateStore();
   let calls = 0;

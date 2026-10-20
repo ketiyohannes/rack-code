@@ -476,7 +476,10 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     const request = store.get().toolRequest;
     if (seq === undefined || request === undefined) return;
     openTool(request.id, true);
-    if (request.id === "side-chat") sideChat.focus();
+    if (request.id === "side-chat") {
+      if (request.draft !== undefined) sideChat.addDraft(request.draft);
+      sideChat.focus();
+    }
   });
   store.watch((state) => [state.selection.runId, state.journal, state.live, state.runs, state.session], () => {
     if (openSurface === "run-details") render();

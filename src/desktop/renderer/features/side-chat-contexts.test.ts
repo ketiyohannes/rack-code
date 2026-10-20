@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PullDetail } from "../../../features/pull-requests/index.js";
-import { CONTEXT_MARKER, MAX_CONTEXT_CHARS, sideChatPrompt, visiblePrompt } from "./side-chat-prompt.js";
+import { CONTEXT_MARKER, MAX_CONTEXT_CHARS, selectionQuestion, sideChatPrompt, visiblePrompt } from "./side-chat-prompt.js";
 import { pullRequestSideChatContext } from "./side-chat-contexts.js";
 
 const detail = (patch: string): PullDetail => ({
@@ -18,6 +18,14 @@ test("the visible question excludes hidden context, and oversized context is bou
   assert.ok(prompt.includes(CONTEXT_MARKER));
   assert.match(prompt, /Context shortened by Rack/);
   assert.equal(sideChatPrompt("Hi", undefined), "Hi");
+});
+
+test("selected excerpts stay literal in an editable question and are bounded before sending", () => {
+  assert.equal(selectionQuestion("<div>source</div>"), "Help me understand this excerpt:\n\n<div>source</div>\n\nMy question: ");
+  const bounded = selectionQuestion("x".repeat(20_000));
+  assert.match(bounded, /Selection shortened by Rack/);
+  assert.ok(bounded.length < 12_200);
+  assert.ok(bounded.endsWith("My question: "));
 });
 
 test("PR context carries the description, file list and patches, and marks unavailable patches", async () => {
