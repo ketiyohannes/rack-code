@@ -1682,6 +1682,12 @@ details.data summary {
   opacity: 0.45;
 }
 
+/* Cursor menus share dropdown colors and density; labels stay readable next
+   to familiar icons. The popover owns viewport clamping and dismissal. */
+.content-context-menu .menu-item { align-items: center; min-height: 34px; font-size: var(--font-sm); }
+.content-context-menu .menu-item > .icon { flex-shrink: 0; color: var(--text-2); }
+.context-menu-status { max-width: 250px; padding: 6px 10px; }
+
 .menu-icon {
   width: 16px;
   height: 16px;

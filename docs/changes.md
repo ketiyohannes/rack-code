@@ -1,3 +1,9 @@
+# Reading-region context menus (2026-10-19)
+
+- Add right-click and keyboard context menus to the main transcript and both PR review views. Open side chat, ask about selected text, copy text/links, and access PR explanation, Timeline and code-host actions. Preserve normal form controls.
+- Selected excerpts become bounded editable side-chat drafts; append to existing drafts and send only when requested. Reuse existing side-chat contexts, permission modes and provider controls. Menus use current theme tokens, icons, cursor clamping, arrow/Home/End navigation, Escape and outside-click dismissal.
+- Validation: `npm run check` passed (305 tests, both type checks and both builds). Chromium fixture checks cover main/PR selection drafts, draft preservation, no automatic provider run from drafting, keyboard opening/navigation, focus restoration, input behavior and window-edge clamping. Final focused tests (27), type checks and renderer build passed after the streaming guard adjustment. Browser checks also cover both PR views, selected diff copying and PR URL copying through a mocked clipboard, outside-click dismissal, captured excerpts surviving node replacement, and Escape dismissing the menu without cancelling a live main run. No browser errors were reported. Live providers and packaged builds were not exercised.
+
 # Reopen saved PR side chats (2026-10-19)
 
 - Automatically display a PR's existing side chat in both the inbox and repository view when its saved session has messages. Keep empty/deleted chats closed, ignore stale history replies after navigation and respect manual closing during refreshes. Reopening reads saved history without sending an AI request or moving keyboard focus.

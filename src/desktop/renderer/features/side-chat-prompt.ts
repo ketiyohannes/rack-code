@@ -10,6 +10,13 @@ export const CONTEXT_MARKER = "\n\n<<<rack-side-chat-context>>>\n";
 /** Upper bound for hidden context; `runs.start` accepts 200,000 characters in total. */
 export const MAX_CONTEXT_CHARS = 60_000;
 
+/** A selected excerpt becomes an editable question, bounded before IPC limits. */
+export function selectionQuestion(text: string): string {
+  const limit = 12_000;
+  const excerpt = text.length > limit ? `${text.slice(0, limit)}\n[Selection shortened by Rack.]` : text;
+  return `Help me understand this excerpt:\n\n${excerpt}\n\nMy question: `;
+}
+
 /** The text the user typed: everything before the context marker. */
 export function visiblePrompt(prompt: string): string {
   const index = prompt.indexOf(CONTEXT_MARKER);

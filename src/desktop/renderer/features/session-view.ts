@@ -1,5 +1,7 @@
 import { createOpenInButton } from "../components/open-in.js";
 import { openModal } from "../components/modal.js";
+import { bindContentMenu } from "../components/context-menu.js";
+import { selectionQuestion } from "./side-chat-prompt.js";
 /**
  * Center column: the open session as a simple chat transcript.
  *
@@ -67,6 +69,17 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   }, icon("caret-down"));
   scrollToEnd.hidden = true;
   root.append(transcript, rail, scrollToEnd);
+  const closeContentMenu = bindContentMenu(transcript, ({ selection }) => {
+    const sessionId = store.get().selection.sessionId;
+    if (!sessionId || store.get().session?.id !== sessionId) return [];
+    const open = (draft?: string) => {
+      if (store.get().selection.sessionId === sessionId) controller.openTool("side-chat", draft);
+    };
+    return [
+      { label: "Open side chat", icon: "chat-circle-text", run: () => open() },
+      ...(selection ? [{ label: "Ask about selection", icon: "sparkle" as const, run: () => open(selectionQuestion(selection)) }] : []),
+    ];
+  });
 
   const memory: ViewMemory = { expandedPrompts: new Set(), openTools: new Set(), openToolGroups: new Set(), collapsedThinking: new Set() };
   let current: AppState | undefined;
@@ -135,6 +148,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     (_slice, state) => {
       current = state;
       const sessionChanged = state.session?.id !== lastSessionId;
+      if (sessionChanged || state.page !== "chat") closeContentMenu();
       lastSessionId = state.session?.id;
       if (sessionChanged) { turns.clear(); folds.clear(); importedCache = undefined; visibleRuns = 50; visibleMessages = 100; }
       if (state.page === "chat" && !document.hidden) draw(state, sessionChanged);
