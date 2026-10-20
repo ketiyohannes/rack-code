@@ -228,6 +228,13 @@ export class HostApi {
         if (this.app.browser === undefined) throw new HostOperationError("feature_unavailable", "The shared browser requires the desktop app.");
         return this.app.browser.control(params.sessionId, params.request);
       }),
+      "projects.branches": async (params) => projects.listBranches(params.projectId),
+      "projects.checkoutBranch": async (params) => {
+        const result = await projects.checkoutBranch(params.projectId, params.ref, params.expectedHead);
+        this.emit({ type: "projects.changed" });
+        this.emit({ type: "timeline.changed", sessionId: "" });
+        return result;
+      },
       "projects.changes": async (params) => projects.getChanges(params.projectId, params.repositoryPath, await this.ownSessionId(params.projectId, params.sessionId)),
       "projects.repositories": async ({ projectId, sessionId, ...options }) => projects.discoverRepositories(projectId, options, await this.ownSessionId(projectId, sessionId)),
       "auth.providers": async () => connections.providers(),
@@ -512,7 +519,7 @@ export class HostApi {
       "timeline.status": async (params) => this.timeline().status(params.sessionId),
       "timeline.setEnabled": async (params) => this.timeline().setEnabled(params.sessionId, params.enabled),
       "timeline.checkpoints": async (params) => this.timeline().checkpoints(params.sessionId),
-      "timeline.projectHistory": async (params) => this.timeline().projectHistory(params.projectId),
+      "timeline.projectHistory": async (params) => this.timeline().projectHistory(params.projectId, params.mode),
       "timeline.setProjectEnabled": async (params) => this.timeline().setProjectEnabled(params.projectId, params.enabled),
       "timeline.snapshot": async (params) => this.timeline().snapshot(params),
       "timeline.snapshotHistory": async (params) => this.timeline().snapshotHistory(params),

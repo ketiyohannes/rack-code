@@ -138,8 +138,13 @@ export class Controller {
     return this.host.call("timeline.checkpoints", { sessionId });
   }
 
-  timelineProjectHistory(projectId: string) {
-    return this.host.call("timeline.projectHistory", { projectId });
+  projectBranches(projectId: string) { return this.host.call("projects.branches", { projectId }); }
+  checkoutProjectBranch(projectId: string, ref: string, expectedHead: string) {
+    return this.host.call("projects.checkoutBranch", { projectId, ref, expectedHead });
+  }
+
+  timelineProjectHistory(projectId: string, mode: "current" | "all" = "current") {
+    return this.host.call("timeline.projectHistory", { projectId, mode });
   }
 
   setProjectTimelineEnabled(projectId: string, enabled: boolean) {
@@ -1090,6 +1095,8 @@ export function describeError(error: unknown, state: AppState): Notice {
       return { ...base, message: state.host.detail ?? "The execution host is not running. Restart the app." };
     case "feature_unavailable":
       return { ...base, message: "This feature is not available in this version of the app." };
+    case "branch_operation_failed":
+      return { ...base, message: error.message };
     case "timeline_busy":
       return { ...base, message: "Stop the current run before changing timeline settings." };
     case "timeline_unsupported":

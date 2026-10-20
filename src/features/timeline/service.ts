@@ -221,11 +221,11 @@ export class TimelineService {
    * HEAD commits and saved timeline refs retain their original provenance;
    * reading never imports them into a session or changes its opt-in state.
    */
-  async projectHistory(projectId: string): Promise<TimelineProjectHistory> {
+  async projectHistory(projectId: string, mode: "current" | "all" = "current"): Promise<TimelineProjectHistory> {
     const { projectPath } = await this.core.project(projectId);
     const capability = await this.snapshots.probe(projectPath);
     if (!capability.supported) return { projectId, supported: false, reason: capability.reason, truncated: false, recording: false, checkpoints: [] };
-    const history = await this.snapshots.projectHistory(projectPath, PROJECT_HISTORY_LIMIT + 1);
+    const history = await this.snapshots.projectHistory(projectPath, PROJECT_HISTORY_LIMIT + 1, mode);
     const records = history.records.slice(-PROJECT_HISTORY_LIMIT).filter(isProjectRecord);
     const candidates: TimelineProjectHistoryEntry[] = [];
     // Repeated refreshes read only the ref tips/history and current ignore
@@ -235,6 +235,7 @@ export class TimelineService {
       candidates.push({
         id: checkpointId(record.snapshot), position: 0, snapshot: record.snapshot,
         label: record.label, createdAt: record.createdAt, files,
+        ...(record.parents ? { parents: record.parents } : {}), ...(record.branches ? { branches: record.branches } : {}),
         source: record.format === "other" ? "git" : record.format === "rack" ? "recorded" : "imported",
         ...(record.sessionId === undefined ? {} : { sessionId: record.sessionId }),
         ...(record.runId === undefined ? {} : { runId: record.runId }),
@@ -243,10 +244,11 @@ export class TimelineService {
     }
     const visible = new Set(await this.snapshots.visiblePaths(projectPath, [...new Set(candidates.flatMap((entry) => entry.files.map((file) => file.path)))]));
     const checkpoints = candidates.map((entry) => ({ ...entry, files: entry.files.filter((file) => visible.has(file.path)) }))
-      .filter((entry) => entry.files.length > 0)
-      // Git timestamps have one-second precision. For ties, keep each
-      // chain's order and place saved observations after ordinary commits.
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || Number(a.source !== "git") - Number(b.source !== "git"))
+      .filter((entry) => entry.files.length > 0 || (mode === "all" && entry.source === "git"))
+      // All-branch pages retain Git topology. In the current-branch view,
+      // equal one-second timestamps keep each chain stable and place saved
+      // observations after ordinary commits.
+      .sort((a, b) => mode === "all" ? 0 : a.createdAt.localeCompare(b.createdAt) || Number(a.source !== "git") - Number(b.source !== "git"))
       .map((entry, index) => ({ ...entry, position: index + 1 }));
     return { projectId, supported: true, recording: (await this.store.getProject(projectId))?.enabled !== false,
       ...(this.captureErrors.get(capability.repositoryRoot) === undefined ? {} : { captureError: this.captureErrors.get(capability.repositoryRoot)! }),
@@ -262,8 +264,9 @@ export class TimelineService {
     const { projectPath } = await this.core.project(projectId);
     const capability = await this.snapshots.probe(projectPath);
     if (!capability.supported) throw new TimelineUnsupportedError(capability.reason);
-    const history = await this.snapshots.projectHistory(projectPath, PROJECT_HISTORY_LIMIT + 1);
-    const record = history.records.slice(-PROJECT_HISTORY_LIMIT).find((entry) => checkpointId(entry.snapshot) === id && isProjectRecord(entry));
+    const history = await this.snapshots.projectHistory(projectPath, PROJECT_HISTORY_LIMIT + 1, "all");
+    const record = history.records.slice(-PROJECT_HISTORY_LIMIT).find((entry) => checkpointId(entry.snapshot) === id && isProjectRecord(entry))
+      ?? (await this.snapshots.projectHistory(projectPath, PROJECT_HISTORY_LIMIT + 1)).records.slice(-PROJECT_HISTORY_LIMIT).find(entry => checkpointId(entry.snapshot) === id && isProjectRecord(entry));
     if (record === undefined) throw new SnapshotNotFoundError(id);
     const files = await this.projectRecordPaths(projectPath, capability.repositoryRoot, record);
     const change = files.find((file) => file.path === path);
@@ -308,7 +311,7 @@ export class TimelineService {
   async snapshotHistory(target: TimelineSnapshotTarget): Promise<TimelineSnapshotHistory> {
     const original = await this.snapshotContext(target);
     const projectId = target.scope === "project" ? target.contextId : (await this.core.session(target.contextId)).projectId;
-    const history = await this.projectHistory(projectId);
+    const history = await this.projectHistory(projectId, "all");
     const entries = history.checkpoints.map((entry) => ({
       id: entry.id, label: entry.label, createdAt: entry.createdAt, source: entry.source,
       target: entry.id === target.checkpointId ? target : { scope: "project" as const, contextId: projectId, checkpointId: entry.id },
@@ -360,8 +363,9 @@ export class TimelineService {
     const { projectPath } = await this.core.project(target.contextId);
     const capability = await this.snapshots.probe(projectPath);
     if (!capability.supported) throw new TimelineUnsupportedError(capability.reason);
-    const history = await this.snapshots.projectHistory(projectPath, PROJECT_HISTORY_LIMIT + 1);
-    const record = history.records.slice(-PROJECT_HISTORY_LIMIT).find((entry) => checkpointId(entry.snapshot) === target.checkpointId && isProjectRecord(entry));
+    const history = await this.snapshots.projectHistory(projectPath, PROJECT_HISTORY_LIMIT + 1, "all");
+    const record = history.records.slice(-PROJECT_HISTORY_LIMIT).find((entry) => checkpointId(entry.snapshot) === target.checkpointId && isProjectRecord(entry))
+      ?? (await this.snapshots.projectHistory(projectPath, PROJECT_HISTORY_LIMIT + 1)).records.slice(-PROJECT_HISTORY_LIMIT).find(entry => checkpointId(entry.snapshot) === target.checkpointId && isProjectRecord(entry));
     if (record === undefined) throw new SnapshotNotFoundError(target.checkpointId);
     return { projectPath, record, changes: await this.projectRecordPaths(projectPath, capability.repositoryRoot, record) };
   }

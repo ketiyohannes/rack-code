@@ -1,3 +1,20 @@
+# Compact sidebar Timeline rows (2026-10-20)
+
+- Put each entry title, file count and relative time on one line. Remove decorative kind icons, visible source labels (including Observed edit), and the separate branch-label line. Keep full title/provenance/branch/merge metadata in tooltips and preserve disclosure/snapshot actions.
+- Validation: type checks and desktop build passed. Chromium checks confirmed inline title/count/time, no decorative source icon or Observed edit label, working expand/collapse, and no overlap or document overflow at 980 × 600. No browser errors were reported. The full unit suite was not rerun for this presentation-only change.
+
+# Restore Timeline scrolling (2026-10-20)
+
+- Give Timeline its own bounded vertical scroll container inside the clipped workbench surface. Keep controls, notices and long checkpoint lists reachable at small window heights. Preserve the panel scroll offset when refresh replaces its history; switching scopes starts at the top.
+- Cause: the outer Timeline surface hid overflow, while the content/list had no scroll owner. Earlier layout checks did not exercise wheel scrolling.
+- Validation: type checks and desktop build passed; Chromium wheel checks with a 60-entry fixture reached the final entry, retained the 600 px scroll offset across refresh, and worked in Project history, All branches and This session at normal and 980 × 600 windows without document overflow. No browser errors were reported. The full unit suite was not rerun for this CSS/scroll-offset fix.
+
+# Timeline branch checkout and global history (2026-10-20)
+
+- Add **All branches**, a repository-wide topological history over local/remote-tracking branches, every merge parent and supported saved snapshots. Show branch-tip labels, merge icons/parents and first-parent comparisons; retain empty commits and merges. Global entries open through existing previews and the expanded snapshot viewer. Keep the bounded 200-entry notice and current visibility rules.
+- Add a project-checkout branch picker with confirmation, path display, remote tracking and worktree occupancy. Projects owns explicit Git mutations through a new adapter/port. Refuse dirty/stale/invalid requests, occupied branches and repository writers (including alias projects); close run-start races with a checkout barrier. No forced checkout, automatic stash, fetch, hook execution or isolated-worktree reassignment.
+- Validation: focused real-Git checkout/global-history tests passed (36). Type checks and desktop build passed. Chromium fixtures verified all-branch rows/labels, merge presentation, checkout confirmation/routing, dirty-state blocking, worktree occupancy, snapshot scope, tab keyboard navigation and no document overflow at 980 × 600. `npm run check` passed (310 tests, both type checks and both builds); final type checks/build and checkout-focused tests passed after review adjustments. No browser errors were reported. Live providers, real user repository checkout and packaged application checks were not performed.
+
 # Reading-region context menus (2026-10-19)
 
 - Add right-click and keyboard context menus to the main transcript and both PR review views. Open side chat, ask about selected text, copy text/links, and access PR explanation, Timeline and code-host actions. Preserve normal form controls.

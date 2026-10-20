@@ -22,6 +22,7 @@ import {
   RuntimeNotFoundError,
 } from "../../core/execution/errors.js";
 import {
+  BranchOperationError,
   InvalidProjectError,
   IsolationUnavailableError,
   ProjectNotFoundError,
@@ -56,6 +57,7 @@ export function toHostError(error: unknown): HostErrorPayload {
     return { code: "internal", name: "Error", message: String(error) };
   }
   const base = { name: error.name, message: error.message };
+  if (error instanceof BranchOperationError) return { ...base, code: "branch_operation_failed" };
   if (error instanceof FileOperationError) return { ...base, code: error.code };
   if (error instanceof HostOperationError) {
     return { ...base, code: error.code, ...(error.details === undefined ? {} : { details: error.details }) };

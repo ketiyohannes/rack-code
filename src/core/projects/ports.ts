@@ -49,3 +49,11 @@ export interface IsolatedWorkspaceProvider {
    */
   remove(workspace: IsolatedWorkspace, options: { readonly force: boolean }): Promise<void>;
 }
+
+/** Explicit branch mutations are separate from read-only Changes and Timeline ports. */
+export interface ProjectBranchRepository {
+  repositoryId(path: string): Promise<string>;
+  list(path: string): Promise<import("./types.js").ProjectBranches>;
+  /** Refuse dirty trees, stale HEADs, invalid refs and branches used by other worktrees. */
+  checkout(path: string, ref: string, expectedHead: string): Promise<import("./types.js").ProjectBranches>;
+}

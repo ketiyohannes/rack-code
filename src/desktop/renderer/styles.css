@@ -3491,7 +3491,10 @@ html.resizing * {
 /* Timeline surface (optional plugin). Reuses the Changes panel's diff, file
    row and colour variables via .git-changes-content; only layout specific to
    the checkpoint list lives here. */
-.timeline-content { display: flex; flex-direction: column; gap: 6px; }
+/* The workbench clips its outer surface. Timeline owns the bounded scroll
+   area, including notices/controls that can be tall at small window sizes. */
+.timeline-content { display: flex; flex: 1; flex-direction: column; gap: 6px; min-height: 0; overflow-y: auto; }
+.timeline-content > * { flex-shrink: 0; }
 .timeline-scopes { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px 4px; }
 .timeline-scopes[hidden], .timeline-controls > [hidden] { display: none; }
 .timeline-scopes [role="tablist"] { display: flex; flex: 1; flex-wrap: wrap; gap: 2px 12px; min-width: 0; }
@@ -3525,20 +3528,14 @@ html.resizing * {
 .timeline-intro p { margin: 0; }
 .timeline-list { display: flex; flex-direction: column; min-width: 0; }
 .timeline-item + .timeline-item { border-top: 1px solid var(--border); }
-/* Match Changes' compact group headers: one line at 13px with 31px rows.
- * Long labels truncate; the summary tooltip retains the complete details. */
-/* History rows: caret, kind icon, then the message over "kind · files · time". */
-.timeline-entry > summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 8px 6px 10px; list-style: none; cursor: pointer; font-size: var(--font-md); }
-.timeline-kind { display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 8px; background: var(--overlay); color: var(--text-2); }
-.timeline-kind .icon { width: 14px; height: 14px; }
-.kind-commit .timeline-kind { color: light-dark(#7a4fb0, #b99ae0); }
-.kind-run .timeline-kind { color: var(--primary); }
-.kind-observed .timeline-kind { color: light-dark(#a06b0b, #e2c08d); }
-.timeline-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.timeline-label { min-width: 0; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.timeline-meta { display: flex; gap: 6px; min-width: 0; color: var(--text-3); font-size: var(--font-xs); white-space: nowrap; overflow: hidden; }
+/* Compact history rows: title, file count and time on one line. Titles
+ * truncate first; disclosure and expanded-view controls remain accessible. */
+.timeline-entry > summary { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 3px 8px 3px 10px; list-style: none; cursor: pointer; font-size: var(--font-md); }
+.timeline-label { flex: 1; min-width: 0; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-meta { display: flex; flex: none; align-items: center; gap: 6px; color: var(--text-3); font-size: var(--font-xs); white-space: nowrap; }
 .timeline-meta > * + *::before { content: "·"; margin-right: 6px; }
 .timeline-time { color: var(--text-3); }
+
 .timeline-entry[open] > summary { background: color-mix(in srgb, var(--overlay) 60%, transparent); }
 .timeline-action { display: inline-flex; align-items: center; gap: 7px; }
 .timeline-action .icon { width: 15px; height: 15px; }
@@ -4373,3 +4370,10 @@ button.workspace-chip { cursor: pointer; }
 button.workspace-chip:hover { border-color: var(--border-strong); color: var(--text); }
 .workspace-chip.warning { color: var(--danger, #b44a4a); }
 .menu-note { padding: 6px 10px 8px; color: var(--text-3); font-size: 11px; line-height: 1.5; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+
+/* Branch controls target the displayed project checkout; global history keeps
+   branch tips and merge comparisons readable in the compact Timeline panel. */
+.timeline-branch-controls { display: flex; align-items: center; gap: 8px; padding: 8px 0; min-width: 0; flex-wrap: wrap; }
+.timeline-branch-controls > button { max-width: 100%; min-width: 0; }
+.timeline-checkout-context { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.timeline-checkout-path { display: block; overflow-wrap: anywhere; padding: 10px 0; }
