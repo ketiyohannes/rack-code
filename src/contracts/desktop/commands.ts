@@ -30,7 +30,7 @@ import type { FileListing, FileDocument } from "../../features/files/index.js";
 import type { TerminalSnapshot } from "../../features/terminal/types.js";
 import type { BrowserRequest, BrowserSnapshot } from "../../features/browser/index.js";
 import { integer } from "./validation.js";
-import type { ProjectChanges, ProjectRepositories, RepositoryDiscoveryOptions } from "./views.js";
+import type { ProjectBranches, ProjectChanges, ProjectRepositories, RepositoryDiscoveryOptions } from "./views.js";
 import {
   PERMISSION_MODES,
   type AccountView,
@@ -158,6 +158,8 @@ export interface HostCommandMap {
   /** Sign-ins in progress, for clients that open mid-flow. */
   "auth.active": { params: NoParams; result: readonly ConnectView[] };
   "projects.list": { params: NoParams; result: readonly ProjectView[] };
+  "projects.branches": { params: { readonly projectId: string }; result: ProjectBranches };
+  "projects.checkoutBranch": { params: { readonly projectId: string; readonly ref: string; readonly expectedHead: string }; result: ProjectBranches };
   /** `sessionId` reads an isolated session's worktree instead of the project folder. */
   "projects.changes": { params: { readonly projectId: string; readonly repositoryPath?: string; readonly sessionId?: string }; result: ProjectChanges };
   "projects.repositories": { params: { readonly projectId: string; readonly sessionId?: string } & RepositoryDiscoveryOptions; result: ProjectRepositories };
@@ -223,7 +225,7 @@ export interface HostCommandMap {
   /** Visible checkpoints, oldest first, with current display filtering applied. */
   "timeline.checkpoints": { params: { readonly sessionId: string }; result: TimelineCheckpointList };
   /** Read-only HEAD history and saved snapshots from every session in the repository. */
-  "timeline.projectHistory": { params: { readonly projectId: string }; result: TimelineProjectHistory };
+  "timeline.projectHistory": { params: { readonly projectId: string; readonly mode?: "current" | "all" }; result: TimelineProjectHistory };
   "timeline.setProjectEnabled": { params: { readonly projectId: string; readonly enabled: boolean }; result: TimelineProjectHistory };
   /** Historical file tree and exact file contents; IDs are resolved by Timeline. */
   "timeline.snapshot": { params: TimelineSnapshotTarget; result: TimelineSnapshot };
@@ -304,6 +306,8 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "auth.cancel": object({ connectId: id }),
   "auth.active": empty,
   "projects.list": empty,
+  "projects.branches": object({ projectId: id }),
+  "projects.checkoutBranch": object({ projectId: id, ref: text({ maxLength: 4096 }), expectedHead: text({ maxLength: 64 }) }),
   "projects.changes": object({ projectId: id, repositoryPath: optional(text()), sessionId: optional(id) }),
   "projects.repositories": object({ projectId: id, sessionId: optional(id), rescan: optional(boolean), deep: optional(boolean), repositoryPath: optional(text()) }),
   "projects.create": object({
@@ -357,7 +361,7 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "timeline.status": object({ sessionId: id }),
   "timeline.setEnabled": object({ sessionId: id, enabled: boolean }),
   "timeline.checkpoints": object({ sessionId: id }),
-  "timeline.projectHistory": object({ projectId: id }),
+  "timeline.projectHistory": object({ projectId: id, mode: optional(oneOf(["current", "all"])) }),
   "timeline.setProjectEnabled": object({ projectId: id, enabled: boolean }),
   "timeline.snapshot": object({ scope: oneOf(["project", "session"]), contextId: id, checkpointId: id }),
   "timeline.snapshotHistory": object({ scope: oneOf(["project", "session"]), contextId: id, checkpointId: id }),

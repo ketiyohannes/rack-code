@@ -121,3 +121,21 @@ export interface CreateProjectInput {
   readonly path: string;
   readonly startingRevision?: string;
 }
+
+/** A checkout candidate. Full ref names are opaque identities, never shell input. */
+export interface ProjectBranch {
+  readonly ref: string;
+  readonly name: string;
+  readonly kind: "local" | "remote";
+  readonly commit: string;
+  readonly worktreePath?: string;
+}
+/** Branch controls explicitly target the project checkout, not a session worktree. */
+export interface ProjectBranches {
+  readonly repositoryRoot: string;
+  readonly repositoryId: string;
+  readonly current?: string;
+  readonly head?: string;
+  readonly dirty: boolean;
+  readonly branches: readonly ProjectBranch[];
+}

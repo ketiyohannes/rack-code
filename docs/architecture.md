@@ -551,3 +551,9 @@ native watches by root, batches ignore checks, reuses bounded private index
 stat data and revalidates healthy project roots every 30 seconds. These
 optimizations leave recording ownership and before/after tool checkpoints
 unchanged. See [performance evidence and limits](performance-improvements.md).
+
+## Timeline branches and checkout (2026-10-20)
+
+Timeline's snapshot repository remains read-only with respect to HEAD, the user index and working files. Its optional all-branch query walks every parent of local/remote branches and supported Timeline refs, returning parents and tip labels in a bounded topological page. Expanded snapshot validation accepts these reachable comparisons; path filtering and immutable caches remain unchanged.
+
+Explicit checkout belongs to Projects through `ProjectBranchRepository`, implemented by `GitProjectBranches` and supplied in startup composition. The host exposes project-ID/ref commands, emits project/Timeline freshness events after success and never accepts arbitrary checkout paths. Projects compares common repository identities for existing writers, including project aliases; a checkout barrier is established before asynchronous checks and writer acquisition rechecks it after its await. Branch listing and confirmation show the project checkout. Session worktrees and their persisted branch ownership are not changed. Core does not depend on Timeline or Electron. The renderer adds one All branches tab and invokes this independent Projects capability for confirmed checkout.

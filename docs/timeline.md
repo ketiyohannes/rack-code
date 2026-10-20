@@ -6,7 +6,7 @@ Timeline gives a developer a local history of observed repository states during 
 
 ## Using it
 
-**Interface (2026-10-19).** History rows show a kind icon plus a word: Commit, Agent run or Observed edit (session scope shows the checkpoint number). Next comes the commit or observation message, with the file count and relative time beneath; full timestamps are in tooltips. Import timeline and Choose a repository folder are icon-plus-label buttons. The expanded snapshot window has a title with the commit chip and a readable date, and one newer · change · older toolbar with the position under it. **Diff**, **Before / After** and **Full context** form an icon toggle with names in tooltips. File scope tabs show counts as badges. Pull request comparisons open in the same window via **Open in Timeline** on a PR review.
+**Interface (2026-10-20).** Sidebar history rows show the title, file count (for example, **2 files**) and relative time on one compact line. Decorative kind icons, the Observed edit/Commit/Agent run labels and the separate branch-label line are removed. Full titles, provenance, branch tips and merge-parent information remain in row tooltips. Disclosure arrows and expanded-snapshot controls stay available. Import timeline and Choose a repository folder are icon-plus-label buttons. The expanded snapshot window has a title with the commit chip and a readable date, and one newer · change · older toolbar with the position under it. **Diff**, **Before / After** and **Full context** form an icon toggle with names in tooltips. File scope tabs show counts as badges. Pull request comparisons open in the same window via **Open in Timeline** on a PR review.
 
 The sidebar surface and expanded snapshot viewer use Inter for headings, file names, filters, and controls. Sidebar lists match Changes: 13 px text and 31 px rows, with single-line checkpoint summaries and truncated long labels available in tooltips. Repository choices and nested file/folder rows use the same compact sizing. The panel heading is 16 px; code uses bundled Geist Mono at 14 px. Stronger green/red backgrounds, colored edge markers, and heavier line numbers distinguish additions/deletions in diffs; Before / After retains its added-line highlights using the stronger green. Scope tabs wrap at narrow widths.
 
@@ -18,6 +18,8 @@ The sidebar surface and expanded snapshot viewer use Inter for headings, file na
 
 Enablement cannot change while a run is editing the session's project. Enabling one session does not enable any other session in the same project.
 
+The Timeline panel owns vertical scrolling within the workbench, including its controls, notices and history. Long lists remain reachable at the minimum window size; polling and manual refresh preserve the panel scroll position.
+
 ### Existing projects and sessions
 
 **Project history** reads the current HEAD's first-parent commit history and every ref under `refs/rack-timeline/`, `refs/rack-project-timeline/`, `refs/codex-timeline/`, and `refs/relay-timeline/` in this repository. It distinguishes Git commits, run checkpoints and project observations, with original session provenance when recorded. Root Git commits show their added files; snapshot baselines are hidden. A commit reachable from multiple refs appears once. Reading history never creates snapshots, changes a recording preference, or assigns another session's work to the selected session.
@@ -27,6 +29,16 @@ The view reads the 200 most recent reachable commits/snapshots and shows a notic
 Projects opened at a subdirectory still use their Git repository root. A container project such as `rack-desktop` with a single repository in `rack-code` resolves that repository for history, session capture, and automatic project recording; the watcher watches the resolved root. Detection reuses Changes' bounded discovery (three levels, common dependency/build folders skipped, no directory symlinks followed, results cached for up to a minute). Multiple repositories or an incomplete scan expose **Choose a repository** with clickable discovered paths and **Scan deeper**. Choosing a folder reuses or adds its normal project record and opens its Timeline inside the panel, preserving the selected chat, messages and composer draft. A repository label and **Back to project** action identify this local view. It resets when the chat changes projects; container sessions retain their original project. Limited scans, failures, and empty results stay visible, and stale discovery responses cannot replace another project's chooser. Folders without a repository remain unsupported. Old sessions need actual saved timeline refs to expose intermediate edits; conversation history alone cannot reconstruct snapshots. Their committed work remains available through Git history.
 
 Clicking a project folder in the navigator selects it even if it has no sessions. Expanding or collapsing the already-selected project keeps its current session open.
+
+### All branches and branch checkout (2026-10-20)
+
+**All branches** is the repository-wide Timeline. It includes all locally known local and remote-tracking branches, detached HEAD when present, and supported saved Timeline refs. It walks every merge parent, deduplicates commits and keeps topological order, so unmerged work and merged topic commits remain visible. Branch names label tips, not every ancestor. Merge rows retain parent IDs and first-parent comparison information in their tooltip. Empty commits and merges remain visible even when they have no visible changed files. Existing path exclusions still apply. Search also matches branch-tip labels. This is one repository's history, not a combined feed of unrelated projects.
+
+Both project views show a **Checkout project branch** picker with local/remote groups and worktree occupancy. Selecting a candidate opens a confirmation showing the actual checkout folder. Local branches switch in place; remote-tracking branches create a local tracking branch when the local name is free. The picker does not fetch. **This session** continues to inspect saved session checkpoints; branch checkout targets the displayed project checkout and leaves isolated session worktrees on their own branches.
+
+Checkout refuses uncommitted tracked/untracked files, stale HEAD, invalid/deleted refs, a branch occupied by another worktree, and active app-managed runs in the same repository (including project aliases). Git's own checkout checks remain authoritative if external processes race the request. Rack never force-switches, stashes, resets, discards edits or bypasses a worktree conflict. Checkout hooks are disabled. A brief host-owned checkout barrier prevents new run writer ownership while switching. Errors leave a visible explanation; retry after resolving the cause.
+
+The history remains bounded to the latest 200 commits/snapshots, with a truncation notice. Remote branches reflect the last fetch performed through your Git tools. Global entries use the same immutable previews and expanded snapshot viewer; the viewer's change selector includes branch history. Recording and snapshot reads remain independent of explicit checkout actions.
 
 ### Automatic project recording
 
@@ -134,16 +146,18 @@ Core sessions, execution, and projects do not import Timeline. Timeline consumes
 | `timeline.setEnabled` | `sessionId`, `enabled` | `TimelineStatus`; enabling imports first |
 | `timeline.checkpoints` | `sessionId` | `{ status, checkpoints }`, oldest first, visible checkpoints only |
 | `timeline.fileDiff` | `sessionId`, `checkpointId`, `path` | Bounded patch (400,000 characters) with `status`, `truncated`, and a notice for binary or metadata-only changes |
-| `timeline.projectHistory` | `projectId` | Capability and bounded visible Git/session history, oldest first, without recording opt-in |
+| `timeline.projectHistory` | `projectId`, optional `mode` (`current`/`all`) | Capability and bounded visible Git/session history, oldest first, without recording opt-in |
 | `timeline.setProjectEnabled` | `projectId`, `enabled` | Persisted automatic observation pause/resume; history is kept |
 | `timeline.projectFileDiff` | `projectId`, `checkpointId`, `path` | Patch only for a currently reachable history entry and visible changed path in this project |
 | `timeline.snapshot` | `scope` (`project`/`session`), `contextId`, `checkpointId` | Snapshot metadata and the visible union of before/after file trees, including unchanged and deleted paths |
 | `timeline.snapshotFile` | snapshot target plus `path` | Exact before/after contents and bounded diff, restricted to a visible tree member |
-| `timeline.snapshotHistory` | snapshot target | Recent same-project navigation options with validated targets, plus the initially opened checkpoint |
+| `timeline.snapshotHistory` | snapshot target | Recent same-repository branch navigation options with validated targets, plus the initially opened checkpoint |
+| `projects.branches` | `projectId` | Current project checkout, dirty state, local/remote branches and worktree occupancy |
+| `projects.checkoutBranch` | `projectId`, exact `ref`, `expectedHead` | Explicit guarded checkout; returns refreshed branch state |
 
 The desktop shell bridge `openTimelineWindow` validates the target through the host before opening the fixed bundled page in a sandboxed native window. Only app identities and an optional initial file selection cross this boundary; callers cannot supply a URL, working-directory path or Git revision.
 
-The event `timeline.changed { sessionId }` signals new checkpoints or setting changes. New error codes: `feature_unavailable`, `timeline_busy`, `timeline_unsupported`, `snapshot_not_found`, `snapshot_path_invalid`.
+The event `timeline.changed { sessionId }` signals new checkpoints or setting changes. New error codes: `feature_unavailable`, `timeline_busy`, `timeline_unsupported`, `snapshot_not_found`, `snapshot_path_invalid`, and `branch_operation_failed`.
 
 ## Decisions and deviations from the specification
 
@@ -169,7 +183,7 @@ These specification areas are not available. Several depend on capabilities Rack
 ## Open architecture items
 
 - **Plugin toggle ownership.** Settings still controls surface visibility only. Automatic project observation uses host-owned per-project Pause/Resume; per-session run capture has its own opt-in. Hiding the panel does not pause either. Moving the global surface toggle to host-owned worker enablement remains separate work.
-- **Project relinking and branch switching.** A session's chain follows its ref across branch switches. There is no reset policy, and a relinked project can leave checkpoints pointing at objects in the former repository.
+- **Project relinking and recording reset policy.** Explicit checkout is available above. A session's recording chain still follows its ref across branch switches; there is no automatic reset policy, and a relinked project can leave checkpoints pointing at objects in the former repository.
 - **Retention.** Snapshots and index entries accumulate without pruning.
 
 ## Acceptance coverage

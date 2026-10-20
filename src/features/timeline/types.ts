@@ -129,6 +129,9 @@ export interface TimelineCheckpointList {
 export interface TimelineProjectHistoryEntry extends Omit<TimelineCheckpointEntry, "source"> {
   readonly source: TimelineCheckpointSource | "git";
   readonly snapshot: string;
+  readonly parents?: readonly string[];
+  /** Names of local/remote branch tips at this commit; not containment claims. */
+  readonly branches?: readonly string[];
   /** Present only when the original recorder included a session association. */
   readonly sessionId?: string;
 }

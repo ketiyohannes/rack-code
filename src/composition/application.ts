@@ -1,3 +1,4 @@
+import { GitProjectBranches } from "../adapters/projects/git-branches.js";
 import { ReviewInboxService } from "../features/pull-requests/index.js";
 import { GitHubInbox } from "../adapters/code-hosts/github-inbox.js";
 import { PullRequestsService } from "../features/pull-requests/index.js";
@@ -106,6 +107,7 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
   const accounts = new AccountsService(new JsonAccountStore(join(dataDirectory, "accounts.json")));
   const projects = new ProjectsService(new JsonProjectStore(join(dataDirectory, "projects.json"), join(dataDirectory, "workspaces.json")), {
     changes: new GitProjectChangesReader(),
+    branches: new GitProjectBranches(),
     // Neither runtime exposes worktree management to embedding hosts, so
     // isolated sessions use Rack-managed worktrees under the data directory
     // (outside every repository, like Codex's and T3's managed worktrees).
