@@ -1,3 +1,8 @@
+# Collapse the right sidebar after closing its final tab (2026-10-20)
+
+- Closing the last workbench tab (including a blank tab, via its close button, Delete or Backspace) now collapses the right sidebar. The shell owns the saved collapse preference and returns keyboard focus to its toolbar toggle. Closing one of several tabs keeps the panel open. Reopening shows the blank launcher; direct tool requests reveal their tool normally.
+- Validation: type checks and desktop build passed. Chromium checks passed for closing the final blank/tool tab by mouse, Delete and Backspace, retaining the panel while another tab remains, saved collapse state, focus returning to the visible toggle, reopening the launcher and direct side-chat requests revealing the panel. The initial fixture omitted the Changes diff field; after correcting that mock, repeated tab-close interactions produced no browser errors. The full unit suite was not rerun for this UI-only behavior change.
+
 # Compact sidebar Timeline rows (2026-10-20)
 
 - Put each entry title, file count and relative time on one line. Remove decorative kind icons, visible source labels (including Observed edit), and the separate branch-label line. Keep full title/provenance/branch/merge metadata in tooltips and preserve disclosure/snapshot actions.

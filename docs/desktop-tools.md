@@ -10,7 +10,7 @@ since each tool has one session-owned panel. Enabled plugins do not open tabs
 automatically. New windows always start blank, regardless of older tab settings.
 
 Close a tab with its **x** (or Delete while focused); the last close leaves a
-blank tab with the surface list. Closing a tab retains its shell, page or file
+collapsed right sidebar; reopening it shows a blank tab with the surface list. Closing a tab retains its shell, page or file
 draft for the window's lifetime; it does not terminate the tool. Arrow keys and
 Home/End switch tabs. The strip scrolls when the sidebar is narrow. Settings >
 Plugins still controls optional tool visibility.

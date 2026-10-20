@@ -23,7 +23,7 @@ import { icon } from "../icons.js";
 import type { Store } from "../store.js";
 import { SURFACES, type SurfaceDefinition } from "../surfaces.js";
 
-export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () => boolean, controller: Controller, host: HostClient): void {
+export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () => boolean, controller: Controller, host: HostClient, onEmpty: () => void): void {
   let nextBlankId = 1;
   let tabs = ["new-tab-1"];
   let openSurface: string | undefined = tabs[0];
@@ -137,10 +137,15 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
 
   function closeTab(id: string): void {
     const index = tabs.indexOf(id);
+    if (index < 0) return;
     tabs = tabs.filter((candidate) => candidate !== id);
     if (openSurface === id) openSurface = tabs[Math.min(index, tabs.length - 1)];
+    const empty = tabs.length === 0;
+    // The shell owns collapse preferences and focus. Render prepares a blank
+    // launcher for reopening, and deactivates the tool that was just closed.
+    if (empty) onEmpty();
     render();
-    (tabList.querySelector<HTMLElement>(`[data-tool="${openSurface}"]`) ?? addTab).focus();
+    if (!empty) (tabList.querySelector<HTMLElement>(`[data-tool="${openSurface}"]`) ?? addTab).focus();
     void refresh();
   }
 

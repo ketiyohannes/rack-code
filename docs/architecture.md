@@ -489,7 +489,7 @@ is open; closing a tab only hides it, while Close shell terminates the PTY.
 Every window starts with one blank tab containing the surface launcher; tabs
 are not restored from prior device preferences. The + menu adds blank or tool
 tabs. Choosing a launcher item fills that blank tab; selecting an already open
-tool focuses its shared instance. Closing the last tab returns to a blank tab.
+tool focuses its shared instance. Closing the last tab calls the shell's public collapse callback and returns focus to its toolbar toggle. A blank launcher tab is prepared for reopening.
 Adding an optional tab uses the existing plugin controller; host observation
 and permission policy are unchanged. The chat layout bounds the transcript and
 prompt to the available viewport, with an independently persisted prompt height.
