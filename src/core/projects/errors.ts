@@ -42,3 +42,8 @@ export class WorkspaceDirtyError extends ProjectError {
     this.name = "WorkspaceDirtyError";
   }
 }
+
+/** User-facing refusal of an explicit branch operation; no force fallback is allowed. */
+export class BranchOperationError extends ProjectError {
+  constructor(message: string) { super(message); this.name = "BranchOperationError"; }
+}

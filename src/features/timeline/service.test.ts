@@ -742,3 +742,43 @@ async function waitFor(condition: () => Promise<boolean>, timeoutMs = 5000): Pro
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+test("all-branch history includes unmerged and remote commits, merge parents and empty commits with working snapshot navigation", async () => {
+  const f = await fixture();
+  try {
+    await f.git("config", "user.name", "Fixture"); await f.git("config", "user.email", "fixture@example.test");
+    const base = (await f.git("branch", "--show-current")).trim();
+    await f.git("switch", "-c", "topic");
+    await writeFile(join(f.path, "topic.txt"), "topic work\n"); await f.git("add", "."); await f.git("commit", "-m", "Topic change");
+    const topic = (await f.git("rev-parse", "HEAD")).trim();
+    await f.git("switch", base); await f.git("merge", "--no-ff", "topic", "-m", "Merge topic");
+    await f.git("branch", "-d", "topic"); // Its second-parent history must remain visible.
+    await f.git("switch", "-c", "unmerged"); await f.git("commit", "--allow-empty", "-m", "Empty branch marker");
+    await writeFile(join(f.path, "unmerged.txt"), "not merged\n"); await f.git("add", "."); await f.git("commit", "-m", "Unmerged change");
+    await f.git("update-ref", "refs/remotes/origin/remote-topic", "HEAD");
+    await f.git("switch", base);
+    const service = f.service();
+    const current = await service.projectHistory("project-1");
+    assert.ok(!current.checkpoints.some(e => e.snapshot === topic || e.label === "Unmerged change"));
+    const history = await service.projectHistory("project-1", "all");
+    assert.equal(new Set(history.checkpoints.map(e => e.snapshot)).size, history.checkpoints.length);
+    const merged = history.checkpoints.find(e => e.label === "Merge topic")!;
+    assert.equal(merged.parents?.length, 2);
+    assert.ok(merged.parents?.includes(topic));
+    assert.ok(history.checkpoints.some(e => e.snapshot === topic));
+    assert.ok(history.checkpoints.some(e => e.label === "Empty branch marker" && e.files.length === 0));
+    const unmerged = history.checkpoints.find(e => e.label === "Unmerged change")!;
+    assert.ok(unmerged.branches?.includes("unmerged")); assert.ok(unmerged.branches?.includes("origin/remote-topic"));
+    const target = { scope: "project" as const, contextId: "project-1", checkpointId: unmerged.id };
+    assert.ok((await service.snapshot(target)).files.some(file => file.path === "unmerged.txt"));
+    assert.match((await service.projectFileDiff("project-1", unmerged.id, "unmerged.txt")).diff, /not merged/);
+    assert.ok((await service.snapshotHistory(target)).entries.some(e => e.id === unmerged.id));
+    assert.equal((await f.git("branch", "--show-current")).trim(), base, "Reading history never checks out files");
+  } finally { await f.cleanup(); }
+});
+
+test("all-branch history supports a repository with no commits", async () => {
+  const f = await fixture({ commit: false });
+  try { assert.deepEqual((await f.service().projectHistory("project-1", "all")).checkpoints, []); }
+  finally { await f.cleanup(); }
+});

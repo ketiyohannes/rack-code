@@ -184,18 +184,31 @@ export class GitSnapshotRepository implements SnapshotRepository {
     const root = await this.root(projectPath);
     const output = await git(root, [
       "log", "--first-parent", `--max-count=${limit}`, "-z",
-      "--format=%H%x1f%P%x1f%at%x1f%an%x1f%B", ...refs, "--",
+      "--decorate=full", "--format=%H%x1f%P%x1f%at%x1f%an%x1f%D%x1f%B", ...refs, "--",
     ], { timeout: 20_000 });
     const records = output.split("\0").filter((entry) => entry.trim() !== "").map(parseRecord).reverse();
     return { records, truncated: records.length >= limit };
   }
 
-  async projectHistory(projectPath: string, limit: number): Promise<SnapshotHistory> {
+  async projectHistory(projectPath: string, limit: number, mode: "current" | "all" = "current"): Promise<SnapshotHistory> {
     const root = await this.root(projectPath);
     // Glob revisions are expanded by Git, so repositories with many session
     // refs do not risk overflowing the process argument limit. An unborn HEAD
     // is omitted; saved snapshots can still exist before the first commit.
     const head = await this.resolveTip(root, "HEAD");
+    if (mode === "all") {
+      // Follow every parent so merged topic commits and unmerged branches are
+      // visible once. Exclude stash/other unrelated refs; Timeline namespaces
+      // remain explicit. Topological order retains merge relationships even
+      // when commit clocks are out of order.
+      const output = await git(root, ["log", "--topo-order", `--max-count=${limit}`, "-z", "--decorate=full",
+        "--format=%H%x1f%P%x1f%at%x1f%an%x1f%D%x1f%B",
+        ...(head ? ["HEAD"] : []), "--branches", "--remotes",
+        "--glob=refs/rack-timeline/*", "--glob=refs/codex-timeline/*", "--glob=refs/relay-timeline/*",
+        "--glob=refs/rack-project-timeline/*", "--glob=refs/rack-pr-timeline/*", "--"], { timeout: 20_000 });
+      const records = output.split("\0").filter(entry => entry.trim()).map(parseRecord).reverse();
+      return { records, truncated: records.length >= limit };
+    }
     return this.history(projectPath, [
       "--date-order",
       ...(head === undefined ? [] : ["HEAD"]),
@@ -310,7 +323,7 @@ function commitMessage(label: string, trailers: Readonly<Record<string, string>>
 }
 
 function parseRecord(entry: string): SnapshotRecord {
-  const [hash = "", parents = "", time = "0", author = "", ...rest] = entry.replace(/^\n/, "").split("\x1f");
+  const [hash = "", parents = "", time = "0", author = "", decorations = "", ...rest] = entry.replace(/^\n/, "").split("\x1f");
   const body = rest.join("\x1f");
   const subject = body.split("\n")[0] ?? "";
   const trailers = new Map<string, string>();
@@ -327,6 +340,10 @@ function parseRecord(entry: string): SnapshotRecord {
   const projectId = rack ? trailers.get("Rack-Timeline-Project") : undefined;
   return {
     snapshot: hash,
+    parents: parents.split(" ").filter(Boolean),
+    branches: decorations.split(", ").map(ref => ref.replace(/^HEAD -> /, ""))
+      .filter(ref => ref.startsWith("refs/heads/") || ref.startsWith("refs/remotes/"))
+      .map(ref => ref.replace(/^refs\/(?:heads|remotes)\//, "")),
     createdAt: new Date(Number(time) * 1000).toISOString(),
     label: subject.replace(/^(?:codex-)?timeline:\s*/, "").trim() || "Snapshot",
     format: rack ? "rack" : external ? "external" : "other",

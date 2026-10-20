@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
 import {
+  BranchOperationError,
   InvalidProjectError,
   IsolationUnavailableError,
   ProjectNotFoundError,
@@ -22,6 +23,7 @@ export interface ProjectsServiceOptions {
   readonly now?: () => Date;
   readonly createId?: () => string;
   readonly changes?: ProjectChangesReader;
+  readonly branches?: import("./ports.js").ProjectBranchRepository;
   /** Session worktree support; without it, isolated sessions are unavailable. */
   readonly isolation?: { readonly provider: IsolatedWorkspaceProvider; readonly worktreesRoot: string };
 }
@@ -50,9 +52,12 @@ export class ProjectsService {
   private readonly now: () => Date;
   private readonly createId: () => string;
   private readonly changes: ProjectChangesReader | undefined;
+  private readonly branches: ProjectsServiceOptions["branches"];
   private readonly isolation: ProjectsServiceOptions["isolation"];
   /** Serializes project record updates within this execution host. */
   private mutation: Promise<void> = Promise.resolve();
+  /** A brief checkout barrier closes the race between the busy check and a new run. */
+  private checkingOut = false;
   /** Active writers per project ID. */
   private readonly writers = new Map<ProjectId, ProjectWriter[]>();
   /** Serializes worktree preparation per session so two calls cannot both create one. */
@@ -66,6 +71,7 @@ export class ProjectsService {
     this.createId = options.createId ?? randomUUID;
     this.changes = options.changes;
     this.isolation = options.isolation;
+    this.branches = options.branches;
   }
 
   async createProject(input: CreateProjectInput): Promise<ProjectRecord> {
@@ -142,6 +148,7 @@ export class ProjectsService {
     await this.getProject(projectId);
     const writers = this.writers.get(projectId) ?? [];
     if (writers.some((writer) => writer.attemptId === attemptId)) return;
+    if (this.checkingOut) throw new BranchOperationError("A branch checkout is in progress. Try starting the run again after it finishes.");
     const busy = writers.find((writer) => writer.sessionId === owner.sessionId);
     if (busy !== undefined) throw new SessionBusyError(owner.sessionId, busy.attemptId);
     this.writers.set(projectId, [...writers, { attemptId, sessionId: owner.sessionId, mode: owner.mode }]);
@@ -152,6 +159,35 @@ export class ProjectsService {
     const remaining = (this.writers.get(projectId) ?? []).filter((writer) => writer.attemptId !== attemptId);
     if (remaining.length === 0) this.writers.delete(projectId);
     else this.writers.set(projectId, remaining);
+  }
+
+  /** Reads candidates for the project's own checkout, including remote-tracking refs. */
+  async listBranches(projectId: ProjectId): Promise<import("./types.js").ProjectBranches> {
+    if (!this.branches) throw new BranchOperationError("Branch checkout is unavailable in this host.");
+    return this.branches.list((await this.getProject(projectId)).path);
+  }
+
+  /**
+   * Checkout is explicit, never forced, and cannot race an app-managed run.
+   * Compare repository identities for aliases and isolated worktrees too: a
+   * project folder and its subfolder may be saved as different project IDs.
+   * The barrier is set before any await; acquireWriter rechecks after its await.
+   */
+  async checkoutBranch(projectId: ProjectId, ref: string, expectedHead: string): Promise<import("./types.js").ProjectBranches> {
+    if (!this.branches) throw new BranchOperationError("Branch checkout is unavailable in this host.");
+    if (this.checkingOut) throw new BranchOperationError("Another branch checkout is in progress.");
+    this.checkingOut = true;
+    try {
+      const project = await this.getProject(projectId);
+      const repositoryId = await this.branches.repositoryId(project.path);
+      for (const [id, writers] of this.writers) {
+        if (!writers.length) continue;
+        const other = await this.getProject(id);
+        if (id === projectId || await this.branches.repositoryId(other.path).catch(() => undefined) === repositoryId)
+          throw new BranchOperationError("Stop active runs in this repository before checking out a branch.");
+      }
+      return await this.branches.checkout(project.path, ref, expectedHead);
+    } finally { this.checkingOut = false; }
   }
 
   /** Runs currently writing in the project, in start order. */

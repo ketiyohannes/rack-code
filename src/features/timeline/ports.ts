@@ -56,6 +56,9 @@ export type SnapshotCaptureResult =
 /** One commit read from a timeline ref, oldest first in returned lists. */
 export interface SnapshotRecord {
   readonly snapshot: string;
+  /** All Git parents and branch tips for the repository-wide view. */
+  readonly parents?: readonly string[];
+  readonly branches?: readonly string[];
   /** First parent only; Timeline chains are first-parent histories. */
   readonly previous?: string;
   readonly createdAt: string;
@@ -102,8 +105,9 @@ export interface SnapshotRepository {
   existingRefs(projectPath: string, refs: readonly string[]): Promise<readonly string[]>;
   /** Bounded first-parent history reachable from `refs`. */
   history(projectPath: string, refs: readonly string[], limit: number): Promise<SnapshotHistory>;
-  /** HEAD history plus all supported timeline namespaces, without enabling capture. */
-  projectHistory(projectPath: string, limit: number): Promise<SnapshotHistory>;
+  /** HEAD first-parent history by default; all follows every parent of local/remote
+   * branches plus supported Timeline refs, in bounded topological order. */
+  projectHistory(projectPath: string, limit: number, mode?: "current" | "all"): Promise<SnapshotHistory>;
   /** An absent predecessor compares a root commit against an empty tree. */
   changedPaths(projectPath: string, previous: string | undefined, snapshot: string): Promise<readonly TimelineChangedPath[]>;
   /**
