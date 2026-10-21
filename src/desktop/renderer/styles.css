@@ -4008,7 +4008,9 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px color-mix(in
 .nav-heading { padding: 0 8px 10px; }
 .nav-heading .label { font-size: var(--font-2xs); letter-spacing: .14em; }
 .nav-heading .icon-button { width: 28px; height: 28px; }
-.tree-group + .tree-group { margin-top: 6px; }
+/* Project blocks meet without vertical gaps, including after expanded sessions. */
+.sidebar-projects-unified .tree-group + .tree-group { margin-top: 0; }
+.sidebar-projects-unified .tree-children { margin-top: 0; margin-bottom: 0; }
 .tree-folder { border-radius: 8px; }
 .tree-folder:has([aria-current="true"]) { background: var(--overlay); }
 .tree-folder-toggle { min-height: 36px; }

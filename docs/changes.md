@@ -1,3 +1,8 @@
+# Remove gaps between sidebar project folders (2026-10-21)
+
+- Remove vertical margins between project groups and around their expanded session lists. Keep folder row sizes, controls and indentation unchanged.
+- Validation: desktop build passed. Chromium measured 0 px between all four fixture project groups and 0 px top/bottom margins on expanded session lists; folder rows remain 36 px tall. No browser errors were reported. The unit suite was not rerun for this CSS-only change.
+
 # Collapse the right sidebar after closing its final tab (2026-10-20)
 
 - Closing the last workbench tab (including a blank tab, via its close button, Delete or Backspace) now collapses the right sidebar. The shell owns the saved collapse preference and returns keyboard focus to its toolbar toggle. Closing one of several tabs keeps the panel open. Reopening shows the blank launcher; direct tool requests reveal their tool normally.
