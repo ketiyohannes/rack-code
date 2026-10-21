@@ -1,3 +1,4 @@
+import { activeWorkflow, sessionWorkerRunIds } from "./orchestra-state.js";
 import { createSkillsPicker } from "./skills-picker.js";
 /**
  * Run composer. Provider runtimes are implementation details: the only
@@ -44,6 +45,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   const drafts = new Map<string, { prompt: string; workflow: "normal" | "plan" }>();
   const skills = createSkillsPicker(controller, () => refresh(store.get()));
   const planToggle = h("button", { class: "icon-button composer-action plan-toggle", type: "button", aria: { label: "Plan mode", pressed: "false" }, title: "Research and plan before implementing", onClick: () => { workflow = workflow === "plan" ? "normal" : "plan"; refresh(store.get()); } }, icon("list-checks"));
+  const orchestraBar = h("div", { class: "orchestra-composer-bar" });
   const planCard = h("div", { class: "plan-ready", role: "region", aria: { label: "Plan ready for review" } });
   const attachments = createAttachmentPicker(controller, () => refresh(store.get()));
 
@@ -77,6 +79,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     // must never consume its fixed height or hide the send/stop control.
     h("div", { class: "composer-overlays" }, createQuestionRequests(store, controller), guard, planCard),
     h("div", { class: "composer-card" },
+      orchestraBar,
       attachments.list,
       skills.chips,
       prompt,
@@ -106,6 +109,8 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     if (event.key !== "Escape" || event.repeat || event.isComposing || event.defaultPrevented) return;
     if (document.querySelector(".popover, .modal-backdrop, .settings-overlay:not([hidden])") !== null) return;
     const state = store.get();
+    const orchestra = activeWorkflow(state);
+    if (orchestra) { event.preventDefault(); void controller.controlWorkflow(orchestra.id, "stop"); return; }
     const active = activeRunId(state);
     if (active === undefined || state.live[active]?.cancelRequested) return;
     event.preventDefault();
@@ -121,6 +126,8 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
 
   async function submitOrStop(approvedPlanRunId?: string): Promise<void> {
     const state = store.get();
+    const orchestra = activeWorkflow(state);
+    if (orchestra) { await controller.controlWorkflow(orchestra.id, "stop"); return; }
     const active = activeRunId(state);
     if (active !== undefined) {
       if (!state.live[active]?.cancelRequested) await controller.cancelRun(active);
@@ -216,6 +223,14 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       workflowInitializedFor = draftSession;
     }
     workspace.refresh(state);
+    const orchestra = activeWorkflow(state);
+    const boundId = state.selection.sessionId && state.enabledPlugins.includes("orchestration") ? state.orchestra.bindings[state.selection.sessionId] : undefined;
+    const bound = state.orchestra.workflows.find((entry) => entry.id === boundId);
+    orchestraBar.hidden = !orchestra && !bound;
+    replace(orchestraBar, icon("flow-arrow"), h("button", { type: "button", class: "orchestra-composer-title", onClick: () => controller.openTool("orchestration") }, orchestra?.workflow.name ?? bound?.name ?? ""),
+      orchestra ? h("span", {}, orchestra.status === "waiting_approval" ? "Waiting for you" : orchestra.status === "paused" ? "Paused" : "Working") : h("span", {}, "For your next task"),
+      orchestra?.status === "waiting_approval" ? h("button", { class: "button button-small", type: "button", onClick: () => void controller.controlWorkflow(orchestra.id, "approve") }, "Approve & continue") : null,
+      !orchestra && bound && state.selection.sessionId ? h("button", { class: "icon-button", type: "button", aria: { label: "Remove workflow from conversation" }, onClick: () => void controller.bindWorkflow(state.selection.sessionId!) }, icon("x")) : null);
     const activeId = activeRunId(state);
     if (activeId !== undefined) { mode = state.live[activeId]!.run.permissionMode; workflow = state.live[activeId]!.run.interactionMode ?? "normal"; }
     model.update(state.models, state.favoriteModelKeys);
@@ -273,13 +288,14 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     workspace.element.disabled ||= submitting;
     const noSession = state.session === undefined || state.selection.sessionId !== state.session.id || state.host.status !== "ready";
     const targetAccount = effectiveAccount(state);
-    skills.update(state.session && selected && targetAccount ? { sessionId: state.session.id, runtimeId: selected.runtimeId, accountId: targetAccount.id, ...(state.session.projectId === undefined ? {} : { projectId: state.session.projectId }) } : undefined, noSession || submitting || activeId !== undefined);
-    planToggle.disabled = noSession || submitting || activeId !== undefined;
+    skills.update(state.session && selected && targetAccount ? { sessionId: state.session.id, runtimeId: selected.runtimeId, accountId: targetAccount.id, ...(state.session.projectId === undefined ? {} : { projectId: state.session.projectId }) } : undefined, noSession || submitting || activeId !== undefined || !!bound || !!orchestra);
+    planToggle.disabled = noSession || submitting || activeId !== undefined || !!bound || !!orchestra;
+    if (bound) workflow = "normal";
     planToggle.setAttribute("aria-pressed", String(workflow === "plan"));
     planToggle.classList.toggle("active", workflow === "plan");
     planToggle.title = workflow === "plan" ? "Plan mode on · Research before implementing" : "Plan mode · Research before implementing";
     const latest = state.runs.at(-1);
-    const readyPlan = latest?.interactionMode === "plan" && latest.status === "completed" && latest.result?.trim() && activeId === undefined ? latest : undefined;
+    const readyPlan = latest?.interactionMode === "plan" && latest.status === "completed" && latest.result?.trim() && activeId === undefined && !orchestra && !bound ? latest : undefined;
     planCard.hidden = !readyPlan;
     if (readyPlan) replace(planCard,
       h("div", { class: "plan-ready-label" }, icon("list-checks"), h("span", {}, "Plan ready"), h("span", { class: "note" }, "Review the plan above before implementing.")),
@@ -296,7 +312,9 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     model.setDisabled(noSession || submitting);
 
     const active = activeRunId(state);
-    if (active !== undefined) {
+    if (orchestra) {
+      replace(send, icon("stop")); send.classList.add("is-stop"); send.disabled = state.host.status !== "ready"; send.title = "Stop workflow (Esc)"; send.setAttribute("aria-label", "Stop workflow");
+    } else if (active !== undefined) {
       const cancelling = state.live[active]?.cancelRequested === true;
       replace(send, icon("stop"));
       send.classList.add("is-stop"); send.disabled = cancelling; send.title = cancelling ? "Cancelling" : "Stop the running agent (Esc)";
@@ -310,7 +328,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   }
 
   store.watch(
-    (state) => [state.models, state.modelsLoading, state.favoriteModelKeys, state.modelCatalogFailures, state.runtimes, state.accounts, state.capabilities, state.session, state.selection.sessionId, state.runs, state.acknowledgedUnknown, state.host, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId).flatMap((live) => [live.run, live.cancelRequested, live.pendingApprovals, live.pendingQuestions])],
+    (state) => [state.orchestra, state.enabledPlugins, state.models, state.modelsLoading, state.favoriteModelKeys, state.modelCatalogFailures, state.runtimes, state.accounts, state.capabilities, state.session, state.selection.sessionId, state.runs, state.acknowledgedUnknown, state.host, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId || sessionWorkerRunIds(state).has(live.run.id)).flatMap((live) => [live.run, live.cancelRequested, live.pendingApprovals, live.pendingQuestions])],
     (_slice, state) => refresh(state),
   );
 }
@@ -331,7 +349,7 @@ function modelCatalogMessage(state: AppState): string | undefined {
 function pendingApprovals(state: AppState): readonly { readonly run: RunView; readonly live: LiveRun; readonly request: ApprovalRequest }[] {
   if (state.session === undefined) return [];
   return Object.values(state.live)
-    .filter((live) => live.run.sessionId === state.session?.id)
+    .filter((live) => live.run.sessionId === state.session?.id || sessionWorkerRunIds(state).has(live.run.id))
     .flatMap((live) => live.pendingApprovals.map((request) => ({ run: live.run, live, request })));
 }
 

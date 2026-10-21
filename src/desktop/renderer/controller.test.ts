@@ -372,6 +372,8 @@ test("host exit replaces loading runs with unknown history and preserves streame
   store.update((state) => ({ ...state, session, selection: { projectId: "project", sessionId: "session" } }));
   emit({ type: "run.started", run: { ...run, status: "running" } });
   emit({ type: "run.event", runId: run.id, index: 0, event: { type: "message_delta", text: "Partial work" } });
+  store.update((state) => ({ ...state, orchestra: { ...state.orchestra, runs: [{ id: "workflow-run", sessionId: "session", workflow: { id: "workflow", name: "Feature", description: "", revision: 1, steps: [] }, prompt: "Task", status: "running", stepIndex: 0, workers: [], reviewRounds: {}, defaultModel: { providerId: "fake", runtimeId: "fake-runtime", model: "test" }, permissionMode: "ask", revision: 1, createdAt: stamp, updatedAt: stamp }] } }));
+
   emit({ type: "host.status", status: "exited", detail: "Host stopped" });
   assert.deepEqual(store.get().live, {});
   assert.equal(store.get().runs[0]?.status, "unknown");
@@ -379,6 +381,9 @@ test("host exit replaces loading runs with unknown history and preserves streame
   assert.match(store.get().runs[0]?.error ?? "", /host stopped/);
   emit({ type: "run.started", run: { ...run, status: "running" } });
   assert.deepEqual(store.get().live, {}, "late IPC must not resurrect a dead host run");
+  assert.equal(store.get().orchestra.runs[0]?.status, "interrupted");
+  emit({ type: "orchestra.changed" });
+  assert.equal(store.get().orchestra.runs[0]?.status, "interrupted", "late workflow events must not revive running indicators");
 });
 
 test("only explicitly confirmed deletion sends force and cancellation errors restore retry", async () => {

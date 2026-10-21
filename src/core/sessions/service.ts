@@ -42,16 +42,19 @@ export class SessionsService {
     if (input.projectId !== undefined && input.projectId.trim() === "") {
       throw new InvalidSessionError("Project ID is required.");
     }
+    const parent = input.parentSessionId === undefined ? undefined : await this.get(input.parentSessionId);
+    if (parent && (parent.parentSessionId !== undefined || parent.projectId !== input.projectId)) throw new InvalidSessionError("A worker must belong to a root conversation in the same project.");
     const timestamp = this.now().toISOString();
     const session: SessionRecord = {
       id: input.id ?? this.createId(),
+      ...(parent === undefined ? {} : { parentSessionId: parent.id, workspaceMode: parent.workspaceMode ?? "shared" }),
       ...(input.projectId === undefined ? { originatedAsChat: true } : { projectId: input.projectId }),
       messages: [],
       continuations: [],
       createdAt: timestamp,
       updatedAt: timestamp,
       ...(input.title === undefined ? {} : { title: input.title }),
-      ...(input.workspaceMode === undefined || input.workspaceMode === "shared" ? {} : { workspaceMode: input.workspaceMode }),
+      ...(parent !== undefined || input.workspaceMode === undefined || input.workspaceMode === "shared" ? {} : { workspaceMode: input.workspaceMode }),
     };
     await this.store.save(session);
     return session;
@@ -61,7 +64,8 @@ export class SessionsService {
   async workspace(sessionId: SessionId): Promise<string> {
     await this.get(sessionId);
     if (!this.options.workspace) throw new InvalidSessionError("Chat workspaces are unavailable.");
-    return this.options.workspace(sessionId);
+    const session = await this.get(sessionId);
+    return this.options.workspace(session.parentSessionId ?? sessionId);
   }
 
   /** Attaching retains visible history, but starts native threads in the new cwd. */
@@ -166,14 +170,14 @@ export class SessionsService {
    */
   async listSummaries(projectId?: string): Promise<readonly SessionSummary[]> {
     const summaries = this.store.listSummaries ? await this.store.listSummaries() : (await this.store.list()).map(summarizeSession);
-    return summaries.filter((session) => projectId === undefined || session.projectId === projectId)
+    return summaries.filter((session) => session.parentSessionId === undefined && (projectId === undefined || session.projectId === projectId))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   async list(projectId?: string): Promise<readonly SessionRecord[]> {
     const sessions = await this.store.list();
     return sessions
-      .filter((session) => projectId === undefined || session.projectId === projectId)
+      .filter((session) => session.parentSessionId === undefined && (projectId === undefined || session.projectId === projectId))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 

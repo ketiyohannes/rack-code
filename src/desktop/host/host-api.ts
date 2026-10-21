@@ -1,3 +1,4 @@
+import type { OrchestraService } from "../../features/orchestration/service.js";
 import type { ReviewInboxService } from "../../features/pull-requests/index.js";
 import type { PullRequestsService } from "../../features/pull-requests/index.js";
 import type { UsageService } from "../../features/usage/index.js";
@@ -62,6 +63,7 @@ import type { BrowserService } from "../../features/browser/index.js";
 
 /** The application services the host needs; satisfied by `createApplication`. */
 export interface HostApplication {
+  readonly orchestra?: OrchestraService;
   readonly pullRequests?: PullRequestsService;
   readonly reviewInbox?: ReviewInboxService;
   readonly usage?: UsageService;
@@ -96,10 +98,18 @@ export class HostApi {
     private readonly app: HostApplication,
     private readonly emit: (event: HostEvent) => void,
   ) {
-    this.ready = app.execution.initialize();
+    this.ready = Promise.all([app.execution.initialize(), app.orchestra?.initialize()]).then(() => undefined);
     void this.ready.catch(() => {});
     this.activeRuns = new ActiveRuns({ emit, loadRun: (runId) => this.loadRun(runId) });
     this.handlers = this.createHandlers();
+    app.orchestra?.subscribe(() => {
+      emit({ type: "orchestra.changed" });
+    });
+    app.orchestra?.observeExecutions(async (handle) => {
+      const run = await this.loadRun(handle.runId);
+      this.activeRuns.track(handle, run);
+      emit({ type: "run.started", run });
+    });
     // Sign-in progress is pushed to every client; a completed sign-in also
     // changed account records.
     app.connections.subscribe((connect) => {
@@ -131,13 +141,22 @@ export class HostApi {
   async shutdown(timeoutMs: number): Promise<number> {
     this.stopping = true;
     // Start cancellation before optional cleanup or queued mutations can stall it.
+    const shutdownDeadline = Date.now() + timeoutMs;
+    const stoppingOrchestra = this.app.orchestra?.stopAll();
     const stoppingRuns = this.activeRuns.cancelAll(timeoutMs);
+    void stoppingOrchestra?.catch(() => {});
     const stoppingTracking = this.app.timeline?.stopProjectTracking();
     await this.app.connections.cancelAll();
     this.app.reviewInbox?.cancelLogins();
     await Promise.allSettled([...this.sessionMutations.values()]);
     const remaining = await stoppingRuns;
     await stoppingTracking;
+    // Persist workflow stop state even when it was parked at an approval
+    // and had no native handles in ActiveRuns. Respect the existing deadline.
+    let orchestraTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([stoppingOrchestra, new Promise<void>((resolve) => { orchestraTimer = setTimeout(resolve, Math.max(0, shutdownDeadline - Date.now())); })]);
+    } finally { clearTimeout(orchestraTimer); }
     await this.app.terminal?.shutdown();
     return remaining;
   }
@@ -153,6 +172,33 @@ export class HostApi {
       return this.app.reviewInbox;
     };
     return {
+      "orchestra.snapshot": async () => this.orchestra().snapshot(),
+      "orchestra.save": async (p) => this.orchestra().save(p.definition),
+      "orchestra.remove": async (p) => { await this.orchestra().remove(p.workflowId); return null; },
+      "orchestra.bind": async (p) => { await this.orchestra().bind(p.sessionId, p.workflowId); return null; },
+      "orchestra.start": async (p) => this.mutateSession(p.input.sessionId, async () => {
+        if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+        if (this.activeRuns.list().some((active) => active.run.sessionId === p.input.sessionId)) throw new HostOperationError("session_busy", "Stop the current run before starting a workflow.");
+        const definition = (await this.orchestra().snapshot()).workflows.find((entry) => entry.id === p.workflowId);
+        if (!definition) throw new HostOperationError("invalid_input", "This workflow no longer exists.");
+        // Validate all assignments before the first worker can edit anything.
+        const catalog = await this.handlers["models.list"]({ ...(p.input.projectId === undefined ? {} : { projectId: p.input.projectId }) });
+        const fallback = definition.coordinator ?? { providerId: p.input.providerId, runtimeId: p.input.runtimeId, model: p.input.model ?? "default", ...(p.input.reasoningEffort === undefined ? {} : { reasoningEffort: p.input.reasoningEffort }) };
+        const assignments = [fallback, ...definition.steps.flatMap((step) => step.agents.map((agent) => agent.model ?? fallback))];
+        for (const binding of assignments) {
+          const runtime = runtimes.get(binding.runtimeId);
+          if (runtime.providerId !== binding.providerId) throw new HostOperationError("invalid_input", "A workflow model has an invalid provider assignment.");
+          const model = catalog.models.find((entry) => entry.runtimeId === binding.runtimeId && entry.providerId === binding.providerId && (binding.model === "default" || entry.id === binding.model));
+          if (!model) throw new HostOperationError("invalid_input", `Workflow model '${binding.model}' is unavailable. Update its assignment before running.`);
+          if (binding.reasoningEffort && !model.reasoningEfforts?.some((entry) => entry.id === binding.reasoningEffort)) throw new HostOperationError("invalid_input", `Reasoning effort '${binding.reasoningEffort}' is unavailable for '${binding.model}'.`);
+          if (p.input.accountId && binding.providerId === p.input.providerId && !model.accountIds.includes(p.input.accountId)) throw new HostOperationError("invalid_input", "A workflow model is unavailable on the selected account. Choose Auto or another account.");
+        }
+        const run = await this.orchestra().start(p.input, p.workflowId);
+        this.emit({ type: "sessions.changed", sessionId: run.sessionId });
+        return run;
+      }),
+      "orchestra.control": async (p) => { await this.orchestra().control(p.runId, p.action); this.emit({ type: "sessions.changed", sessionId: (await this.orchestra().snapshot()).runs.find((run) => run.id === p.runId)?.sessionId ?? "" }); return null; },
+      "orchestra.generate": async (p) => this.orchestra().generate(p.sessionId, p.description, p.model),
       "reviews.accounts": async (p) => inbox().accounts(p.refresh),
       "reviews.accountLoginBegin": async (p) => inbox().beginLogin(p.host),
       "reviews.accountLoginFinish": async (p) => inbox().finishLogin(p.loginId),
@@ -302,6 +348,7 @@ export class HostApi {
         return session;
       },
       "sessions.setWorkspaceMode": async (params) => this.mutateSession(params.sessionId, async () => {
+        if (this.app.orchestra?.isBusy(params.sessionId)) throw new HostOperationError("session_busy", "Stop the workflow before changing its workspace.");
         const current = await sessions.get(params.sessionId);
         if (this.activeRuns.list().some((active) => active.run.sessionId === current.id)) throw new HostOperationError("session_busy", "Stop this session before changing its workspace.");
         if (params.mode === "isolated") {
@@ -319,6 +366,7 @@ export class HostApi {
           : projects.workspaceState(session.projectId, session.id, session.workspaceMode ?? "shared");
       },
       "sessions.removeWorkspace": async (params) => this.mutateSession(params.sessionId, async () => {
+        if (this.app.orchestra?.isBusy(params.sessionId)) throw new HostOperationError("session_busy", "Stop the workflow before removing its workspace.");
         const session = await sessions.get(params.sessionId);
         if (!session.projectId || session.workspaceMode !== "isolated") throw new HostOperationError("invalid_input", "This session has no isolated worktree.");
         if (this.activeRuns.list().some((active) => active.run.sessionId === session.id)) throw new HostOperationError("session_busy", "Stop this session before removing its worktree.");
@@ -329,6 +377,7 @@ export class HostApi {
       }),
       "skills.list": async (p) => execution.listSkills(p.sessionId, p.runtimeId, p.accountId),
       "sessions.attachProject": async (p) => this.mutateSession(p.sessionId, async () => {
+        if (this.app.orchestra?.isBusy(p.sessionId)) throw new HostOperationError("session_busy", "Stop the workflow before attaching a project.");
         if (this.activeRuns.list().some((active) => active.run.sessionId === p.sessionId)) throw new HostOperationError("session_busy", "Stop the conversation before attaching a project.");
         const project = await projects.getProject(p.projectId);
         await this.app.terminal?.closeContext(`session:${p.sessionId}`);
@@ -343,6 +392,7 @@ export class HostApi {
       "sessions.get": async (params) => sessions.get(params.sessionId),
       "sessions.attachFiles": async (params) => this.mutateSession(params.sessionId, () => sessions.attachFiles(params.sessionId, params.paths)),
       "sessions.remove": async ({ sessionId, force }) => this.mutateSession(sessionId, async () => {
+        if (this.app.orchestra?.isBusy(sessionId)) throw new HostOperationError("session_busy", "Stop the workflow before deleting its conversation.");
         const session = await sessions.get(sessionId);
         if (force === true) await this.activeRuns.cancelSession(sessionId, 8000);
         const runs = await execution.listRuns(sessionId);
@@ -435,6 +485,7 @@ export class HostApi {
       "runs.start": async (params) => this.mutateSession(params.sessionId, async () => {
         if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
         const project = params.projectId === undefined ? undefined : await projects.getProject(params.projectId);
+        if (this.app.orchestra?.isBusy(params.sessionId)) throw new HostOperationError("session_busy", "This conversation has an active workflow. Pause or stop it in Orchestration.");
         const running = this.activeRuns.list().find((active) => active.run.sessionId === params.sessionId);
         if (running !== undefined) {
           const attemptId = running.run.attemptIds.at(-1) ?? running.run.id;
@@ -545,6 +596,11 @@ export class HostApi {
   private terminals(): TerminalService { if (this.app.terminal === undefined) throw new HostOperationError("feature_unavailable", "Terminal is not available."); return this.app.terminal; }
 
   /** The assembled Timeline feature, or `feature_unavailable`. */
+  private orchestra(): OrchestraService {
+    if (!this.app.orchestra) throw new HostOperationError("feature_unavailable", "Orchestration is unavailable in this host.");
+    return this.app.orchestra;
+  }
+
   private timeline(): TimelineService {
     if (this.app.timeline === undefined) {
       throw new HostOperationError("feature_unavailable", "Timeline is not available in this application.");

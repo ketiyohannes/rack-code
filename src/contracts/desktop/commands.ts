@@ -1,3 +1,4 @@
+import { validateWorkflow, type AgentModel, type OrchestraSnapshot, type WorkflowDefinition, type WorkflowRun } from "../../features/orchestration/types.js";
 import type { AccountCatalog, AccountLogin, AccountLoginResult, InboxQuery, InboxResult, InboxTarget, RepositoryTarget, InboxDetail } from "../../features/pull-requests/index.js";
 import type { ReviewRepository, PullDetail, PullList, PullRequest, CreatePull, PullState, ReviewAction } from "../../features/pull-requests/index.js";
 import type { UsageReport } from "../../features/usage/index.js";
@@ -103,6 +104,13 @@ export interface StartRunParams {
 type NoParams = Record<string, never>;
 
 export interface HostCommandMap {
+  "orchestra.snapshot": { params: NoParams; result: OrchestraSnapshot };
+  "orchestra.save": { params: { definition: WorkflowDefinition }; result: WorkflowDefinition };
+  "orchestra.remove": { params: { workflowId: string }; result: null };
+  "orchestra.bind": { params: { sessionId: string; workflowId?: string }; result: null };
+  "orchestra.start": { params: { input: StartRunParams; workflowId: string }; result: WorkflowRun };
+  "orchestra.control": { params: { runId: string; action: "pause" | "resume" | "approve" | "stop" }; result: null };
+  "orchestra.generate": { params: { sessionId: string; description: string; model: AgentModel }; result: WorkflowDefinition };
   "reviews.accounts": { params: { refresh?: boolean }; result: AccountCatalog };
   /** Browser sign-in through gh: begin returns the device code, finish waits for authorization. */
   "reviews.accountLoginBegin": { params: { host: string }; result: AccountLogin };
@@ -252,6 +260,13 @@ const credential = object({ id, providerId: id, method: id });
 
 /** Runtime validators, one per command, typed against `HostCommandMap`. */
 export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<CommandParams<C>> } = {
+  "orchestra.snapshot": empty,
+  "orchestra.save": object({ definition: (value, path) => { try { return validateWorkflow(value); } catch (error) { throw new ContractValidationError(path, error instanceof Error ? error.message : "Invalid workflow."); } } }),
+  "orchestra.remove": object({ workflowId: id }),
+  "orchestra.bind": object({ sessionId: id, workflowId: optional(id) }),
+  "orchestra.start": object({ input: (value, path): StartRunParams => COMMAND_VALIDATORS["runs.start"](value, path), workflowId: id }),
+  "orchestra.control": object({ runId: id, action: oneOf(["pause", "resume", "approve", "stop"]) }),
+  "orchestra.generate": object({ sessionId: id, description: text({ maxLength: 8000 }), model: object({ providerId: id, runtimeId: id, model: id, reasoningEffort: optional(text({ maxLength: 64 })) }) }),
   "reviews.accounts": object({ refresh: optional(boolean) }),
   "reviews.accountLoginBegin": object({ host: id }),
   "reviews.accountLoginFinish": object({ loginId: id }),

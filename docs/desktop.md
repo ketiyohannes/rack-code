@@ -269,3 +269,15 @@ across the title and remove button, rather than a second outlined box.
 
 GitHub accounts connect through the browser, never with a pasted token. See
 [Pull requests: Connections](pull-requests.md#connections).
+
+
+## Agent orchestra (2026-10-21)
+
+Orchestration is available in the right workbench launcher and + menu. Its library
+opens a wide Workflow studio with editable step cards, model assignments, drag
+handles and keyboard reorder controls. Apply a workflow to a conversation and
+send its task through the ordinary composer. Live stage/agent status, approval
+points, pause/resume/stop and worker inspection live in the sidebar; the main
+conversation retains one workflow turn and its final response. Timeline includes
+a separate Agent activity section. See [Agent orchestra](orchestration.md) for
+execution rules, persistence, verification and current limits.

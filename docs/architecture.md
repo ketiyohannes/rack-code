@@ -1,8 +1,8 @@
 # Architecture
 
-Status: evolving architecture with the headless MVP foundation and desktop UI implemented, updated 2026-10-15.
+Status: evolving architecture with the headless MVP foundation and desktop UI implemented, updated 2026-10-21.
 
-This document is the architecture entry point required by [AGENTS.md](../AGENTS.md). It captures the agreed product direction and the boundaries used by the implemented headless MVP and desktop UI. Timeline is implemented in part (see [Timeline](timeline.md)); Terminal, Browser and Files are implemented as described in [desktop tools](desktop-tools.md). Background hosting, the remaining timeline phases, retrospective and orchestration remain follow-on work. Concurrent shared and isolated sessions are implemented; see [concurrent sessions](concurrent-sessions.md).
+This document is the architecture entry point required by [AGENTS.md](../AGENTS.md). It captures the agreed product direction and the boundaries used by the implemented headless MVP and desktop UI. Timeline is implemented in part (see [Timeline](timeline.md)); Terminal, Browser and Files are implemented as described in [desktop tools](desktop-tools.md). Background hosting, the remaining timeline phases, retrospective remains follow-on work. Rack-owned orchestration is implemented; see [Agent orchestra](orchestration.md). Concurrent shared and isolated sessions are implemented; see [concurrent sessions](concurrent-sessions.md).
 
 ## Product and implementation scope
 
@@ -557,3 +557,27 @@ unchanged. See [performance evidence and limits](performance-improvements.md).
 Timeline's snapshot repository remains read-only with respect to HEAD, the user index and working files. Its optional all-branch query walks every parent of local/remote branches and supported Timeline refs, returning parents and tip labels in a bounded topological page. Expanded snapshot validation accepts these reachable comparisons; path filtering and immutable caches remain unchanged.
 
 Explicit checkout belongs to Projects through `ProjectBranchRepository`, implemented by `GitProjectBranches` and supplied in startup composition. The host exposes project-ID/ref commands, emits project/Timeline freshness events after success and never accepts arbitrary checkout paths. Projects compares common repository identities for existing writers, including project aliases; a checkout barrier is established before asynchronous checks and writer acquisition rechecks it after its await. Branch listing and confirmation show the project checkout. Session worktrees and their persisted branch ownership are not changed. Core does not depend on Timeline or Electron. The renderer adds one All branches tab and invokes this independent Projects capability for confirmed checkout.
+
+
+## Rack-owned orchestration (2026-10-21)
+
+The optional Orchestration service owns reusable workflow definitions, session
+bindings, immutable run snapshots, sequential/parallel scheduling, approval
+points and bounded review loops. It calls Execution through public interfaces;
+provider-specific orchestration is not required. The host connects its execution
+handles to ActiveRuns once, so worker events, tool approvals, questions and
+cancellation use the established runtime path. See [Agent orchestra](orchestration.md).
+
+Sessions now supports internal child contexts with `parentSessionId`. These share
+the root conversation's execution directory and app tools while retaining their
+own messages and provider continuation associations. They do not appear in session
+navigation. One visible conversation can therefore contain several independent
+workers without concurrently mutating a single native conversation. The host
+refuses normal root turns and workspace/removal changes during active workflows.
+
+The renderer's studio edits the portable definition contract; the execution host
+owns scheduling and durable state, so closing a tool or disconnecting a renderer
+does not stop work. Startup marks active saved workflows Interrupted and never
+replays uncertain worker actions. Parallel groups are read-only until workspace
+integration and merge policies are implemented. Definitions and execution
+snapshots live in the feature-owned atomic JSON store.

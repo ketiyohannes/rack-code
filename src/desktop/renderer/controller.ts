@@ -1,3 +1,4 @@
+import { isWorkflowActive, type WorkflowDefinition } from "../../features/orchestration/types.js";
 /**
  * Renderer-side coordinator between the host client and the store.
  *
@@ -198,6 +199,7 @@ export class Controller {
         connects: Object.fromEntries(connecting.map((connect) => [connect.connectId, connect])),
         live: liveFromSnapshot(active, state.live),
       }));
+      void this.reloadOrchestra();
       this.ready = true;
       for (const event of this.bufferedEvents.splice(0)) {
         this.handleEvent(event);
@@ -609,6 +611,13 @@ export class Controller {
 
   async startRun(params: StartRunParams): Promise<boolean> {
     return this.attempt(async () => {
+      const workflowId = this.store.get().orchestra.bindings[params.sessionId];
+      if (workflowId && this.store.get().enabledPlugins.includes("orchestration")) {
+        await this.host.call("orchestra.start", { input: params, workflowId });
+        this.openTool("orchestration");
+        await Promise.all([this.reloadOrchestra(), this.reloadSession(params.sessionId), this.reloadSessions()]);
+        return;
+      }
       const started = await this.host.call("runs.start", params);
       this.addLiveRun(started.run, started.fallbackFromAccountId);
       if (started.fallbackFromAccountId !== undefined) {
@@ -631,6 +640,36 @@ export class Controller {
       }
       return undefined;
     });
+  }
+
+  private orchestraLoading: Promise<void> | undefined;
+  private orchestraReloadPending = false;
+  async reloadOrchestra(): Promise<void> {
+    if (this.orchestraLoading) { this.orchestraReloadPending = true; return this.orchestraLoading; }
+    this.orchestraLoading = this.loadOrchestraSnapshot();
+    try { await this.orchestraLoading; } finally { this.orchestraLoading = undefined; if (this.orchestraReloadPending) { this.orchestraReloadPending = false; await this.reloadOrchestra(); } }
+  }
+  private async loadOrchestraSnapshot(): Promise<void> {
+    try {
+      const orchestra = await this.host.call("orchestra.snapshot", {});
+      if (!orchestra || !Array.isArray(orchestra.runs) || !Array.isArray(orchestra.workflows)) return;
+      this.store.update((state) => state.host.status === "exited" ? state : ({ ...state, orchestra }));
+    } catch (error) {
+      if (!(error instanceof HostCommandError && error.code === "feature_unavailable")) this.report(error);
+    }
+  }
+
+  async saveWorkflow(definition: WorkflowDefinition): Promise<boolean> {
+    return this.attempt(async () => { await this.host.call("orchestra.save", { definition }); await this.reloadOrchestra(); });
+  }
+  async bindWorkflow(sessionId: string, workflowId?: string): Promise<void> {
+    await this.attempt(async () => { await this.host.call("orchestra.bind", { sessionId, ...(workflowId === undefined ? {} : { workflowId }) }); await this.reloadOrchestra(); });
+  }
+  async removeWorkflow(workflowId: string): Promise<void> {
+    await this.attempt(async () => { await this.host.call("orchestra.remove", { workflowId }); await this.reloadOrchestra(); });
+  }
+  async controlWorkflow(runId: string, action: "pause" | "resume" | "approve" | "stop"): Promise<void> {
+    await this.attempt(async () => { await this.host.call("orchestra.control", { runId, action }); await this.reloadOrchestra(); });
   }
 
   async cancelRun(runId: string): Promise<void> {
@@ -672,9 +711,15 @@ export class Controller {
 
   private handleEvent(event: HostEvent): void {
     // Already-queued IPC from a dead host cannot resurrect loading indicators.
-    if (this.store.get().host.status === "exited" && event.type.startsWith("run.")) return;
+    if (this.store.get().host.status === "exited" && (event.type.startsWith("run.") || event.type === "orchestra.changed")) return;
     const { selection } = this.store.get();
     switch (event.type) {
+      case "orchestra.changed":
+        void this.reloadOrchestra().then(() => {
+          const id = this.store.get().selection.sessionId;
+          if (id) { this.invalidateSession(id); void this.reloadSession(id); }
+        });
+        return;
       case "host.status": {
         if (event.status === "exited") {
           this.sessionCache.clear();
@@ -692,7 +737,8 @@ export class Controller {
           }
           // A dead host cannot own a live handle. Retain activity as uncertain
           // history instead of leaving stop controls and loading dots forever.
-          return { ...state, host: { status: "exited", ...(event.detail === undefined ? {} : { detail: event.detail }) }, live: {},
+          const orchestra = { ...state.orchestra, runs: state.orchestra.runs.map((run) => isWorkflowActive(run) ? { ...run, status: "interrupted" as const, error: "The execution host stopped. Review the saved activity before starting again.", workers: run.workers.map((worker) => worker.status === "running" || worker.status === "queued" ? { ...worker, status: "stopped" as const } : worker) } : run) };
+          return { ...state, orchestra, host: { status: "exited", ...(event.detail === undefined ? {} : { detail: event.detail }) }, live: {},
             runs: [...runs.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), transcripts };
         });
         return;

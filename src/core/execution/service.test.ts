@@ -493,6 +493,16 @@ test("isolated sessions run in their worktree; a preparation failure fails the r
   assert.equal(seen[1]?.projectPath, "/repo/app");
   assert.equal(seen[1]?.checkoutRoot, undefined);
 
+  // A worker has its own provider history but must use its parent's existing
+  // worktree, including the trusted checkout root, rather than create another.
+  const worker = await sessions.create({ id: "worker", parentSessionId: isolated.id, projectId: project.id });
+  await drain(await start(worker.id));
+  assert.equal(seen[2]?.projectPath, "/data/worktrees/wt/app");
+  assert.equal(seen[2]?.checkoutRoot, "/repo");
+  assert.equal((await projects.getProject(project.id)).isolatedWorkspaces?.length, 1);
+  assert.equal((await sessions.listSummaries()).some((session) => session.id === worker.id), false);
+
+
   fail = true;
   const other = await sessions.create({ id: "iso-2", projectId: project.id, workspaceMode: "isolated" });
   const failed = await drain(await start(other.id));

@@ -1,3 +1,4 @@
+import type { OrchestraSnapshot } from "../../features/orchestration/types.js";
 /**
  * Renderer state container.
  *
@@ -57,6 +58,7 @@ export interface Notice {
 export type SettingsSection = "general" | "accounts" | "models" | "plugins" | "shortcuts" | "about";
 
 export interface AppState {
+  readonly orchestra: OrchestraSnapshot;
   readonly page: "chat" | "usage" | "pull-requests";
   readonly reviewProjectId?: string;
   readonly host: { readonly status: "connecting" | "ready" | "exited"; readonly detail?: string };
@@ -110,6 +112,7 @@ export interface AppState {
 }
 
 export const INITIAL_STATE: AppState = {
+  orchestra: { workflows: [], bindings: {}, runs: [] },
   page: "chat",
   host: { status: "connecting" },
   accounts: [],

@@ -255,6 +255,7 @@ export class ExecutionService {
       runtime,
       projectPath,
       workspaceMode: session.workspaceMode ?? "shared",
+      workspaceSessionId: session.parentSessionId ?? session.id,
       preparation,
       run: currentRun,
       attempt: currentAttempt,
@@ -379,7 +380,7 @@ export class ExecutionService {
       const attachedPrompt = promptWithAttachments(input.prompt, run.attachments ?? []);
       const workflowPrompt = `${input.projectId === undefined ? "This is a general conversation. Help with questions, research and documents as well as code. Your working folder is this chat’s private file workspace. Save generated files there.\n\n" : ""}${input.interactionMode === "plan" ? "PLAN MODE: Research and propose a complete actionable plan. Do not implement or modify files, execute mutating commands, or perform external mutations. End with the plan for the user to review. Only the user can authorize a later implementation turn.\n\n" : ""}${attachedPrompt}`;
       if (input.projectId !== undefined) await this.projects.acquireWriter(input.projectId, attempt.id, { sessionId: input.sessionId, mode: workspaceMode });
-      const directory = input.projectId === undefined ? { path: projectPath } : await this.projects.prepareExecutionDirectory(input.projectId, input.sessionId, workspaceMode);
+      const directory = input.projectId === undefined ? { path: projectPath } : await this.projects.prepareExecutionDirectory(input.projectId, context.workspaceSessionId, workspaceMode);
       if (controller.signal.aborted) throw new Error("Run interrupted while preparing its workspace.");
       await context.preparation.beforeRuntime?.(run.id, controller.signal);
       if (controller.signal.aborted) throw new Error("Run interrupted before runtime startup.");
@@ -394,7 +395,7 @@ export class ExecutionService {
       });
       await this.accounts.markUsed(account.id);
 
-      const appTools: readonly RuntimeAppTool[] = (this.tools?.(input.sessionId) ?? []).map((tool) => ({
+      const appTools: readonly RuntimeAppTool[] = (this.tools?.(context.workspaceSessionId) ?? []).map((tool) => ({
         name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
         execute: async (arguments_) => {
           if (controller.signal.aborted) throw new Error("Run was interrupted.");
@@ -625,6 +626,8 @@ interface ConsumeContext {
   readonly skills: readonly import("./types.js").RuntimeSkill[];
   readonly account: AccountRecord;
   readonly runtime: ReturnType<RuntimeRegistry["get"]>;
+  /** Root workspace/tool owner; worker histories retain their own session ID. */
+  readonly workspaceSessionId: string;
   /** Session workspace mode; resolved to a directory once the writer is held. */
   readonly workspaceMode: "shared" | "isolated";
   readonly preparation: RunPreparation;

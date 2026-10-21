@@ -1,3 +1,4 @@
+import { createOrchestraPanel } from "./orchestra-panel.js";
 /**
  * Tabbed right workbench. Tool instances belong to their panels, so switching
  * or closing a tab preserves shell output, file drafts and the shared browser.
@@ -86,6 +87,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   root.querySelector(".workbench-top")?.append(tabList, addTab);
   root.append(body);
   // Created once so its search field and expansion state survive re-renders.
+  const orchestraPanel = createOrchestraPanel(store, controller, host);
   const timelinePanel = createTimelinePanel(store, controller, isVisible);
   // One side chat instance; its context follows the selected main session.
   const sideChat = createSideChat(store, controller, host);
@@ -213,7 +215,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     // Streaming chat updates must not detach persistent editors, the terminal's
     // hidden textarea, or the browser chrome. Reattachment loses focus and
     // IME composition even if the exact DOM node is inserted again.
-    const persistent = surface?.id === "files" ? filesPanel.element
+    const persistent = surface?.id === "orchestration" ? orchestraPanel.element : surface?.id === "files" ? filesPanel.element
       : surface?.id === "terminal" ? terminalPanel.element
         : surface?.id === "browser" ? browserPanel.element
           : surface?.id === "timeline" ? timelinePanel.element
@@ -221,7 +223,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     if (surface === undefined) {
       replace(body, renderLauncher((id) => { openTool(id, true); focusTab(); }));
     } else if (persistent === undefined || !body.contains(persistent)) {
-      replace(body, renderSurface(surface, surface.id === "changes" ? renderChanges()
+      replace(body, renderSurface(surface, surface.id === "orchestration" ? orchestraPanel.element : surface.id === "changes" ? renderChanges()
         : surface.id === "run-details" ? renderDetails()
           : surface.id === "timeline" ? timelinePanel.element
             : surface.id === "files" ? filesPanel.element
@@ -229,6 +231,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
                 : surface.id === "browser" ? browserPanel.element
                   : surface.id === "side-chat" ? sideChat.element : undefined));
     }
+    orchestraPanel.setActive(store.get().page === "chat" && surface?.id === "orchestration");
     timelinePanel.setActive(store.get().page === "chat" && surface?.id === "timeline");
     filesPanel.setActive(store.get().page === "chat" && surface?.id === "files");
     terminalPanel.setActive(store.get().page === "chat" && surface?.id === "terminal");

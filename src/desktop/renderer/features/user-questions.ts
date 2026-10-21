@@ -1,3 +1,4 @@
+import { sessionWorkerRunIds } from "./orchestra-state.js";
 /** Persistent question forms above the composer. Streaming updates and
  * session switches retain drafts/focus; only host-owned pending requests
  * can be answered, and resolved requests release their DOM and draft text.
@@ -11,10 +12,10 @@ import type { Store } from "../store.js";
 export function createQuestionRequests(store: Store, controller: Controller): HTMLElement {
   const region = h("div", { class: "question-requests", role: "region", aria: { label: "Questions from the agent", live: "polite" } });
   const cards = new Map<string, HTMLElement>();
-  store.watch((state) => [state.live, state.selection.sessionId], (_slice, state) => {
+  store.watch((state) => [state.live, state.orchestra, state.selection.sessionId], (_slice, state) => {
     const pending = Object.values(state.live).flatMap((live) => (live.pendingQuestions ?? []).map((request) => ({ run: live.run, request })));
     const all = new Set(pending.map(({ run, request }) => `${run.id}:${request.id}`));
-    const visible = pending.filter(({ run }) => run.sessionId === state.selection.sessionId);
+    const visible = pending.filter(({ run }) => run.sessionId === state.selection.sessionId || sessionWorkerRunIds(state).has(run.id));
     const visibleKeys = new Set(visible.map(({ run, request }) => `${run.id}:${request.id}`));
     for (const [key, card] of cards) {
       if (!visibleKeys.has(key)) card.remove();

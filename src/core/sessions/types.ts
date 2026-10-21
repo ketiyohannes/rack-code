@@ -33,6 +33,8 @@ export interface NativeContinuationReference {
 export type SessionWorkspaceMode = "shared" | "isolated";
 
 export interface SessionRecord {
+  /** Internal worker context; shares its parent workspace and stays out of navigation. */
+  readonly parentSessionId?: string;
   /** Retains access to the original file workspace after project attachment. */
   readonly originatedAsChat?: boolean;
   readonly id: SessionId;
@@ -54,6 +56,7 @@ export interface SessionRecord {
 }
 
 export interface CreateSessionInput {
+  readonly parentSessionId?: string;
   readonly id?: SessionId;
   /** Absent for a standalone chat. */
   readonly projectId?: string;
@@ -89,9 +92,9 @@ export interface SessionImportSnapshot {
 }
 
 /** Navigation metadata; message bodies stay in the selected session read. */
-export type SessionSummary = Pick<SessionRecord, "id" | "projectId" | "title" | "workspaceMode" | "createdAt" | "updatedAt"> & { readonly messageCount: number };
+export type SessionSummary = Pick<SessionRecord, "id" | "projectId" | "title" | "workspaceMode" | "parentSessionId" | "createdAt" | "updatedAt"> & { readonly messageCount: number };
 export function summarizeSession(session: SessionRecord): SessionSummary {
-  return { id: session.id, ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
+  return { id: session.id, ...(session.parentSessionId === undefined ? {} : { parentSessionId: session.parentSessionId }), ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
     ...(session.title === undefined ? {} : { title: session.title }), messageCount: session.messages.length,
     ...(session.workspaceMode === undefined ? {} : { workspaceMode: session.workspaceMode }),
     createdAt: session.createdAt, updatedAt: session.updatedAt };

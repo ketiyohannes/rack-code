@@ -28,6 +28,7 @@ export interface SurfaceDefinition {
 }
 
 export const SURFACES: readonly SurfaceDefinition[] = [
+  { id: "orchestration", title: "Orchestration", icon: "flow-arrow", shortcut: "O", kind: "plugin", description: "Build reusable workflows and watch agents work across models." },
   { id: "changes", title: "Changes", icon: "git-diff", shortcut: "D", kind: "core", description: "Current project changes and Git diffs." },
   { id: "side-chat", title: "Side chat", icon: "chat-circle-text", shortcut: "S", kind: "core", description: "Ask a read-only side question about this session without interrupting it." },
   { id: "run-details", title: "Run details", icon: "list-bullets", shortcut: "R", kind: "core", description: "Run status, account, model, permissions and journal." },

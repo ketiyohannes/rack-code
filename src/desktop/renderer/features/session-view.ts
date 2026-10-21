@@ -1,3 +1,5 @@
+import { isWorkflowActive, type WorkflowRun } from "../../../features/orchestration/types.js";
+import { workflowStatusLabel } from "./orchestra-panel.js";
 import { createOpenInButton } from "../components/open-in.js";
 import { openModal } from "../components/modal.js";
 import { bindContentMenu } from "../components/context-menu.js";
@@ -144,7 +146,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
 
   let lastSessionId: string | undefined;
   store.watch(
-    (state) => [state.page, state.session, state.selection.sessionId, state.selection.projectId, state.runs, state.transcripts, state.accounts, state.projects, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId)],
+    (state) => [state.orchestra,state.page, state.session, state.selection.sessionId, state.selection.projectId, state.runs, state.transcripts, state.accounts, state.projects, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId)],
     (_slice, state) => {
       current = state;
       const sessionChanged = state.session?.id !== lastSessionId;
@@ -225,8 +227,9 @@ function renderTranscript(
     .map((live) => live.run)
     .filter((run) => run.sessionId === session.id && !state.runs.some((stored) => stored.id === run.id));
   const runs = [...state.runs, ...liveOnly];
+  const workflowRuns = state.orchestra.runs.filter((run) => run.sessionId === session.id);
   const imported = session.messages.filter((message) => message.metadata?.["imported"] === "true");
-  if (runs.length === 0 && imported.length === 0) {
+  if (runs.length === 0 && imported.length === 0 && workflowRuns.length === 0) {
     return [session.projectId === undefined
       ? placeholder("chat-circle-text", "What’s on your mind?", "Ask a question, research a topic, or create something. Attach files whenever you need them.")
       : placeholder("terminal-window", "What should we work on?", "Describe a task below. The agent works in this session's project.")];
@@ -235,7 +238,8 @@ function renderTranscript(
     ...(session.importSource === undefined ? [] : [h("div", { class: "import-history-note note" }, icon("database"),
       `Imported from ${session.importSource.providerName}. Continuing uses recent conversation context in a new runtime session; the original remains unchanged.`)]),
     ...renderHistory(imported),
-    ...runs.slice(-visibleRuns).map(renderRun),
+    ...[...runs.map((run) => ({ createdAt: run.createdAt, render: () => renderRun(run) })), ...workflowRuns.map((run) => ({ createdAt: run.createdAt, render: () => renderWorkflowTurn(run, state, controller) }))]
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(-visibleRuns).map((entry) => entry.render()),
   ];
 }
 
@@ -551,4 +555,15 @@ function updateRail(rail: HTMLElement, transcript: HTMLElement): void {
     const rect = turn.getBoundingClientRect();
     ticks[index]?.classList.toggle("visible", rect.bottom > view.top && rect.top < view.bottom);
   });
+}
+
+/** A workflow is one user-facing turn even when it has many native threads. */
+function renderWorkflowTurn(run: WorkflowRun, state: AppState, controller: Controller): HTMLElement {
+  const reply = state.session?.messages.find((message) => message.role === "assistant" && message.metadata?.["workflowRunId"] === run.id);
+  return h("article", { class: "turn orchestra-turn", id: `workflow-${run.id}` },
+    h("div", { class: "prompt-bubble" }, run.prompt),
+    h("button", { class: "orchestra-turn-status", type: "button", onClick: () => controller.openTool("orchestration") }, icon("flow-arrow"), h("strong", {}, run.workflow.name), h("span", {}, workflowStatusLabel(run.status)), icon("caret-right")),
+    h("div", { class: "orchestra-turn-agents" }, ...run.workers.map((worker) => h("span", {}, icon(worker.status === "completed" ? "check-circle" : worker.status === "running" ? "circle-notch" : worker.status === "failed" ? "warning-circle" : "clock"), worker.name))),
+    reply ? h("div", { class: "assistant-message markdown" }, renderMarkdown(reply.content, markdownActions(controller))) : run.error ? h("p", { class: "error-line" }, run.error) : isWorkflowActive(run) ? h("p", { class: "note" }, run.status === "waiting_approval" ? "Review the plan in Orchestration, then approve to continue." : "Your agents are working. Follow their activity in Orchestration.") : null,
+    h("div", { class: "turn-footer" }, formatTime(run.createdAt)));
 }

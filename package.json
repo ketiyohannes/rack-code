@@ -11,7 +11,8 @@
     "start": "npm run build:desktop && electron .",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "test:desktop-features": "esbuild scripts/verify-desktop-features.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-desktop/verify-features.mjs && electron dist-desktop/verify-features.mjs",
-    "check": "npm run typecheck && npm run build && npm test && npm run build:desktop"
+    "check": "npm run typecheck && npm run build && npm test && npm run build:desktop",
+    "test:orchestra": "esbuild scripts/verify-orchestra.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-desktop/verify-orchestra.mjs && electron dist-desktop/verify-orchestra.mjs"
   },
   "engines": {
     "node": ">=20"
