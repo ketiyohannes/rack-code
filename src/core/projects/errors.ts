@@ -47,3 +47,12 @@ export class WorkspaceDirtyError extends ProjectError {
 export class BranchOperationError extends ProjectError {
   constructor(message: string) { super(message); this.name = "BranchOperationError"; }
 }
+
+/**
+ * A Git operation requested from the Changes panel failed or was refused.
+ * The message is user-facing: it carries Git's own explanation (with
+ * credentials redacted) or Rack's reason for refusing.
+ */
+export class GitOperationError extends ProjectError {
+  constructor(message: string) { super(message); this.name = "GitOperationError"; }
+}

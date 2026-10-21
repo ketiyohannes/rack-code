@@ -1,3 +1,50 @@
+# Per-session model, reasoning and Fast in the composer (2026-10-21)
+
+- **Behavior:** switching sessions now switches the composer's model, reasoning effort and Fast setting to that session's own settings. Before, the model was one in-memory choice for the window, and reasoning and Fast were single app-wide preferences.
+- **Where a session's settings come from, in order:**
+  1. An explicit choice made in that session, saved per device in `localStorage` under `composer.sessionModels`, keeping the 300 most recent sessions.
+  2. The model, effort and speed recorded on the session's latest run, so existing sessions work without migration.
+  3. The most recent explicit choice. `composer.model` is new; the existing `composer.reasoningEffort` and `composer.fast` keys are reused.
+- **Fallback:** remembered models that are not currently offered fall back to the default favorite without being overwritten. The side chat picker keeps a single most-recent choice.
+- **Code:** new `src/desktop/renderer/session-model-choice.ts` (storage, run-derived choice, catalog resolution). `ModelPicker.setScope` resolves the wanted model lazily instead of overwriting it during catalog loads. The composer passes the selected session and its persisted or live runs. No host or contract changes.
+- **Validation:**
+  - Four new unit tests: per-session storage and eviction, corrupt storage, latest-run fallback ignoring another session's runs and provider-default runs, and catalog resolution.
+  - A Chromium renderer fixture with GPT (efforts plus Fast) and Opus checked: a session with a GPT/Low/Fast run shows those settings; a session without runs shows the default; choosing Opus/Medium sticks to that session across switches and a reload; a new session starts with Opus/Medium; a sent run carries `claude`/`opus`/`medium`. No browser errors.
+  - Full `npm run check` passed: both type checks, the build, 320 unit tests and the desktop build.
+  - Not performed: the packaged app with real provider catalogs.
+
+# Git source control in Changes; single Timeline view (2026-10-21)
+
+- **Timeline:** removed the **This session** tab. The panel now has **Current branch** (renamed from Project history) and **All branches**. Previously recorded session checkpoints still appear in project history. The host's session-recording commands are unchanged, but the panel no longer offers a way to enable or disable session recording.
+- **Changes is now a VS Code-style Git source-control view:**
+  - A commit box with Commit, Commit all, Commit merge, Commit & Push/Publish, Commit & Sync, and Amend.
+  - An ahead/behind sync button, or Publish for unpublished branches.
+  - A branch menu with switch, create, merge and abort merge.
+  - Pull, Push, Fetch, Sync, Stage all, Unstage all and Discard all in a repository menu.
+  - Per-file and per-group stage, unstage and discard actions, also in a row context menu.
+  - A merge-in-progress banner.
+  - Discard and amending a pushed commit confirm first.
+- **New contract:** `projects.sourceControl` (Projects `ProjectSourceControl` port, `GitSourceControl` adapter) and the `git_operation_failed` error code. `projects.branches` and `projects.checkoutBranch` accept an optional `repositoryPath` (and `sessionId` for listing). `ProjectChanges` gains `upstream`, `ahead`, `behind`, `merging` and `hasCommits`, read from the existing status and rev-parse processes with no extra Git processes per poll.
+- **Safety:**
+  - Literal pathspecs and path validation.
+  - No shell, prompts or controlling terminal for Git.
+  - Inherited `GIT_DIR`-style variables are removed.
+  - Timeouts kill the process group.
+  - Remote URL credentials are redacted in errors.
+  - Pull, sync, merge and abort merge are refused while a run writes in the same canonical working tree.
+  - Isolated session worktrees cannot create or switch branches.
+  - User hooks run, as in the Git CLI.
+- **Validation:**
+  - Six new adapter and service tests against real temporary repositories and a local bare remote: literal and option-like file names, path traversal, ignored files surviving discard, commit rules including the hidden-staged-file refusal, publish/push/fetch/pull/sync with divergent histories, merge conflicts with abort and conclude, branch name validation, the active-run guard and credential redaction.
+  - Full `npm run check` passed: both type checks, the build, 316 unit tests and the desktop build. A later renderer-only fix (capturing the project identity for row actions) was re-checked with the renderer type check, the desktop build and the fixture commit flow.
+  - A Chromium renderer fixture with a stateful mocked host checked the commit draft surviving polling, ⌘Enter commit, row stage, context menu and delete confirmation (Cancel focused), a rejected push error with redaction, merge with conflicts, then resolve and commit merge, create branch then publish then sync, isolated-session branch restrictions, Timeline's two tabs, and layout at 980 × 600. No browser errors.
+  - Not performed: live push/pull against GitHub or other hosted remotes, SSH remotes, signed commits, hooks that prompt, and the packaged Electron app.
+
+# Remove gaps between sidebar project folders (2026-10-21)
+
+- Remove vertical margins between project groups and around their expanded session lists. Keep folder row sizes, controls and indentation unchanged.
+- Validation: desktop build passed. Chromium measured 0 px between all four fixture project groups and 0 px top/bottom margins on expanded session lists; folder rows remain 36 px tall. No browser errors were reported. The unit suite was not rerun for this CSS-only change.
+
 # Collapse the right sidebar after closing its final tab (2026-10-20)
 
 - Closing the last workbench tab (including a blank tab, via its close button, Delete or Backspace) now collapses the right sidebar. The shell owns the saved collapse preference and returns keyboard focus to its toolbar toggle. Closing one of several tabs keeps the panel open. Reopening shows the blank launcher; direct tool requests reveal their tool normally.

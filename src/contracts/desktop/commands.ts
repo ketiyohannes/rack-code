@@ -30,7 +30,7 @@ import type { FileListing, FileDocument } from "../../features/files/index.js";
 import type { TerminalSnapshot } from "../../features/terminal/types.js";
 import type { BrowserRequest, BrowserSnapshot } from "../../features/browser/index.js";
 import { integer } from "./validation.js";
-import type { ProjectBranches, ProjectChanges, ProjectRepositories, RepositoryDiscoveryOptions } from "./views.js";
+import type { ProjectBranches, ProjectChanges, ProjectRepositories, RepositoryDiscoveryOptions, SourceControlActionKind, SourceControlResult } from "./views.js";
 import {
   PERMISSION_MODES,
   type AccountView,
@@ -158,8 +158,32 @@ export interface HostCommandMap {
   /** Sign-ins in progress, for clients that open mid-flow. */
   "auth.active": { params: NoParams; result: readonly ConnectView[] };
   "projects.list": { params: NoParams; result: readonly ProjectView[] };
-  "projects.branches": { params: { readonly projectId: string }; result: ProjectBranches };
-  "projects.checkoutBranch": { params: { readonly projectId: string; readonly ref: string; readonly expectedHead: string }; result: ProjectBranches };
+  /** `repositoryPath` selects a discovered repository; `sessionId` lists an isolated session's worktree. */
+  "projects.branches": { params: { readonly projectId: string; readonly repositoryPath?: string; readonly sessionId?: string }; result: ProjectBranches };
+  "projects.checkoutBranch": { params: { readonly projectId: string; readonly ref: string; readonly expectedHead: string; readonly repositoryPath?: string }; result: ProjectBranches };
+  /**
+   * One explicit Changes-panel Git operation (see `SourceControlAction`).
+   * Fields beyond `kind` are required per kind: `paths` for stage/unstage/
+   * discard, `message` for commit, `ref` for merge and `name` for
+   * createBranch. `sessionId` targets an isolated session's worktree.
+   */
+  "projects.sourceControl": {
+    params: {
+      readonly projectId: string;
+      readonly repositoryPath?: string;
+      readonly sessionId?: string;
+      readonly action: {
+        readonly kind: SourceControlActionKind;
+        readonly paths?: readonly string[];
+        readonly message?: string;
+        readonly amend?: boolean;
+        readonly all?: boolean;
+        readonly ref?: string;
+        readonly name?: string;
+      };
+    };
+    result: SourceControlResult;
+  };
   /** `sessionId` reads an isolated session's worktree instead of the project folder. */
   "projects.changes": { params: { readonly projectId: string; readonly repositoryPath?: string; readonly sessionId?: string }; result: ProjectChanges };
   "projects.repositories": { params: { readonly projectId: string; readonly sessionId?: string } & RepositoryDiscoveryOptions; result: ProjectRepositories };
@@ -248,6 +272,11 @@ export type CommandResult<C extends HostCommand> = HostCommandMap[C]["result"];
 
 const id = text({ maxLength: 256 });
 const WORKSPACE_MODES: readonly WorkspaceMode[] = ["shared", "isolated"];
+/** Every Changes-panel Git operation kind; the host maps each to a typed action. */
+const SOURCE_CONTROL_ACTIONS: readonly SourceControlActionKind[] = [
+  "stage", "stageAll", "unstage", "unstageAll", "discard", "discardAll", "commit",
+  "fetch", "pull", "push", "sync", "merge", "abortMerge", "createBranch",
+];
 const credential = object({ id, providerId: id, method: id });
 
 /** Runtime validators, one per command, typed against `HostCommandMap`. */
@@ -306,8 +335,15 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "auth.cancel": object({ connectId: id }),
   "auth.active": empty,
   "projects.list": empty,
-  "projects.branches": object({ projectId: id }),
-  "projects.checkoutBranch": object({ projectId: id, ref: text({ maxLength: 4096 }), expectedHead: text({ maxLength: 64 }) }),
+  "projects.branches": object({ projectId: id, repositoryPath: optional(text()), sessionId: optional(id) }),
+  "projects.checkoutBranch": object({ projectId: id, ref: text({ maxLength: 4096 }), expectedHead: text({ maxLength: 64 }), repositoryPath: optional(text()) }),
+  "projects.sourceControl": object({ projectId: id, repositoryPath: optional(text()), sessionId: optional(id), action: object({
+    kind: oneOf(SOURCE_CONTROL_ACTIONS),
+    paths: optional(array(text({ maxLength: 4096 }), 1000)),
+    message: optional(text({ allowEmpty: true, maxLength: 65_536 })),
+    amend: optional(boolean), all: optional(boolean),
+    ref: optional(text({ maxLength: 4096 })), name: optional(text({ maxLength: 255 })),
+  }) }),
   "projects.changes": object({ projectId: id, repositoryPath: optional(text()), sessionId: optional(id) }),
   "projects.repositories": object({ projectId: id, sessionId: optional(id), rescan: optional(boolean), deep: optional(boolean), repositoryPath: optional(text()) }),
   "projects.create": object({

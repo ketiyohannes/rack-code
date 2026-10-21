@@ -31,7 +31,7 @@ import type { RuntimeRegistry } from "../../core/execution/runtime-registry.js";
 import type { RunRecord } from "../../core/execution/types.js";
 import type { ProjectsService } from "../../core/projects/service.js";
 import { IsolationUnavailableError } from "../../core/projects/errors.js";
-import type { ProjectRecord } from "../../core/projects/types.js";
+import type { ProjectRecord, SourceControlAction } from "../../core/projects/types.js";
 import type { ConnectionsService } from "../../core/connections/service.js";
 import type { SessionsService } from "../../core/sessions/service.js";
 import type { SessionImportsService } from "../../core/session-imports/service.js";
@@ -228,9 +228,17 @@ export class HostApi {
         if (this.app.browser === undefined) throw new HostOperationError("feature_unavailable", "The shared browser requires the desktop app.");
         return this.app.browser.control(params.sessionId, params.request);
       }),
-      "projects.branches": async (params) => projects.listBranches(params.projectId),
+      "projects.branches": async (params) => projects.listBranches(params.projectId, params.repositoryPath, await this.ownSessionId(params.projectId, params.sessionId)),
       "projects.checkoutBranch": async (params) => {
-        const result = await projects.checkoutBranch(params.projectId, params.ref, params.expectedHead);
+        const result = await projects.checkoutBranch(params.projectId, params.ref, params.expectedHead, params.repositoryPath);
+        this.emit({ type: "projects.changed" });
+        this.emit({ type: "timeline.changed", sessionId: "" });
+        return result;
+      },
+      "projects.sourceControl": async ({ projectId, repositoryPath, sessionId, action }) => {
+        const result = await projects.sourceControl(projectId, repositoryPath, await this.ownSessionId(projectId, sessionId), sourceControlAction(action));
+        // Commits, merges, pulls and branch changes alter Timeline history and
+        // the project tree; other windows refresh from these events.
         this.emit({ type: "projects.changed" });
         this.emit({ type: "timeline.changed", sessionId: "" });
         return result;
@@ -625,4 +633,23 @@ function toAccountView(account: AccountRecord, selected: boolean, activeAttempts
     selected,
     activeAttempts,
   };
+}
+
+/**
+ * Builds the typed core action from the flat wire shape, rejecting a missing
+ * per-kind field instead of defaulting it (an absent `paths` must never turn
+ * a single-file discard into "discard everything").
+ */
+function sourceControlAction(input: CommandParams<"projects.sourceControl">["action"]): SourceControlAction {
+  const required = <T>(value: T | undefined, field: string): T => {
+    if (value === undefined) throw new HostOperationError("invalid_input", `The ${input.kind} operation requires '${field}'.`);
+    return value;
+  };
+  switch (input.kind) {
+    case "stage": case "unstage": case "discard": return { kind: input.kind, paths: required(input.paths, "paths") };
+    case "commit": return { kind: "commit", message: required(input.message, "message"), ...(input.amend ? { amend: true } : {}), ...(input.all ? { all: true } : {}) };
+    case "merge": return { kind: "merge", ref: required(input.ref, "ref") };
+    case "createBranch": return { kind: "createBranch", name: required(input.name, "name") };
+    default: return { kind: input.kind };
+  }
 }

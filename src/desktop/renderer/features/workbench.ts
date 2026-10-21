@@ -8,7 +8,7 @@
 import type { ProjectChanges, ProjectRepositories, RepositoryDiscoveryOptions } from "../../../contracts/desktop/index.js";
 import { createDropdown } from "../components/dropdown.js";
 import type { Controller } from "../controller.js";
-import { renderRepositoryChanges, type ChangesMemory } from "./changes-view.js";
+import { clearChangesMemory, createChangesMemory, renderRepositoryChanges } from "./changes-view.js";
 import { openPopover, type PopoverHandle } from "../components/popover.js";
 import { renderRunDetails } from "./run-detail.js";
 import { createTimelinePanel } from "./timeline-panel.js";
@@ -40,7 +40,11 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   let error: string | undefined;
   let inFlight = false;
   const surfaceScroll = new Map<string, number>();
-  const changesMemory: ChangesMemory = { selectedFiles: new Map(), collapsedGroups: new Set(), split: false };
+  // Selections, collapsed groups, commit drafts and operation state survive
+  // polling re-renders; they reset when the panel changes folders.
+  const changesMemory = createChangesMemory();
+  /** Set when an operation finishes during a read; that read's completion reads again. */
+  let rereadRequested = false;
   // Changes and run details are rebuilt on render, so pickers are created
   // once and re-attached with fresh options; rebuilding them would close an open menu
   // whenever a streaming run re-renders the panel. App dropdowns replace
@@ -187,9 +191,14 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
 
   function render(): void {
     const focused = root.contains(document.activeElement) ? document.activeElement as HTMLElement : undefined;
-    // Persistent inputs (the Timeline filter) lose focus and caret when the
-    // surface is re-attached; remember them so typing is not interrupted.
-    const caret = focused instanceof HTMLInputElement ? { start: focused.selectionStart, end: focused.selectionEnd } : undefined;
+    // Re-attaching a commit box mid-composition would cancel IME input;
+    // render once composition ends instead.
+    if (changesMemory.composing && focused instanceof HTMLTextAreaElement) { changesMemory.renderDeferred = true; return; }
+    // Persistent inputs (the Timeline filter, Changes commit boxes) lose focus
+    // and caret when the surface is re-attached; remember them so typing is
+    // not interrupted.
+    const editable = focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement ? focused : undefined;
+    const caret = editable === undefined ? undefined : { start: editable.selectionStart, end: editable.selectionEnd, scroll: editable.scrollTop };
     const focusPath = focused?.dataset["changePath"];
     const focusGroup = focused?.dataset["changeGroup"];
     const focusLabel = focused?.getAttribute("aria-label");
@@ -233,9 +242,10 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     filesPanel.setActive(store.get().page === "chat" && surface?.id === "files");
     terminalPanel.setActive(store.get().page === "chat" && surface?.id === "terminal");
     browserPanel.setActive(store.get().page === "chat" && surface?.id === "browser");
-    if (focused instanceof HTMLInputElement && focused.isConnected && document.activeElement !== focused) {
-      focused.focus({ preventScroll: true });
-      if (caret !== undefined && caret.start !== null && caret.end !== null) focused.setSelectionRange(caret.start, caret.end);
+    if (editable !== undefined && editable.isConnected && document.activeElement !== editable) {
+      editable.focus({ preventScroll: true });
+      if (caret !== undefined && caret.start !== null && caret.end !== null) editable.setSelectionRange(caret.start, caret.end);
+      if (caret !== undefined) editable.scrollTop = caret.scroll;
     }
     const visibleSurface = body.querySelector<HTMLElement>(".surface");
     if (visibleSurface && surface) visibleSurface.scrollTop = surfaceScroll.get(surface.id) ?? 0;
@@ -319,7 +329,8 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
   // Keep polling responsive after edits, then back off on stable worktrees.
   let pollDelay = 2000;
   let nextPoll = 0;
-  async function refresh(): Promise<void> {
+  /** `force` (after a Git operation) guarantees one more read even if a poll is in flight. */
+  async function refresh(force = false): Promise<void> {
     const state = store.get();
     // Read the project this panel's repository state belongs to, never the
     // live selection directly: store watchers are batched to animation
@@ -328,7 +339,8 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     // project with the old repository paths read the wrong folder. When they
     // differ, wait; the watcher resets the panel and refreshes.
     const selected = projectId;
-    if (inFlight || document.hidden || openSurface !== "changes" || !isVisible() || state.host.status !== "ready" || selected === undefined
+    if (inFlight) { if (force) rereadRequested = true; return; }
+    if (document.hidden || openSurface !== "changes" || !isVisible() || state.host.status !== "ready" || selected === undefined
       || selected !== state.selection.projectId || (viewSessionId !== undefined && viewSessionId !== state.selection.sessionId)) return;
     inFlight = true;
     const version = generation;
@@ -378,7 +390,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
       inFlight = false;
       // A picker change during an old read should start immediately, not wait
       // for the next polling tick. Never run concurrent Git reads for this view.
-      if (!current()) void refresh();
+      if (!current() || rereadRequested) { rereadRequested = false; void refresh(); }
     }
   }
 
@@ -427,11 +439,60 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
     );
   }
 
+  /**
+   * Runs one Git operation for a repository row: one at a time per
+   * repository, with a progress label, then an outcome line and an immediate
+   * re-read. A reply for a folder the panel has since left is dropped.
+   * Success lines clear after a few seconds; errors stay until dismissed.
+   */
+  async function track(key: string, label: string, operation: () => Promise<{ readonly summary: string; readonly conflicts?: boolean }>): Promise<boolean> {
+    if (projectId === undefined || !key.startsWith(`${projectId}:`) || changesMemory.pending.has(key)) return false;
+    const owner = projectId, session = viewSessionId;
+    const same = () => projectId === owner && viewSessionId === session;
+    changesMemory.pending.set(key, label);
+    changesMemory.results.delete(key);
+    render();
+    let ok = false;
+    try {
+      const result = await operation();
+      if (!same()) return false;
+      // Conflicts are explained by the persistent merge banner instead.
+      if (!result.conflicts) {
+        const outcome = { text: result.summary, tone: "success" as const };
+        changesMemory.results.set(key, outcome);
+        window.setTimeout(() => {
+          if (changesMemory.results.get(key) === outcome) { changesMemory.results.delete(key); render(); }
+        }, 6000);
+      }
+      ok = true;
+    } catch (failure) {
+      if (!same()) return false;
+      changesMemory.results.set(key, { text: failure instanceof Error ? failure.message : String(failure), tone: "error" });
+    } finally {
+      if (same()) changesMemory.pending.delete(key);
+    }
+    render();
+    pollDelay = 2000;
+    void refresh(true);
+    return ok;
+  }
+
   function renderRepository(path: string): HTMLElement {
     const result = snapshots.get(path);
     const project = store.get().projects.find((candidate) => candidate.id === projectId);
+    const key = `${projectId}:${path}`;
+    // Capture the folder this section was rendered for; a click that races a
+    // project switch must not run against the newly selected project.
+    const owner = projectId!, session = viewSessionId;
     return renderRepositoryChanges({
-      key: `${projectId}:${path}`, label: path === "." ? project?.path.split("/").at(-1) ?? "Repository" : path,
+      key, label: path === "." ? project?.path.split("/").at(-1) ?? "Repository" : path,
+      isolated: viewSessionId !== undefined,
+      act: (request, label) => track(key, label, async () => (await controller.sourceControl(owner, path, session, request))),
+      checkout: (ref, head, label) => track(key, label, async () => {
+        const branches = await controller.checkoutProjectBranch(owner, ref, head, path);
+        return { summary: `Switched to ${branches.current ?? "the selected commit"}.` };
+      }),
+      loadBranches: () => controller.projectBranches(owner, path, session),
       ...(result?.snapshot === undefined ? {} : { snapshot: result.snapshot }), ...(result?.error === undefined ? {} : { error: result.error }),
       memory: changesMemory, redraw: render, openFile: (filePath) => {
         // Resolve the session directory through the host even when workspace
@@ -468,8 +529,7 @@ export function mountWorkbench(root: HTMLElement, store: Store, isVisible: () =>
       generation++;
       snapshots.clear();
       error = undefined;
-      changesMemory.collapsedGroups.clear();
-      changesMemory.selectedFiles.clear();
+      clearChangesMemory(changesMemory);
       render();
     }
     void refresh();
