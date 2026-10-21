@@ -27,6 +27,7 @@ import {
   type RuntimeEvent,
   type UserQuestionResponse,
   type WorkspaceMode,
+  type CommandParams,
 } from "../../contracts/desktop/index.js";
 import type { HostClient } from "./host-client.js";
 import { loadEnabledPlugins, saveEnabledPlugins } from "./surfaces.js";
@@ -138,9 +139,19 @@ export class Controller {
     return this.host.call("timeline.checkpoints", { sessionId });
   }
 
-  projectBranches(projectId: string) { return this.host.call("projects.branches", { projectId }); }
-  checkoutProjectBranch(projectId: string, ref: string, expectedHead: string) {
-    return this.host.call("projects.checkoutBranch", { projectId, ref, expectedHead });
+  /** `repositoryPath`/`sessionId` select the same folder the Changes panel shows. */
+  projectBranches(projectId: string, repositoryPath?: string, sessionId?: string) {
+    return this.host.call("projects.branches", { projectId,
+      ...(repositoryPath === undefined ? {} : { repositoryPath }), ...(sessionId === undefined ? {} : { sessionId }) });
+  }
+  checkoutProjectBranch(projectId: string, ref: string, expectedHead: string, repositoryPath?: string) {
+    return this.host.call("projects.checkoutBranch", { projectId, ref, expectedHead, ...(repositoryPath === undefined ? {} : { repositoryPath }) });
+  }
+
+  /** One explicit Git operation from the Changes panel; see `projects.sourceControl`. */
+  sourceControl(projectId: string, repositoryPath: string | undefined, sessionId: string | undefined, action: CommandParams<"projects.sourceControl">["action"]) {
+    return this.host.call("projects.sourceControl", { projectId, action,
+      ...(repositoryPath === undefined ? {} : { repositoryPath }), ...(sessionId === undefined ? {} : { sessionId }) });
   }
 
   timelineProjectHistory(projectId: string, mode: "current" | "all" = "current") {
@@ -1096,6 +1107,8 @@ export function describeError(error: unknown, state: AppState): Notice {
     case "feature_unavailable":
       return { ...base, message: "This feature is not available in this version of the app." };
     case "branch_operation_failed":
+    // Git's own explanation (credentials redacted by the adapter) is the useful message.
+    case "git_operation_failed":
       return { ...base, message: error.message };
     case "timeline_busy":
       return { ...base, message: "Stop the current run before changing timeline settings." };

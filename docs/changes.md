@@ -1,3 +1,30 @@
+# Git source control in Changes; single Timeline view (2026-10-21)
+
+- **Timeline:** removed the **This session** tab. The panel now has **Current branch** (renamed from Project history) and **All branches**. Previously recorded session checkpoints still appear in project history. The host's session-recording commands are unchanged, but the panel no longer offers a way to enable or disable session recording.
+- **Changes is now a VS Code-style Git source-control view:**
+  - A commit box with Commit, Commit all, Commit merge, Commit & Push/Publish, Commit & Sync, and Amend.
+  - An ahead/behind sync button, or Publish for unpublished branches.
+  - A branch menu with switch, create, merge and abort merge.
+  - Pull, Push, Fetch, Sync, Stage all, Unstage all and Discard all in a repository menu.
+  - Per-file and per-group stage, unstage and discard actions, also in a row context menu.
+  - A merge-in-progress banner.
+  - Discard and amending a pushed commit confirm first.
+- **New contract:** `projects.sourceControl` (Projects `ProjectSourceControl` port, `GitSourceControl` adapter) and the `git_operation_failed` error code. `projects.branches` and `projects.checkoutBranch` accept an optional `repositoryPath` (and `sessionId` for listing). `ProjectChanges` gains `upstream`, `ahead`, `behind`, `merging` and `hasCommits`, read from the existing status and rev-parse processes with no extra Git processes per poll.
+- **Safety:**
+  - Literal pathspecs and path validation.
+  - No shell, prompts or controlling terminal for Git.
+  - Inherited `GIT_DIR`-style variables are removed.
+  - Timeouts kill the process group.
+  - Remote URL credentials are redacted in errors.
+  - Pull, sync, merge and abort merge are refused while a run writes in the same canonical working tree.
+  - Isolated session worktrees cannot create or switch branches.
+  - User hooks run, as in the Git CLI.
+- **Validation:**
+  - Six new adapter and service tests against real temporary repositories and a local bare remote: literal and option-like file names, path traversal, ignored files surviving discard, commit rules including the hidden-staged-file refusal, publish/push/fetch/pull/sync with divergent histories, merge conflicts with abort and conclude, branch name validation, the active-run guard and credential redaction.
+  - Full `npm run check` passed: both type checks, the build, 316 unit tests and the desktop build. A later renderer-only fix (capturing the project identity for row actions) was re-checked with the renderer type check, the desktop build and the fixture commit flow.
+  - A Chromium renderer fixture with a stateful mocked host checked the commit draft surviving polling, ⌘Enter commit, row stage, context menu and delete confirmation (Cancel focused), a rejected push error with redaction, merge with conflicts, then resolve and commit merge, create branch then publish then sync, isolated-session branch restrictions, Timeline's two tabs, and layout at 980 × 600. No browser errors.
+  - Not performed: live push/pull against GitHub or other hosted remotes, SSH remotes, signed commits, hooks that prompt, and the packaged Electron app.
+
 # Remove gaps between sidebar project folders (2026-10-21)
 
 - Remove vertical margins between project groups and around their expanded session lists. Keep folder row sizes, controls and indentation unchanged.

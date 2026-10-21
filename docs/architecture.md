@@ -294,6 +294,19 @@ numbered diff; workbench polling, repository discovery, and writer ownership
 keep their existing boundaries. The combined patch stays available for older
 clients. Reads do not mutate the index. See [Changes panel](changes-view.md).
 
+Explicit Git operations (2026-10-21) are a separate Projects port,
+`ProjectSourceControl`, implemented by `adapters/projects/git-source-control.ts`
+and exposed as `projects.sourceControl`. Keeping them apart from the
+read-only `ProjectChangesReader` guarantees that background polling can never
+mutate a checkout. `ProjectsService.sourceControl` resolves the folder (project,
+discovered repository or isolated worktree) from saved records, refuses
+branch creation in isolated worktrees, and refuses tree-rewriting operations
+(pull, sync, merge, abort merge) while a registered writer edits the same
+canonical working tree. During that check it holds the same barrier that branch
+checkout uses, so a run cannot start in between. The host emits
+`projects.changed` and `timeline.changed` after each operation; Timeline
+depends only on those events, not on the Changes implementation.
+
 The implemented desktop process layout, contracts, and renderer structure are described in [desktop application](desktop.md). The execution host runs in an Electron utility process and owns the composed application and all in-flight runs; Electron main validates renderer requests and relays them; the renderer receives serializable views and events through a two-function preload bridge.
 
 The graphical conversation view and terminal presentation must invoke the same application operations. Account switching, session persistence, and recovery are not UI responsibilities. The user's current direction is a terminal presentation of this harness inside the desktop window, not embedding an independent provider CLI. Rendering and terminal libraries remain undecided.

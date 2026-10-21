@@ -3,12 +3,13 @@ import { resolve } from "node:path";
 
 import {
   BranchOperationError,
+  GitOperationError,
   InvalidProjectError,
   IsolationUnavailableError,
   ProjectNotFoundError,
   SessionBusyError,
 } from "./errors.js";
-import type { IsolatedWorkspaceProvider, ProjectChangesReader, ProjectStore } from "./ports.js";
+import type { IsolatedWorkspaceProvider, ProjectChangesReader, ProjectSourceControl, ProjectStore } from "./ports.js";
 import type {
   CreateProjectInput,
   IsolatedWorkspace,
@@ -16,14 +17,27 @@ import type {
   ProjectRecord,
   ProjectWriter,
   SessionWorkspaceState,
+  SourceControlAction,
+  SourceControlActionKind,
+  SourceControlResult,
   WorkspaceMode,
 } from "./types.js";
+
+/**
+ * Operations that rewrite tracked working files wholesale. They are refused
+ * while a run writes in the same working tree, so an agent never has its
+ * files replaced mid-edit. Stage/commit/push only touch the index and refs,
+ * and discard is a targeted, confirmed user choice (as in VS Code).
+ */
+const TREE_REWRITING: ReadonlySet<SourceControlActionKind> = new Set(["pull", "sync", "merge", "abortMerge"]);
 
 export interface ProjectsServiceOptions {
   readonly now?: () => Date;
   readonly createId?: () => string;
   readonly changes?: ProjectChangesReader;
   readonly branches?: import("./ports.js").ProjectBranchRepository;
+  /** Explicit Changes-panel Git operations; without it they are unavailable. */
+  readonly sourceControl?: ProjectSourceControl;
   /** Session worktree support; without it, isolated sessions are unavailable. */
   readonly isolation?: { readonly provider: IsolatedWorkspaceProvider; readonly worktreesRoot: string };
 }
@@ -53,11 +67,16 @@ export class ProjectsService {
   private readonly createId: () => string;
   private readonly changes: ProjectChangesReader | undefined;
   private readonly branches: ProjectsServiceOptions["branches"];
+  private readonly sourceControlPort: ProjectSourceControl | undefined;
   private readonly isolation: ProjectsServiceOptions["isolation"];
   /** Serializes project record updates within this execution host. */
   private mutation: Promise<void> = Promise.resolve();
-  /** A brief checkout barrier closes the race between the busy check and a new run. */
-  private checkingOut = false;
+  /**
+   * While set, a checkout or tree-rewriting Git operation is between its
+   * active-run check and its completion; new runs are refused with this
+   * message. It closes the race between the busy check and a run starting.
+   */
+  private treeBarrier: string | undefined;
   /** Active writers per project ID. */
   private readonly writers = new Map<ProjectId, ProjectWriter[]>();
   /** Serializes worktree preparation per session so two calls cannot both create one. */
@@ -72,6 +91,7 @@ export class ProjectsService {
     this.changes = options.changes;
     this.isolation = options.isolation;
     this.branches = options.branches;
+    this.sourceControlPort = options.sourceControl;
   }
 
   async createProject(input: CreateProjectInput): Promise<ProjectRecord> {
@@ -148,7 +168,7 @@ export class ProjectsService {
     await this.getProject(projectId);
     const writers = this.writers.get(projectId) ?? [];
     if (writers.some((writer) => writer.attemptId === attemptId)) return;
-    if (this.checkingOut) throw new BranchOperationError("A branch checkout is in progress. Try starting the run again after it finishes.");
+    if (this.treeBarrier !== undefined) throw new BranchOperationError(this.treeBarrier);
     const busy = writers.find((writer) => writer.sessionId === owner.sessionId);
     if (busy !== undefined) throw new SessionBusyError(owner.sessionId, busy.attemptId);
     this.writers.set(projectId, [...writers, { attemptId, sessionId: owner.sessionId, mode: owner.mode }]);
@@ -161,10 +181,15 @@ export class ProjectsService {
     else this.writers.set(projectId, remaining);
   }
 
-  /** Reads candidates for the project's own checkout, including remote-tracking refs. */
-  async listBranches(projectId: ProjectId): Promise<import("./types.js").ProjectBranches> {
+  /**
+   * Reads checkout candidates, including remote-tracking refs, for the
+   * project's own checkout or a discovered repository inside it
+   * (`repositoryPath`), or for an isolated session's worktree (`sessionId`,
+   * listing only: session worktrees keep their recorded branch).
+   */
+  async listBranches(projectId: ProjectId, repositoryPath?: string, sessionId?: string): Promise<import("./types.js").ProjectBranches> {
     if (!this.branches) throw new BranchOperationError("Branch checkout is unavailable in this host.");
-    return this.branches.list((await this.getProject(projectId)).path);
+    return this.branches.list(await this.viewRoot(projectId, sessionId), repositoryPath);
   }
 
   /**
@@ -173,21 +198,56 @@ export class ProjectsService {
    * project folder and its subfolder may be saved as different project IDs.
    * The barrier is set before any await; acquireWriter rechecks after its await.
    */
-  async checkoutBranch(projectId: ProjectId, ref: string, expectedHead: string): Promise<import("./types.js").ProjectBranches> {
+  async checkoutBranch(projectId: ProjectId, ref: string, expectedHead: string, repositoryPath?: string): Promise<import("./types.js").ProjectBranches> {
     if (!this.branches) throw new BranchOperationError("Branch checkout is unavailable in this host.");
-    if (this.checkingOut) throw new BranchOperationError("Another branch checkout is in progress.");
-    this.checkingOut = true;
+    if (this.treeBarrier !== undefined) throw new BranchOperationError("Another branch checkout or Git update is in progress.");
+    this.treeBarrier = "A branch checkout is in progress. Try starting the run again after it finishes.";
     try {
       const project = await this.getProject(projectId);
-      const repositoryId = await this.branches.repositoryId(project.path);
+      // A discovered repository inside a container folder has its own identity.
+      const repositoryId = repositoryPath === undefined ? await this.branches.repositoryId(project.path)
+        : (await this.branches.list(project.path, repositoryPath)).repositoryId;
       for (const [id, writers] of this.writers) {
         if (!writers.length) continue;
         const other = await this.getProject(id);
         if (id === projectId || await this.branches.repositoryId(other.path).catch(() => undefined) === repositoryId)
           throw new BranchOperationError("Stop active runs in this repository before checking out a branch.");
       }
-      return await this.branches.checkout(project.path, ref, expectedHead);
-    } finally { this.checkingOut = false; }
+      return await this.branches.checkout(project.path, ref, expectedHead, repositoryPath);
+    } finally { this.treeBarrier = undefined; }
+  }
+
+  /**
+   * Performs a Changes-panel Git operation in the project folder, a
+   * discovered repository inside it, or an isolated session's worktree.
+   *
+   * Isolated worktrees cannot create or switch branches here: their record
+   * names the branch the worktree is restored from, and switching would make
+   * the next restore check out different work. Pull, sync, merge and abort
+   * merge are refused while any run writes in the same working tree
+   * (compared by canonical root, so aliases of one checkout match and
+   * separate worktrees of one repository do not).
+   */
+  async sourceControl(projectId: ProjectId, repositoryPath: string | undefined, sessionId: string | undefined, action: SourceControlAction): Promise<SourceControlResult> {
+    const port = this.sourceControlPort;
+    if (port === undefined) throw new GitOperationError("Git operations are unavailable in this host.");
+    const root = await this.viewRoot(projectId, sessionId);
+    if (sessionId !== undefined && action.kind === "createBranch")
+      throw new GitOperationError("An isolated session keeps its own branch. Create branches from the project checkout.");
+    if (!TREE_REWRITING.has(action.kind)) return port.run(root, repositoryPath, action);
+    if (this.treeBarrier !== undefined) throw new GitOperationError("Another branch checkout or Git update is in progress.");
+    this.treeBarrier = "Git is updating files in a checkout. Try starting the run again after it finishes.";
+    try {
+      const target = await port.workTreeRoot(root, repositoryPath);
+      for (const [id, writers] of this.writers) {
+        for (const writer of writers) {
+          const directory = await this.writerDirectory(id, writer).catch(() => undefined);
+          const other = directory === undefined ? undefined : await port.workTreeRoot(directory).catch(() => undefined);
+          if (other === target) throw new GitOperationError("Stop active runs in this checkout before pulling or merging. Their files would change underneath them.");
+        }
+      }
+      return await port.run(root, repositoryPath, action);
+    } finally { this.treeBarrier = undefined; }
   }
 
   /** Runs currently writing in the project, in start order. */
@@ -284,6 +344,15 @@ export class ProjectsService {
    * worktrees must never redirect tools into the shared checkout. */
   async executionPath(projectId: ProjectId, sessionId: string, mode: WorkspaceMode): Promise<string> {
     return this.viewRoot(projectId, mode === "isolated" ? sessionId : undefined);
+  }
+
+  /** Where a registered writer's run edits files: the project folder or its session worktree. */
+  private async writerDirectory(projectId: ProjectId, writer: ProjectWriter): Promise<string> {
+    const project = await this.getProject(projectId);
+    if (writer.mode === "shared") return project.path;
+    const workspace = project.isolatedWorkspaces?.find((candidate) => candidate.sessionId === writer.sessionId);
+    if (workspace === undefined) throw new IsolationUnavailableError("The session's worktree is not created yet.");
+    return workspace.path;
   }
 
   /** Project folder, or an existing isolated worktree of the named session. */

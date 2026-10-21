@@ -3096,7 +3096,7 @@ details.data summary {
 .git-change-group > summary { display: flex; align-items: center; gap: 5px; min-height: 31px; padding: 3px 10px; list-style: none; cursor: pointer; font-size: var(--font-md); font-weight: 600; }
 .git-change-group > summary::-webkit-details-marker { display: none; }
 .git-change-group > summary:hover { background: var(--overlay); }
-.git-change-group > summary > span:not(.icon):not(.git-group-count) { flex: 1; }
+.git-change-group > summary > span:not(.icon):not(.git-group-count):not(.git-row-actions) { flex: 1; }
 .git-change-group > summary .activity-caret { margin: 0; width: 13px; height: 13px; }
 .git-change-group[open] > summary .activity-caret { transform: rotate(90deg); }
 .git-group-count { min-width: 18px; padding: 1px 5px; border-radius: 10px; background: var(--inset); color: var(--text-2); font: var(--font-sm) var(--font-mono); text-align: center; }
@@ -3113,6 +3113,66 @@ details.data summary {
 .status-added .git-file-status, .status-untracked .git-file-status, .status-copied .git-file-status { color: var(--git-add); }
 .status-deleted .git-file-status, .status-conflicted .git-file-status { color: var(--git-remove); }
 .status-deleted .git-file-name { text-decoration: line-through; color: var(--text-2); }
+
+/* Source control (Changes): VS Code-style commit box, sync, row actions. */
+.git-changes-content, .modal, .popover { --git-danger: light-dark(#bd2638, #ff8a8a); }
+.git-repository-heading { gap: 4px; padding: 5px 6px 5px 12px; }
+.git-repository-heading > .icon-button { width: 26px; height: 26px; }
+.git-repository-heading .git-repository-name { min-width: 48px; }
+.git-branch-button { display: inline-flex; align-items: center; gap: 3px; max-width: 42%; min-width: 0; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; }
+.git-branch-button:hover:not(:disabled), .git-branch-button:focus-visible { border-color: var(--border); background: var(--overlay); }
+.git-branch-button .git-branch-name { max-width: none; }
+.git-branch-button > .icon { flex: none; width: 11px; height: 11px; }
+.git-sync-button { display: inline-flex; flex: none; align-items: center; gap: 4px; height: 24px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-2); font: var(--font-xs) var(--font-mono); cursor: pointer; }
+.git-sync-button:hover:not(:disabled), .git-sync-button:focus-visible { background: var(--overlay); color: var(--text); }
+.git-sync-button.pending { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); color: var(--text); }
+.git-sync-button .icon { width: 12px; height: 12px; }
+.git-sync-button > span:not(.icon) { display: inline-flex; align-items: center; gap: 1px; }
+.git-sync-button > span .icon { width: 10px; height: 10px; }
+.git-sync-button:disabled, .git-branch-button:disabled { opacity: .5; cursor: default; }
+.git-commit { display: grid; gap: 6px; padding: 2px 12px 8px; }
+.git-commit-message { width: 100%; min-height: 32px; max-height: 160px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--inset); color: var(--text); font: var(--font-md)/1.4 var(--font-sans); resize: none; field-sizing: content; overflow-y: auto; }
+.git-commit-message:focus { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); outline: none; }
+.git-commit-actions { display: flex; min-width: 0; }
+.git-commit-actions .git-commit-button { flex: 1; min-width: 0; height: 28px; border-radius: 7px 0 0 7px; }
+.git-commit-actions .git-commit-more { flex: none; width: 28px; height: 28px; padding: 0; border-left-color: color-mix(in srgb, var(--on-primary) 25%, var(--primary)); border-radius: 0 7px 7px 0; }
+.git-commit-actions .icon { width: 14px; height: 14px; }
+.git-commit-actions .button:disabled { opacity: .45; cursor: default; }
+.git-status-line { display: flex; align-items: flex-start; gap: 6px; margin: 0 12px 6px; color: var(--text-2); font-size: var(--font-sm); line-height: 1.4; overflow-wrap: anywhere; }
+.git-status-line > .icon { flex: none; width: 14px; height: 14px; margin-top: 1px; }
+.git-status-line > span:not(.icon) { flex: 1; min-width: 0; }
+.git-status-line > .icon-button { flex: none; width: 20px; height: 20px; margin-top: -2px; }
+.git-status-line.success > .icon { color: var(--git-add); }
+.git-status-line.warning > .icon { color: var(--git-modified); }
+.git-status-line.error { color: var(--git-danger); }
+.git-merge-banner { display: flex; align-items: center; gap: 8px; margin: 0 12px 8px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--git-modified) 40%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--git-modified) 9%, transparent); font-size: var(--font-sm); line-height: 1.4; }
+.git-merge-banner > .icon { flex: none; width: 15px; height: 15px; color: var(--git-modified); }
+.git-merge-banner > span:not(.icon) { flex: 1; min-width: 0; }
+.git-merge-banner .button { flex: none; height: 26px; }
+/* Row and group actions appear on hover, keyboard focus or selection, before the status letter. */
+.git-file-item { position: relative; display: flex; align-items: center; min-width: 0; padding-right: 12px; }
+.git-file-item:hover, .git-file-item:focus-within { background: var(--overlay); }
+.git-file-item.selected { background: var(--inset); }
+.git-file-item > .git-file-row { flex: 1; min-width: 0; padding-right: 4px; background: transparent; }
+.git-file-item > .git-file-row:hover, .git-file-item > .git-file-row.selected { background: transparent; }
+.git-row-actions { display: none; flex: none; align-items: center; gap: 1px; }
+.git-file-item:hover .git-row-actions, .git-file-item:focus-within .git-row-actions, .git-file-item.selected .git-row-actions,
+.git-change-group > summary:hover .git-row-actions, .git-change-group > summary:focus-within .git-row-actions { display: inline-flex; }
+.git-row-actions .git-row-action { width: 22px; height: 22px; border-radius: 5px; }
+.git-row-actions .git-row-action .icon { width: 14px; height: 14px; }
+.git-row-action.danger:hover:not(:disabled) { color: var(--git-danger); }
+.git-change-group > summary > .git-row-actions { flex: none; }
+.git-file-status.status-modified, .git-file-status.status-type_changed, .git-file-status.status-renamed { color: var(--git-modified); }
+.git-file-status.status-added, .git-file-status.status-untracked, .git-file-status.status-copied { color: var(--git-add); }
+.git-file-status.status-deleted, .git-file-status.status-conflicted { color: var(--git-remove); }
+.git-file-item > .git-file-status { margin-left: 4px; }
+.menu-item.danger:not(:disabled) { color: var(--git-danger); }
+.menu-item.danger:not(:disabled) > .icon { color: currentColor; }
+.action-menu .menu-item { align-items: center; min-height: 32px; padding: 6px 10px; font-size: var(--font-sm); }
+.action-menu .menu-item > .icon { flex-shrink: 0; width: 15px; height: 15px; color: var(--text-2); }
+.button-danger { border-color: var(--git-danger); background: var(--git-danger); color: light-dark(#fff, #1b0d0f); }
+.button-danger:hover:not(:disabled) { opacity: .88; }
+.git-branch-dialog .dropdown { width: 100%; }
 .git-empty, .git-preview-note { padding: 6px 12px; margin: 0; color: var(--text-2); font-size: var(--font-md); line-height: 1.6; }
 .git-file-diff { min-width: 0; margin-top: 10px; border-top: 1px solid var(--border-strong); background: var(--canvas); }
 .git-diff-heading { display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; border-bottom: 1px solid var(--border); }

@@ -39,6 +39,26 @@ export function statusFiles(output: string, prefix: string): ProjectChangeFile[]
   return files;
 }
 
+/**
+ * Tracking details from the `## ` header that `status --branch` prints as its
+ * first record. Formats: `main`, `main...origin/main [ahead 1, behind 2]`,
+ * `main...origin/main [gone]`, `No commits yet on main`, `HEAD (no branch)`.
+ * A gone upstream is reported as no upstream, so the branch can be published
+ * again. `statusFiles` ignores this record because `##` is not a status code.
+ */
+export function branchHeader(output: string): { readonly upstream?: string; readonly ahead?: number; readonly behind?: number } {
+  const first = output.slice(0, output.indexOf("\0") === -1 ? output.length : output.indexOf("\0"));
+  if (!first.startsWith("## ")) return {};
+  const match = /^(.+?)\.\.\.(\S+)(?: \[(.+)\])?$/.exec(first.slice(3));
+  if (match === null || match[3] === "gone") return {};
+  const info = match[3] ?? "";
+  return {
+    upstream: match[2]!,
+    ahead: Number(/ahead (\d+)/.exec(info)?.[1] ?? 0),
+    behind: Number(/behind (\d+)/.exec(info)?.[1] ?? 0),
+  };
+}
+
 /** Git uses C escapes for control characters even with core.quotePath=false. */
 function decodePath(value: string): string {
   if (!value.startsWith('"')) return value.replace(/\t$/, "");
