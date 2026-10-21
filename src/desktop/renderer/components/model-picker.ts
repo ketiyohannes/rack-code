@@ -4,6 +4,12 @@
  * model's reasoning slider and Fast tag. An empty list links to Settings.
  * Choices apply immediately to the next turn. The shared popover handles
  * outside clicks/Escape; content changes re-anchor it against the pill.
+ *
+ * Scope: the composer calls `setScope(sessionId, fallback)` so each session
+ * keeps its own model, reasoning and Fast setting (see
+ * `session-model-choice.ts`). An explicit choice in a scope is saved for that
+ * session and also becomes the starting choice for new sessions. Without a
+ * scope (the side chat) only the most recent choice is used and updated.
  */
 import type { ModelView } from "../../../contracts/desktop/index.js";
 import { h, replace } from "../dom.js";
@@ -11,6 +17,7 @@ import { icon } from "../icons.js";
 import { openPopover, type PopoverHandle } from "./popover.js";
 import { effortStops, fastOptions, modelKey, PROVIDER_DEFAULT, selectedEffort, selectedSpeed } from "./model-settings.js";
 import { favoriteModels } from "../model-favorites.js";
+import { choiceIdentity, loadSessionChoice, resolveChoice, saveSessionChoice, type ModelChoice } from "../session-model-choice.js";
 
 export interface ModelPicker {
   readonly element: HTMLButtonElement;
@@ -18,6 +25,12 @@ export interface ModelPicker {
   readonly reasoningEffort: string | undefined;
   readonly speed: string | undefined;
   update(models: readonly ModelView[], favoriteKeys: readonly string[]): void;
+  /**
+   * Switches to a session's settings. `fallback` (usually its latest run)
+   * applies while the session has no explicit choice, and is re-applied when
+   * it changes, for example once the session's runs finish loading.
+   */
+  setScope(scope: string | undefined, fallback?: ModelChoice): void;
   setDisabled(disabled: boolean): void;
 }
 
@@ -25,14 +38,24 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
   let models: readonly ModelView[] = [];
   let catalog: readonly ModelView[] | undefined;
   let favorites: readonly string[] | undefined;
-  let selectedKey: string | undefined;
+  // The wanted model; `selected()` resolves it against the offered favorites
+  // and falls back to the default without overwriting it, so a remembered
+  // model that is still loading or briefly unavailable is not forgotten.
+  let wanted: ModelChoice | undefined = globalModel();
+  /** Speed option ID from a run-derived choice; used while `preferredFast` is unset. */
+  let wantedSpeed: string | undefined;
+  let scope: string | undefined;
+  /** True when the current scope has an explicit, saved choice. */
+  let explicit = false;
+  let appliedFallback = "";
   let popover: PopoverHandle | undefined;
   let body: HTMLElement | undefined;
   let stage: "models" | "settings" = "models";
   let preferredEffort = load("composer.reasoningEffort");
-  let preferredFast = load("composer.fast") === "true" ? true : load("composer.fast") === "false" ? false : undefined;
+  let preferredFast = globalFast();
   const legacySpeed = load("composer.speed");
-  const selected = () => models.find((entry) => modelKey(entry) === selectedKey);
+  const selected = () => resolveChoice(models, wanted) ?? models.find((entry) => entry.isDefault) ?? models[0];
+  const selectedKey = () => { const entry = selected(); return entry === undefined ? undefined : modelKey(entry); };
   const reasoning = () => {
     const entry = selected();
     const value = entry === undefined ? undefined : selectedEffort(entry, preferredEffort);
@@ -40,8 +63,40 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
   };
   const speed = () => {
     const entry = selected();
-    return entry === undefined ? undefined : selectedSpeed(entry, preferredFast, legacySpeed);
+    return entry === undefined ? undefined : selectedSpeed(entry, preferredFast, wantedSpeed ?? legacySpeed);
   };
+
+  /** Loads a scope's choice, or the most recent global choice when `choice` is undefined. */
+  function apply(choice: ModelChoice | undefined): void {
+    wanted = choice ?? globalModel();
+    preferredEffort = choice?.reasoningEffort ?? load("composer.reasoningEffort");
+    // A run-derived choice names its speed by ID; explicit choices store Fast.
+    preferredFast = choice === undefined ? globalFast() : choice.fast;
+    wantedSpeed = choice?.speed;
+  }
+
+  /**
+   * Records an explicit change: the resolved model, reasoning and Fast become
+   * this session's settings. Only the setting that changed updates the global
+   * starting choice, as before.
+   */
+  function remember(changed: "model" | "effort" | "fast"): void {
+    const entry = selected();
+    if (entry === undefined) return;
+    const options = fastOptions(entry);
+    const fast = options === undefined ? undefined : speed() === options.fast.id;
+    const effort = selectedEffort(entry, preferredEffort);
+    if (changed === "model") save("composer.model", modelKey(entry));
+    if (changed === "effort" && effort !== undefined) save("composer.reasoningEffort", effort);
+    if (changed === "fast" && fast !== undefined) save("composer.fast", String(fast));
+    wanted = { modelKey: modelKey(entry) };
+    if (fast !== undefined) preferredFast = fast;
+    wantedSpeed = undefined;
+    if (scope !== undefined) {
+      saveSessionChoice(scope, { modelKey: modelKey(entry), ...(effort === undefined ? {} : { reasoningEffort: effort }), ...(fast === undefined ? {} : { fast }) });
+      explicit = true;
+    }
+  }
   const trigger = h("button", {
     class: "dropdown dropdown-pill model-picker-trigger", type: "button",
     aria: { label: "Model settings", haspopup: "dialog", expanded: "false" },
@@ -89,7 +144,7 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
 
   function focusModel(last = false): void {
     const items = [...(body?.querySelectorAll<HTMLButtonElement>(".model-choice") ?? [])];
-    const target = last ? items.at(-1) : items.find((item) => item.dataset["modelKey"] === selectedKey) ?? items[0];
+    const target = last ? items.at(-1) : items.find((item) => item.dataset["modelKey"] === selectedKey()) ?? items[0];
     const focus = target ?? body?.querySelector<HTMLButtonElement>(".model-manage-favorites");
     focus?.focus(); focus?.scrollIntoView({ block: "nearest" });
   }
@@ -107,16 +162,19 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
     replace(list, ...providers.flatMap((provider) => [
         h("div", { class: "menu-group" }, provider),
         ...models.filter((entry) => entry.providerName === provider).map((entry) => h("button", {
-          class: `menu-item model-choice${modelKey(entry) === selectedKey ? " selected" : ""}`, type: "button",
+          class: `menu-item model-choice${modelKey(entry) === selectedKey() ? " selected" : ""}`, type: "button",
           title: entry.description ?? entry.label,
-          aria: { pressed: String(modelKey(entry) === selectedKey) }, data: { modelKey: modelKey(entry) },
+          aria: { pressed: String(modelKey(entry) === selectedKey()) }, data: { modelKey: modelKey(entry) },
           onClick: () => {
-            selectedKey = modelKey(entry); stage = "settings";
+            // Keep the reasoning/Fast preference when switching models; the
+            // new model resolves it against its own options.
+            wanted = { modelKey: modelKey(entry) }; stage = "settings";
+            remember("model");
             renderTrigger(); renderBody(); onChange();
             container.querySelector<HTMLElement>(".reasoning-slider:not(:disabled), .fast-toggle:not(:disabled), .model-done")?.focus();
           },
         }, h("span", { class: "menu-text" }, h("span", { class: "menu-label" }, entry.label)),
-          modelKey(entry) === selectedKey ? icon("check", { className: "menu-check" }) : null)),
+          modelKey(entry) === selectedKey() ? icon("check", { className: "menu-check" }) : null)),
       ]), models.length === 0 ? h("div", { class: "model-empty" },
         h("p", {}, "No favorite models available."),
         h("button", { class: "button button-small model-manage-favorites", type: "button", onClick: () => {
@@ -167,7 +225,7 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
     function chooseEffort(): void {
       const stop = stops[Number(slider.value)];
       if (stop === undefined) return;
-      preferredEffort = stop.id; save("composer.reasoningEffort", stop.id);
+      preferredEffort = stop.id; remember("effort");
       syncEffort(); renderTrigger(); onChange();
     }
     slider.addEventListener("input", chooseEffort);
@@ -183,7 +241,7 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
     }
     fast.addEventListener("click", () => {
       if (options === undefined) return;
-      preferredFast = speed() !== options.fast.id; save("composer.fast", String(preferredFast));
+      preferredFast = speed() !== options.fast.id; remember("fast");
       syncFast(); renderTrigger(); onChange();
     });
     syncFast();
@@ -205,17 +263,38 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
       const focused = body?.contains(document.activeElement) ? document.activeElement?.getAttribute("aria-label") : undefined;
       catalog = next; favorites = favoriteKeys;
       models = favoriteModels(next, favoriteKeys);
-      if (selected() === undefined) {
-        const first = models.find((entry) => entry.isDefault) ?? models[0];
-        selectedKey = first === undefined ? undefined : modelKey(first);
-      }
       renderTrigger(); renderBody();
       // Catalog refreshes may rebuild an open dropdown; restore the same control
       // by its accessible name without interpolating provider data into CSS.
       if (focused) [...(body?.querySelectorAll<HTMLElement>("[aria-label]") ?? [])].find((node) => node.getAttribute("aria-label") === focused)?.focus();
     },
+    setScope(next, fallback) {
+      const identity = choiceIdentity(fallback);
+      if (next === scope && (explicit || identity === appliedFallback)) return;
+      if (next !== scope) {
+        scope = next;
+        const stored = next === undefined ? undefined : loadSessionChoice(next);
+        explicit = stored !== undefined;
+        apply(stored ?? fallback);
+      } else apply(fallback);
+      appliedFallback = identity;
+      // Switching sessions returns an open dropdown to the model list.
+      stage = "models";
+      renderTrigger(); renderBody();
+    },
     setDisabled(disabled) { trigger.disabled = disabled; if (disabled) popover?.close(); },
   };
+}
+
+/** The most recent explicit model choice, used for new sessions and the side chat. */
+function globalModel(): ModelChoice | undefined {
+  const key = load("composer.model");
+  return key === undefined ? undefined : { modelKey: key };
+}
+
+function globalFast(): boolean | undefined {
+  const value = load("composer.fast");
+  return value === "true" ? true : value === "false" ? false : undefined;
 }
 
 function load(key: string): string | undefined {

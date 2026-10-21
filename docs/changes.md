@@ -1,3 +1,18 @@
+# Per-session model, reasoning and Fast in the composer (2026-10-21)
+
+- **Behavior:** switching sessions now switches the composer's model, reasoning effort and Fast setting to that session's own settings. Before, the model was one in-memory choice for the window, and reasoning and Fast were single app-wide preferences.
+- **Where a session's settings come from, in order:**
+  1. An explicit choice made in that session, saved per device in `localStorage` under `composer.sessionModels`, keeping the 300 most recent sessions.
+  2. The model, effort and speed recorded on the session's latest run, so existing sessions work without migration.
+  3. The most recent explicit choice. `composer.model` is new; the existing `composer.reasoningEffort` and `composer.fast` keys are reused.
+- **Fallback:** remembered models that are not currently offered fall back to the default favorite without being overwritten. The side chat picker keeps a single most-recent choice.
+- **Code:** new `src/desktop/renderer/session-model-choice.ts` (storage, run-derived choice, catalog resolution). `ModelPicker.setScope` resolves the wanted model lazily instead of overwriting it during catalog loads. The composer passes the selected session and its persisted or live runs. No host or contract changes.
+- **Validation:**
+  - Four new unit tests: per-session storage and eviction, corrupt storage, latest-run fallback ignoring another session's runs and provider-default runs, and catalog resolution.
+  - A Chromium renderer fixture with GPT (efforts plus Fast) and Opus checked: a session with a GPT/Low/Fast run shows those settings; a session without runs shows the default; choosing Opus/Medium sticks to that session across switches and a reload; a new session starts with Opus/Medium; a sent run carries `claude`/`opus`/`medium`. No browser errors.
+  - Full `npm run check` passed: both type checks, the build, 320 unit tests and the desktop build.
+  - Not performed: the packaged app with real provider catalogs.
+
 # Git source control in Changes; single Timeline view (2026-10-21)
 
 - **Timeline:** removed the **This session** tab. The panel now has **Current branch** (renamed from Project history) and **All branches**. Previously recorded session checkpoints still appear in project history. The host's session-recording commands are unchanged, but the panel no longer offers a way to enable or disable session recording.
