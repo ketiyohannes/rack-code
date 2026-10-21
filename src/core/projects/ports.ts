@@ -53,7 +53,24 @@ export interface IsolatedWorkspaceProvider {
 /** Explicit branch mutations are separate from read-only Changes and Timeline ports. */
 export interface ProjectBranchRepository {
   repositoryId(path: string): Promise<string>;
-  list(path: string): Promise<import("./types.js").ProjectBranches>;
+  /** `repositoryPath` selects a discovered repository inside `path`, revalidated for containment. */
+  list(path: string, repositoryPath?: string): Promise<import("./types.js").ProjectBranches>;
   /** Refuse dirty trees, stale HEADs, invalid refs and branches used by other worktrees. */
-  checkout(path: string, ref: string, expectedHead: string): Promise<import("./types.js").ProjectBranches>;
+  checkout(path: string, ref: string, expectedHead: string, repositoryPath?: string): Promise<import("./types.js").ProjectBranches>;
+}
+
+/**
+ * Explicit, user-initiated Git mutations for the Changes panel (stage,
+ * commit, push, merge and related operations). Separate from the read-only
+ * `ProjectChangesReader` so background polling can never mutate a checkout.
+ *
+ * `path` is the trusted project folder or isolated worktree resolved by the
+ * service; `repositoryPath` optionally selects a discovered repository inside
+ * it and must be revalidated for containment on every call.
+ */
+export interface ProjectSourceControl {
+  /** Canonical (realpath) working-tree root for `path`/`repositoryPath`; used to detect runs in the same checkout. */
+  workTreeRoot(path: string, repositoryPath?: string): Promise<string>;
+  /** Performs one operation. Rejects with `GitOperationError` carrying Git's explanation on failure. */
+  run(path: string, repositoryPath: string | undefined, action: import("./types.js").SourceControlAction): Promise<import("./types.js").SourceControlResult>;
 }

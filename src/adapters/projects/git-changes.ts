@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ProjectChangesReader } from "../../core/projects/ports.js";
 import type { ProjectChanges } from "../../core/projects/types.js";
 import { GitRepositoryDiscovery, repositoryScope } from "./git-repositories.js";
-import { patchFiles, statusFiles } from "./git-status.js";
+import { branchHeader, patchFiles, statusFiles } from "./git-status.js";
 
 const execute = promisify(execFile);
 const MAX_DIFF = 1_000_000;
@@ -16,7 +16,8 @@ const MAX_NEW_FILE = 128_000;
  * Reads separate index/working-tree changes plus a legacy HEAD comparison,
  * and previews untracked text. Status records preserve partially staged files.
  * Git runs without a shell, external diff drivers or text conversions. Reads
- * are bounded and never stage, reset or modify files. A snapshot can race an
+ * are bounded and never stage, reset or modify files (explicit operations
+ * live in `git-source-control.ts`). A snapshot can race an
  * editor; periodic refresh supplies the next current view.
  */
 export class GitProjectChangesReader implements ProjectChangesReader {
@@ -53,14 +54,20 @@ export class GitProjectChangesReader implements ProjectChangesReader {
     let diff = hasHead
       ? await git(["diff", ...flags, "HEAD", "--", "."])
       : await git(["diff", ...flags, "--cached", "--", "."]) + await git(["diff", ...flags, "--", "."]);
-    const [rawStatus, prefix, staged, working, branch] = await Promise.all([
-      git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]),
-      git(["rev-parse", "--show-prefix"]),
+    // `--branch` adds tracking (upstream, ahead/behind) to the same process,
+    // and one rev-parse returns both the scope prefix and the MERGE_HEAD path,
+    // so the Changes header costs no extra Git processes per poll.
+    const [rawStatus, revParse, staged, working, branch] = await Promise.all([
+      git(["status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all", "--", "."]),
+      git(["rev-parse", "--show-prefix", "--git-path", "MERGE_HEAD"]),
       git(["diff", ...flags, "--cached", "--", "."]),
       git(["diff", ...flags, "--", "."]),
       git(["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => hasHead ? git(["rev-parse", "--short", "HEAD"]) : ""),
     ]);
-    const entries = statusFiles(rawStatus, prefix.replace(/\n$/, ""));
+    const [prefix = "", mergeHead = ""] = revParse.split("\n");
+    const merging = mergeHead !== "" && await stat(resolve(path, mergeHead)).then(() => true, () => false);
+    const tracking = branchHeader(rawStatus);
+    const entries = statusFiles(rawStatus, prefix);
     const stagedPatches = patchFiles(staged.slice(0, MAX_DIFF));
     const workingPatches = patchFiles(working.slice(0, MAX_DIFF));
     // Combined merge patches have multiple old line-number columns. Compare
@@ -118,6 +125,9 @@ export class GitProjectChangesReader implements ProjectChangesReader {
       if (patch.length > preview.length) truncated = true;
       return { ...entry, diff: preview, ...(notice === undefined ? {} : { notice }) };
     });
-    return { status: "ready", diff: diff.slice(0, MAX_DIFF), files, ...(branch.trim() === "" ? {} : { branch: branch.trim() }), truncated: truncated || diff.length > MAX_DIFF };
+    return {
+      status: "ready", diff: diff.slice(0, MAX_DIFF), files, ...(branch.trim() === "" ? {} : { branch: branch.trim() }),
+      truncated: truncated || diff.length > MAX_DIFF, ...tracking, hasCommits: hasHead, ...(merging ? { merging } : {}),
+    };
   }
 }

@@ -25,7 +25,7 @@ import type {
 } from "../../core/execution/types.js";
 import type { ProjectRecord, ProjectWriter } from "../../core/projects/types.js";
 export type { IsolatedWorkspace, ProjectWriter, SessionWorkspaceState as SessionWorkspaceView, WorkspaceMode } from "../../core/projects/types.js";
-export type { ProjectBranches, ProjectBranch, ProjectChanges, ProjectChangeFile, ProjectChangeGroup, ProjectChangeStatus, ProjectRepositories, RepositoryDiscoveryOptions } from "../../core/projects/types.js";
+export type { ProjectBranches, ProjectBranch, ProjectChanges, ProjectChangeFile, ProjectChangeGroup, ProjectChangeStatus, ProjectRepositories, RepositoryDiscoveryOptions, SourceControlAction, SourceControlActionKind, SourceControlResult } from "../../core/projects/types.js";
 import type { ConnectView } from "../../core/connections/types.js";
 import type { SessionMessage, SessionRecord } from "../../core/sessions/types.js";
 export type { SessionDiscovery, ExternalSessionSnapshot, ImportSessionResult, DiscoveredSession } from "../../core/session-imports/types.js";

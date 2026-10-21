@@ -96,6 +96,8 @@ import CircleDashed from "@phosphor-icons/core/assets/regular/circle-dashed.svg"
 import ArrowCounterClockwise from "@phosphor-icons/core/assets/regular/arrow-counter-clockwise.svg";
 import PaperPlaneRight from "@phosphor-icons/core/assets/regular/paper-plane-right.svg";
 import GitMerge from "@phosphor-icons/core/assets/regular/git-merge.svg";
+import CloudArrowUp from "@phosphor-icons/core/assets/regular/cloud-arrow-up.svg";
+import ArrowsClockwise from "@phosphor-icons/core/assets/regular/arrows-clockwise.svg";
 import Clipboard from "@phosphor-icons/core/assets/regular/clipboard.svg";
 import Image from "@phosphor-icons/core/assets/regular/image.svg";
 import FileText from "@phosphor-icons/core/assets/regular/file-text.svg";
@@ -201,6 +203,8 @@ const ICONS = {
   "arrow-counter-clockwise": ArrowCounterClockwise,
   "paper-plane-right": PaperPlaneRight,
   "git-merge": GitMerge,
+  "cloud-arrow-up": CloudArrowUp,
+  "arrows-clockwise": ArrowsClockwise,
 } as const;
 
 export type IconName = keyof typeof ICONS;

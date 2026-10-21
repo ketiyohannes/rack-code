@@ -34,8 +34,9 @@ export class GitProjectBranches implements ProjectBranchRepository {
     return realpath((await git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim());
   }
 
-  async list(path: string): Promise<ProjectBranches> {
-    const root = await this.root(path);
+  /** `repositoryPath` picks a discovered repository inside `path`; containment is revalidated. */
+  async list(path: string, repositoryPath?: string): Promise<ProjectBranches> {
+    const root = await this.root(repositoryPath === undefined ? path : await repositoryScope(path, repositoryPath));
     const [id, current, head, dirty, refs] = await Promise.all([
       this.repositoryId(root),
       git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).then(s => s.trim()).catch(() => undefined),
@@ -55,8 +56,8 @@ export class GitProjectBranches implements ProjectBranchRepository {
     };
   }
 
-  async checkout(path: string, ref: string, expectedHead: string): Promise<ProjectBranches> {
-    const before = await this.list(path);
+  async checkout(path: string, ref: string, expectedHead: string, repositoryPath?: string): Promise<ProjectBranches> {
+    const before = await this.list(path, repositoryPath);
     if (!OBJECT_ID.test(expectedHead) || before.head !== expectedHead)
       throw new BranchOperationError("The checkout changed since the branch list loaded. Refresh and try again.");
     const branch = before.branches.find(b => b.ref === ref);

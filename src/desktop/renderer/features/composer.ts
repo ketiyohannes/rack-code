@@ -27,6 +27,7 @@ import { accountLabel, isActiveStatus, PERMISSION_LABELS } from "./run-format.js
 import { presentTool } from "./tool-presentation.js";
 import { createAttachmentPicker } from "./attachments.js";
 import { modelKey } from "../components/model-settings.js";
+import { choiceFromRuns } from "../session-model-choice.js";
 import { createQuestionRequests } from "./user-questions.js";
 
 type AccountChoice = `auto:${string}` | `account:${string}:${string}`;
@@ -218,6 +219,11 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     workspace.refresh(state);
     const activeId = activeRunId(state);
     if (activeId !== undefined) { mode = state.live[activeId]!.run.permissionMode; workflow = state.live[activeId]!.run.interactionMode ?? "normal"; }
+    // Model, reasoning and Fast belong to the session: an explicit choice made
+    // in it, else its latest run (persisted or live), else the last choice.
+    const sessionId = state.selection.sessionId;
+    model.setScope(sessionId, sessionId === undefined ? undefined
+      : choiceFromRuns(sessionId, [...state.runs, ...Object.values(state.live).map((live) => live.run)]));
     model.update(state.models, state.favoriteModelKeys);
     const selected = selectedModel();
     const targetProvider = selected?.providerId;

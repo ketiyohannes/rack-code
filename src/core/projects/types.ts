@@ -24,6 +24,66 @@ export interface ProjectChanges {
   readonly branch?: string;
   /** Separate index/working-tree entries; one path may occur in both groups. */
   readonly files?: readonly ProjectChangeFile[];
+  /** Upstream tracking branch (for example `origin/main`); absent when the branch is unpublished or detached. */
+  readonly upstream?: string;
+  /** Commits on HEAD not on the upstream; present only with `upstream`. */
+  readonly ahead?: number;
+  /** Commits on the upstream not on HEAD; present only with `upstream`. */
+  readonly behind?: number;
+  /** True while a merge is in progress (`MERGE_HEAD` exists): the next commit concludes it. */
+  readonly merging?: boolean;
+  /** False before the repository's first commit; unstaging then empties the index instead of restoring HEAD. */
+  readonly hasCommits?: boolean;
+}
+
+/**
+ * Explicit Git operations from the Changes panel, modelled on VS Code's
+ * Source Control view. Paths are relative to the selected repository folder,
+ * exactly as `ProjectChangeFile.path`/`previousPath` report them; the adapter
+ * rejects absolute paths and parent-directory segments. "All" variants are
+ * separate kinds so that a missing `paths` field can never widen a discard.
+ *
+ * - `stage`/`stageAll`: add working-tree changes (including deletions and
+ *   untracked files) to the index; staging a conflicted file marks it resolved.
+ * - `unstage`/`unstageAll`: restore index entries from HEAD (or remove them
+ *   before the first commit). Working files are untouched.
+ * - `discard`/`discardAll`: restore tracked files from the index and delete
+ *   untracked files. Irreversible; the renderer confirms first.
+ * - `commit`: commit the index. `all` stages every change in the folder first
+ *   (VS Code's "smart commit"); `amend` rewrites the last commit; an empty
+ *   message is allowed only to amend or to conclude a merge with Git's
+ *   prepared message.
+ * - `fetch`/`pull`/`push`/`sync`: network operations. Push publishes an
+ *   unpublished branch to the only/`origin` remote with upstream tracking;
+ *   sync pulls (when an upstream exists) and then pushes.
+ * - `merge`: merge a listed local or remote-tracking ref into HEAD; conflicts
+ *   are a successful result that leaves the merge in progress.
+ * - `abortMerge`: `git merge --abort`.
+ * - `createBranch`: create a branch at HEAD and switch to it, keeping changes.
+ */
+export type SourceControlAction =
+  | { readonly kind: "stage"; readonly paths: readonly string[] }
+  | { readonly kind: "stageAll" }
+  | { readonly kind: "unstage"; readonly paths: readonly string[] }
+  | { readonly kind: "unstageAll" }
+  | { readonly kind: "discard"; readonly paths: readonly string[] }
+  | { readonly kind: "discardAll" }
+  | { readonly kind: "commit"; readonly message: string; readonly amend?: boolean; readonly all?: boolean }
+  | { readonly kind: "fetch" }
+  | { readonly kind: "pull" }
+  | { readonly kind: "push" }
+  | { readonly kind: "sync" }
+  | { readonly kind: "merge"; readonly ref: string }
+  | { readonly kind: "abortMerge" }
+  | { readonly kind: "createBranch"; readonly name: string };
+
+export type SourceControlActionKind = SourceControlAction["kind"];
+
+/** Outcome of a completed operation; `summary` is a short user-facing sentence. */
+export interface SourceControlResult {
+  readonly summary: string;
+  /** True when a merge or pull stopped with conflicts that the user must resolve. */
+  readonly conflicts?: boolean;
 }
 
 export type ProjectChangeStatus = "modified" | "added" | "deleted" | "renamed" | "copied" | "untracked" | "conflicted" | "type_changed";

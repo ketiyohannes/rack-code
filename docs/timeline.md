@@ -6,17 +6,18 @@ Timeline gives a developer a local history of observed repository states during 
 
 ## Using it
 
+**Single Timeline view (2026-10-21).** The panel no longer has a **This session** tab. Its two views are **Current branch** (formerly **Project history**: HEAD's first-parent history) and **All branches**. Session checkpoints that were already recorded still appear in both views, because project history reads every `refs/rack-timeline/` ref. Git operations such as staging, committing, pushing and merging live in the [Changes panel](changes-view.md); Timeline keeps its branch checkout picker. The host still serves the session commands (`timeline.status`, `timeline.setEnabled`, `timeline.checkpoints`, `timeline.fileDiff`) and keeps recording sessions that were enabled earlier, but the panel no longer offers a way to enable or disable session recording. Removing that host capability, or giving it a new home, is a separate decision.
+
 **Interface (2026-10-20).** Sidebar history rows show the title, file count (for example, **2 files**) and relative time on one compact line. Decorative kind icons, the Observed edit/Commit/Agent run labels and the separate branch-label line are removed. Full titles, provenance, branch tips and merge-parent information remain in row tooltips. Disclosure arrows and expanded-snapshot controls stay available. Import timeline and Choose a repository folder are icon-plus-label buttons. The expanded snapshot window has a title with the commit chip and a readable date, and one newer · change · older toolbar with the position under it. **Diff**, **Before / After** and **Full context** form an icon toggle with names in tooltips. File scope tabs show counts as badges. Pull request comparisons open in the same window via **Open in Timeline** on a PR review.
 
 The sidebar surface and expanded snapshot viewer use Inter for headings, file names, filters, and controls. Sidebar lists match Changes: 13 px text and 31 px rows, with single-line checkpoint summaries and truncated long labels available in tooltips. Repository choices and nested file/folder rows use the same compact sizing. The panel heading is 16 px; code uses bundled Geist Mono at 14 px. Stronger green/red backgrounds, colored edge markers, and heavier line numbers distinguish additions/deletions in diffs; Before / After retains its added-line highlights using the stronger green. Scope tabs wrap at narrow widths.
 
 1. Saved Git projects record automatically while Rack is open, including projects with no sessions or existing Timeline refs. Enable the Timeline surface in **Settings > Plugins** to inspect them (shortcut `L`). The surface toggle only shows or hides the panel.
-2. Open a project and the Timeline surface. **Project history** opens by default and immediately shows existing Git commits and saved session snapshots. No selected session or recording opt-in is required.
-3. **Pause / Resume** in Project history controls automatic observations for that project and keeps its history. To additionally associate run checkpoints with a session, choose **This session → Import timeline**. This imports that session's existing checkpoints and records its future runs; it is independent of project observation.
-4. Run the agent. Checkpoints with visible file changes appear newest first. Each shows "N files changed", its observation label, the local time, a folder/file tree, and a 16-row diff preview of the selected file (first file by default), expandable to the full bounded patch.
-5. **Disable** stops recording for the session and hides its list. Recorded data is kept; enabling again imports only what is missing.
+2. Open a project and the Timeline surface. **Current branch** opens by default and immediately shows existing Git commits, project observations and saved session snapshots. No selected session or recording opt-in is required. **All branches** adds unmerged branch and remote-tracking work.
+3. **Pause / Resume** controls automatic observations for that project and keeps its history.
+4. Run the agent. Changes with visible file changes appear newest first. Each shows its title, file count and relative time, a folder/file tree, and a 16-row diff preview of the selected file (first file by default), expandable to the full bounded patch.
 
-Enablement cannot change while a run is editing the session's project. Enabling one session does not enable any other session in the same project.
+(Session opt-in through **This session → Import timeline** was removed from the panel on 2026-10-21; see the note above.)
 
 The Timeline panel owns vertical scrolling within the workbench, including its controls, notices and history. Long lists remain reachable at the minimum window size; polling and manual refresh preserve the panel scroll position.
 
@@ -34,7 +35,7 @@ Clicking a project folder in the navigator selects it even if it has no sessions
 
 **All branches** is the repository-wide Timeline. It includes all locally known local and remote-tracking branches, detached HEAD when present, and supported saved Timeline refs. It walks every merge parent, deduplicates commits and keeps topological order, so unmerged work and merged topic commits remain visible. Branch names label tips, not every ancestor. Merge rows retain parent IDs and first-parent comparison information in their tooltip. Empty commits and merges remain visible even when they have no visible changed files. Existing path exclusions still apply. Search also matches branch-tip labels. This is one repository's history, not a combined feed of unrelated projects.
 
-Both project views show a **Checkout project branch** picker with local/remote groups and worktree occupancy. Selecting a candidate opens a confirmation showing the actual checkout folder. Local branches switch in place; remote-tracking branches create a local tracking branch when the local name is free. The picker does not fetch. **This session** continues to inspect saved session checkpoints; branch checkout targets the displayed project checkout and leaves isolated session worktrees on their own branches.
+Both project views show a **Checkout project branch** picker with local/remote groups and worktree occupancy. Selecting a candidate opens a confirmation showing the actual checkout folder. Local branches switch in place; remote-tracking branches create a local tracking branch when the local name is free. The picker does not fetch. Branch checkout targets the displayed project checkout and leaves isolated session worktrees on their own branches.
 
 Checkout refuses uncommitted tracked/untracked files, stale HEAD, invalid/deleted refs, a branch occupied by another worktree, and active app-managed runs in the same repository (including project aliases). Git's own checkout checks remain authoritative if external processes race the request. Rack never force-switches, stashes, resets, discards edits or bypasses a worktree conflict. Checkout hooks are disabled. A brief host-owned checkout barrier prevents new run writer ownership while switching. Errors leave a visible explanation; retry after resolving the cause.
 
@@ -66,14 +67,12 @@ The prominent bordered **Change** dropdown navigates other Git commits and saved
 | State | Presentation |
 | --- | --- |
 | No project selected | "Open a project to view its timeline." |
-| No session selected in This session | "Open a session to view its timeline." (Project history still works) |
-| Capability check pending | "Checking timeline support…" |
-| Unsupported (missing folder, non-Git folder, Git unavailable) | "Timeline is not supported for this project." (or a Git-missing variant) |
-| Supported, disabled | Explanation and **Import timeline** |
-| Enabled, no visible checkpoints | Filter and Disable controls, and "No recorded changes for this session. Future file changes will appear here." |
-| Enabled with checkpoints | Filter, Disable, and the checkpoint list |
-| Import bounded | "Showing up to 2,001 recent recorded entries for this session." |
-| Last capture failed | Warning with the Git error; Rack retries on the next run |
+| History loading | "Loading project history…" |
+| Unsupported (missing folder, non-Git folder, Git unavailable) | The reason, plus **Choose a repository** when discovery finds candidates |
+| Supported, no entries | Filter and Pause/Resume controls, and "No existing commits or recorded file changes in this project yet." |
+| Supported with entries | Filter, Pause/Resume, branch picker and the history list |
+| Bounded history | "Showing history from the 200 most recent commits and saved snapshots." |
+| Last capture failed | Warning with the Git error; Rack retries on the next observation |
 
 The filter is a case-insensitive substring match over the checkpoint number, label, and changed paths. It does not search file contents. With no matches the list shows "No matching recorded changes."
 
@@ -134,7 +133,7 @@ Rack never writes to `refs/relay-timeline/` or `refs/codex-timeline/`.
 | Store | `src/adapters/storage/json-timeline-store.ts` | `timeline.json` (schema 1) in the data directory: per-session `enabled`, `importTruncated`, and the checkpoint index. |
 | Composition | `src/composition/application.ts` | Assembles Timeline (default on; `timeline: false` omits it) and adapts Sessions/Projects to `TimelineCoreAccess`. |
 | Host | `src/desktop/host/host-api.ts`, `active-runs.ts` | `timeline.*` commands; `runs.start` captures the run-start state before `execution.start`; `ActiveRuns` feeds events to the observer and finishes it after `run.finished`. |
-| Renderer | `src/desktop/renderer/features/timeline-panel.ts`, `timeline-tree.ts` | Project history and This session views, shared file trees and previews. |
+| Renderer | `src/desktop/renderer/features/timeline-panel.ts`, `timeline-tree.ts` | Current branch and All branches views, shared file trees and previews. |
 
 Core sessions, execution, and projects do not import Timeline. Timeline consumes them only through `TimelineCoreAccess`, built in composition from public service calls. Timeline's data lives in its own document, so disabling or omitting the feature leaves core records untouched.
 
