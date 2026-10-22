@@ -9,6 +9,7 @@
 import type { ApprovalRequest, ConnectView, RunView, RuntimeEvent } from "./views.js";
 
 export type HostEvent =
+  | { readonly type: "orchestra.changed" }
   /** A new run was accepted. `fallbackFromAccountId` is set when the selected account was not used. */
   | { readonly type: "run.started"; readonly run: RunView; readonly fallbackFromAccountId?: string }
   /** The run's persisted status changed while it is still active (for example queued to running). */

@@ -17,6 +17,8 @@ export interface ModalOptions {
   readonly content: HTMLElement;
   readonly className?: string;
   readonly onClose?: () => void;
+  /** Return false to retain an unsaved draft. Applies to every close path. */
+  readonly beforeClose?: () => boolean;
 }
 
 export function openModal(options: ModalOptions): ModalHandle {
@@ -35,6 +37,7 @@ export function openModal(options: ModalOptions): ModalHandle {
   const handle: ModalHandle = {
     close() {
       if (closed) return;
+      if (options.beforeClose?.() === false) return;
       closed = true;
       document.removeEventListener("keydown", onKeyDown, true);
       backdrop.remove();

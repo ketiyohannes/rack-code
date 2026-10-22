@@ -44,6 +44,7 @@ export interface RuntimeAccountContext {
 
 export interface RuntimeContinuation {
   readonly nativeSessionId: string;
+  /** Last Rack message this native thread has seen; informational for adapters. */
   readonly seenThroughMessageId?: string;
 }
 
@@ -166,7 +167,14 @@ export type RuntimeEvent =
   | { readonly type: "usage"; readonly inputTokens?: number; readonly outputTokens?: number; readonly costUsd?: number }
   | { readonly type: "availability"; readonly status: "available" | "unavailable" | "reauth_required"; readonly reason?: string; readonly quotaResetAt?: string }
   | { readonly type: "completed"; readonly result: string; readonly metadata?: Readonly<Record<string, unknown>> }
-  | { readonly type: "failed"; readonly error: string; readonly retryable?: boolean }
+  /**
+   * `reason: "continuation_unavailable"` means a resumed native thread could
+   * not be opened (for example Codex reports no rollout for the thread ID)
+   * before the turn did any work. ExecutionService then discards the stale
+   * association and starts a fresh native thread with conversation context
+   * inside the same attempt, instead of failing every later run.
+   */
+  | { readonly type: "failed"; readonly error: string; readonly retryable?: boolean; readonly reason?: "continuation_unavailable" }
   | { readonly type: "interrupted" };
 
 export interface RuntimeAdapter {

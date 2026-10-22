@@ -3070,9 +3070,9 @@ details.data summary {
 
 /* Source-control file lists are flat, with Git status colors and compact
    group headers. Only the selected file opens a numbered diff below them. */
-.git-changes-content, .pr-inbox, .pr-repository-page { --git-add: light-dark(#187537, #73e2a0); --git-remove: light-dark(#bd2638, #ff8a8a); --git-modified: light-dark(#a06b0b, #e2c08d); --git-add-bg: light-dark(rgb(34 160 70 / 22%), rgb(38 190 90 / 26%)); --git-remove-bg: light-dark(rgb(230 48 60 / 20%), rgb(240 65 75 / 26%)); --git-hunk-bg: rgba(56, 139, 253, 0.09); }
+.git-changes-content, .pr-inbox, .pr-repository-page, .run-changes, .orchestra-panel { --git-add: light-dark(#187537, #73e2a0); --git-remove: light-dark(#bd2638, #ff8a8a); --git-modified: light-dark(#a06b0b, #e2c08d); --git-add-bg: light-dark(rgb(34 160 70 / 22%), rgb(38 190 90 / 26%)); --git-remove-bg: light-dark(rgb(230 48 60 / 20%), rgb(240 65 75 / 26%)); --git-hunk-bg: rgba(56, 139, 253, 0.09); }
 .git-changes-content { min-width: 0; padding: 4px 0 10px; }
-:root[data-palette="flexoki"] :is(.git-changes-content, .pr-inbox, .pr-repository-page) {
+:root[data-palette="flexoki"] :is(.git-changes-content, .pr-inbox, .pr-repository-page, .run-changes, .orchestra-panel) {
   --git-add: light-dark(#66800b, #879a39);
   --git-remove: light-dark(#af3029, #d14d41);
   --git-modified: light-dark(#ad8301, #d0a215);
@@ -3207,16 +3207,29 @@ details.data summary {
 .diff-add { color: #3e895c; background: rgba(72, 145, 92, 0.08); }
 .diff-remove { color: #b15454; background: rgba(172, 77, 77, 0.08); }
 .diff-header { color: var(--text-3); }
-/* Thinking: lightbulb beside the trace text, no label. Spacing is half of the
-   earlier labelled panel. The bulb collapses the trace to its first line. */
-.thinking-panel { display: flex; align-items: flex-start; gap: 6px; margin: 7px 0 9px; padding-left: 6px; border-left: 2px solid var(--border-strong); }
-.thinking-toggle { flex: none; display: grid; place-items: center; width: 18px; height: 21px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--text-3); cursor: pointer; }
-.thinking-toggle:hover { color: var(--text); background: var(--overlay); }
-.thinking-toggle:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 1px; }
-.thinking-toggle .icon { width: 13px; height: 13px; }
-.thinking-prose { flex: 1; min-width: 0; color: var(--text-2); font-size: var(--font-sm); line-height: 1.75; }
+/* Thinking: muted prose beside a thin rule, with no icon or label. */
+.thinking-panel { margin: 7px 0 9px; padding-left: 10px; border-left: 2px solid var(--border-strong); }
+.thinking-prose { min-width: 0; color: var(--text-2); font-size: var(--font-sm); line-height: 1.75; }
 .thinking-prose p:first-child { margin-top: 0; }
-.thinking-panel.collapsed .thinking-prose { max-height: 1.75em; overflow: hidden; -webkit-mask-image: linear-gradient(to right, #000 80%, transparent); }
+
+/* Files changed by a finished response: one collapsible card at the end of
+   the reply, styled like tool groups, with Changes-style per-file diffs. */
+.run-changes { margin: 10px 0 4px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--card); overflow: hidden; }
+.run-changes > summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; list-style: none; cursor: pointer; color: var(--text-2); }
+.run-changes > summary::-webkit-details-marker { display: none; }
+.run-changes > summary:hover { background: var(--overlay); color: var(--text); }
+.run-changes > summary > .icon { width: 15px; height: 15px; }
+.run-changes[open] > summary .activity-caret { transform: rotate(90deg); }
+.run-changes-title { flex: 1; font-size: var(--font-sm); font-weight: 500; color: var(--text); }
+.run-changes:not([open]) > .run-changes-body { display: none; }
+/* Totals use the same Git tokens as the Changes tab. */
+.run-changes-stats { display: inline-flex; gap: 8px; font: var(--font-xs) var(--font-code); white-space: nowrap; }
+.run-changes-stats .added { color: var(--git-add); }
+.run-changes-stats .removed { color: var(--git-remove); }
+/* Body reuses Changes tab rows and diff unchanged; only the frame differs. */
+.run-changes-body { border-top: 1px solid var(--border); padding: 4px 0 0; }
+.run-changes-body > .git-file-list { padding-bottom: 4px; }
+.run-changes-body > .git-file-diff { margin-top: 4px; border-radius: 0 0 var(--radius-card) var(--radius-card); }
 @media (max-width: 620px) {
   .activity-card > summary { flex-wrap: wrap; }
   .activity-heading { flex-basis: calc(100% - 54px); }
@@ -4439,3 +4452,287 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 .timeline-branch-controls > button { max-width: 100%; min-width: 0; }
 .timeline-checkout-context { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .timeline-checkout-path { display: block; overflow-wrap: anywhere; padding: 10px 0; }
+
+/* Orchestration uses the workbench's quiet, operational hierarchy: a fixed
+ * toolbar, one scrolling view, a continuous stage rail and readable agent work.
+ * Container queries respond to panel width, independently of the main window. */
+.surface[data-surface="orchestration"] { overflow: hidden; }
+.orchestra-panel { height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; container-type: inline-size; }
+.orchestra-panel-heading { flex: none; min-height: 50px; padding: 9px 12px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); }
+.orchestra-panel-heading h2 { flex: 1; margin: 0; padding-left: 3px; font-size: var(--font-md); font-weight: 550; }
+.orchestra-panel-heading > .label { margin-left: auto; margin-right: 6px; font-size: 10px; color: var(--text-3); }
+.orchestra-panel-heading .icon-button { flex: none; width: 30px; height: 30px; }
+.orchestra-panel-heading .quiet-button { min-width: 0; font-size: var(--font-sm); }
+.orchestra-back { padding-left: 2px; }
+.orchestra-panel-content { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 18px 16px 28px; display: flex; flex-direction: column; gap: 18px; }
+.orchestra-panel-content > * { flex-shrink: 0; min-width: 0; }
+.orchestra-panel-content .note { margin: 0; font-size: 11px; line-height: 1.65; }
+.orchestra-panel :is(h3, strong, p, small, code) { overflow-wrap: anywhere; }
+.orchestra-panel .label { font-size: 10px; letter-spacing: .08em; }
+.orchestra-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.orchestra-panel .dropdown { width: 100%; min-width: 0; }
+.orchestra-panel .dropdown-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orchestra-modal { width: min(1120px, calc(100vw - 56px)); max-width: none; height: min(850px, calc(100vh - 64px)); max-height: calc(100vh - 40px); overflow: hidden; }
+.orchestra-modal .modal-header { padding: 17px 26px; flex: 0 0 auto; }
+.orchestra-modal .modal-title { font-size: 12px; font-weight: 500; color: var(--text-2); }
+.orchestra-studio { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.orchestra-studio-heading { padding: 22px 30px 24px; border-bottom: 1px solid var(--border); }
+.orchestra-studio-heading .label { font-size: 9px; letter-spacing: .16em; color: var(--text-3); }
+.orchestra-studio-heading input { display: block; width: 100%; padding: 0; border: 0; background: transparent; border-radius: 0; }
+.orchestra-studio-heading .orchestra-name { margin: 9px 0 7px; font-size: 29px; line-height: 1.25; font-weight: 550; letter-spacing: -1px; color: var(--text); }
+.orchestra-studio-heading .orchestra-description { font-size: 12px; color: var(--text-2); }
+.orchestra-studio-heading input:focus { outline: none; box-shadow: 0 1px 0 var(--border-strong); }
+.orchestra-studio-body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; flex: 1; min-height: 0; }
+.orchestra-stage { overflow-y: auto; padding: 22px 34px 30px; background: var(--canvas); }
+.orchestra-generate { border: 1px solid var(--border); border-radius: 10px; background: var(--card); margin-bottom: 16px; }
+.orchestra-generate > summary { list-style: none; display: flex; align-items: center; gap: 9px; padding: 13px 15px; cursor: pointer; font-size: 12px; color: var(--text-2); }
+.orchestra-generate > summary::-webkit-details-marker { display: none; }
+.orchestra-generate > summary > .icon:last-child { margin-left: auto; width: 12px; height: 12px; }
+.orchestra-generate[open] > summary > .icon:last-child { transform: rotate(180deg); }
+.orchestra-generate > div { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; padding: 0 14px 14px; }
+.orchestra-generate textarea { resize: vertical; min-height: 80px; width: 100%; font-size: 12px; line-height: 1.7; }
+.orchestra-templates { display: flex; gap: 7px; align-items: center; font-size: 10px; color: var(--text-3); margin-bottom: 28px; }
+.orchestra-template { border: 1px solid var(--border); color: var(--text-2); background: var(--card); border-radius: 5px; padding: 4px 9px; font-size: 10px; cursor: pointer; }
+.orchestra-template:hover { border-color: var(--border-strong); color: var(--text); }
+.orchestra-conductor { display: flex; align-items: center; gap: 13px; width: 100%; padding: 15px 17px; background: var(--inset); border: 1px solid var(--border); border-radius: 10px; text-align: left; color: var(--text); cursor: pointer; }
+.orchestra-conductor > .icon { width: 22px; height: 22px; }
+.orchestra-conductor > span:nth-child(2) { flex: 1; }
+.orchestra-conductor strong { display: block; font-size: 12px; font-weight: 550; }
+.orchestra-conductor small { display: block; margin-top: 4px; font-size: 10px; color: var(--text-3); }
+.orchestra-model-label { font: 9px "IBM Plex Mono", monospace; color: var(--text-2); max-width: 135px; overflow-wrap: anywhere; }
+.orchestra-flow-label { display: flex; justify-content: space-between; align-items: center; margin: 27px 0 17px; }
+.orchestra-flow-label .label { font-size: 9px; letter-spacing: .13em; }
+.orchestra-flow-label > span:last-child { color: var(--text-3); font: 9px "IBM Plex Mono", monospace; }
+.orchestra-flow-node { position: relative; }
+.orchestra-step { position: relative; border: 1px solid var(--border); border-radius: 10px; background: var(--card); transition: border-color 120ms, box-shadow 120ms; }
+.orchestra-step.selected, .orchestra-conductor.selected { border-color: var(--text-2); box-shadow: 0 0 0 1px var(--text-2); }
+.orchestra-step.drop-target { outline: 2px dashed var(--text-2); outline-offset: 4px; }
+.orchestra-step-main { display: flex; gap: 13px; align-items: flex-start; width: 100%; padding: 18px 17px 13px; text-align: left; cursor: pointer; background: transparent; border: 0; color: var(--text); border-radius: 10px; }
+.orchestra-step-number { font: 10px "IBM Plex Mono", monospace; padding-top: 3px; color: var(--text-3); }
+.orchestra-step-copy { flex: 1; min-width: 0; padding-right: 20px; }
+.orchestra-step-copy strong { display: block; font-size: 14px; font-weight: 550; letter-spacing: -.2px; }
+.orchestra-step-copy small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 7px; color: var(--text-2); font-size: 11px; line-height: 1.65; }
+.orchestra-step-main > .icon { width: 17px; height: 17px; margin-top: 1px; color: var(--text-3); }
+.orchestra-step-models { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 47px 13px; }
+.orchestra-step-models > span { display: inline-flex; align-items: center; gap: 5px; font: 9px "IBM Plex Mono", monospace; padding: 5px 7px; background: var(--inset); color: var(--text-2); border-radius: 5px; }
+.orchestra-step-models .icon { width: 11px; height: 11px; }
+.orchestra-step-actions { display: flex; gap: 2px; justify-content: flex-end; border-top: 1px solid var(--border); padding: 4px 9px; }
+.orchestra-step-actions .icon-button { width: 25px; height: 23px; }
+.orchestra-step-actions .icon { width: 12px; height: 12px; }
+.orchestra-step-actions .orchestra-drag { margin-right: auto; cursor: grab; }
+.orchestra-step-actions .orchestra-drag:active { cursor: grabbing; }
+.orchestra-step.approval { background: var(--inset); border-style: dashed; }
+.orchestra-step.approval .orchestra-step-main { padding-bottom: 15px; }
+.orchestra-loop { display: flex; align-items: center; gap: 6px; padding: 0 47px 12px; color: var(--text-3); font-size: 10px; }
+.orchestra-loop .icon { width: 12px; height: 12px; }
+.orchestra-connector { display: grid; place-items: center; height: 30px; color: var(--border-strong); }
+.orchestra-connector .icon { width: 13px; height: 13px; }
+.orchestra-add { display: flex; justify-content: center; flex-wrap: wrap; gap: 7px; }
+.orchestra-add .button { font-size: 10px; background: transparent; border-style: dashed; padding: 7px 11px; }
+.orchestra-add .icon { width: 13px; height: 13px; }
+.orchestra-finish { display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--text-3); font-size: 10px; margin-top: 24px; }
+.orchestra-finish .icon { width: 13px; height: 13px; }
+.orchestra-inspector { overflow-y: auto; border-left: 1px solid var(--border); padding: 25px 22px; display: flex; flex-direction: column; gap: 20px; background: var(--card); }
+.orchestra-inspector > .label { font-size: 9px; letter-spacing: .13em; }
+.orchestra-inspector h3 { font-size: 22px; font-weight: 500; letter-spacing: -.6px; margin: 0; line-height: 1.3; }
+.orchestra-inspector p { margin: 0; line-height: 1.8; font-size: 12px; }
+.orchestra-field { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.orchestra-field > .label { font-size: 9px; color: var(--text-3); letter-spacing: .1em; }
+.orchestra-field input, .orchestra-field textarea { width: 100%; font-size: 12px; line-height: 1.7; }
+.orchestra-field textarea { resize: vertical; min-height: 140px; }
+.orchestra-model-control { display: grid; gap: 16px; }
+.orchestra-field .dropdown { width: 100%; }
+.orchestra-agent-tabs { display: flex; gap: 5px; flex-wrap: wrap; }
+.orchestra-agent-tabs button { background: var(--inset); color: var(--text-2); border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; font-size: 10px; cursor: pointer; }
+.orchestra-agent-tabs button.active { border-color: var(--text-2); color: var(--text); }
+.orchestra-context-note { display: flex; align-items: flex-start; gap: 8px; font-size: 10px; color: var(--text-3); line-height: 1.8; }
+.orchestra-context-note .icon { flex: 0 0 15px; margin-top: 3px; }
+.orchestra-inspector-divider { border-top: 1px solid var(--border); }
+.orchestra-remove { color: var(--text-2); align-self: flex-start; }
+.orchestra-callout { display: flex; align-items: flex-start; gap: 9px; font-size: 11px; line-height: 1.8; padding: 13px; background: var(--inset); border: 1px solid var(--border); border-radius: 8px; }
+.orchestra-callout .icon { flex: 0 0 17px; margin-top: 2px; }
+.orchestra-studio-footer { display: flex; align-items: center; gap: 10px; padding: 17px 24px; border-top: 1px solid var(--border); background: var(--card); }
+.orchestra-studio-footer > div { flex: 1; }
+.orchestra-studio-footer .note { font-size: 10px; }
+.orchestra-studio-footer .error-line:empty { display: none; }
+.orchestra-studio-footer .error-line { margin: 0 0 5px; font-size: 11px; }
+.orchestra-required-action { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; padding: 12px; margin: 10px 0 18px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--inset); }
+.orchestra-required-action > .icon { flex: none; width: 16px; height: 16px; margin-top: 2px; }
+.orchestra-required-action > span:not(.icon) { flex: 1; min-width: 100px; display: grid; gap: 5px; }
+.orchestra-required-action strong { font-size: 12px; font-weight: 550; line-height: 1.5; }
+.orchestra-required-action small { font-size: 11px; line-height: 1.6; color: var(--text-2); }
+.orchestra-required-action .button { margin-left: 26px; white-space: normal; text-align: left; }
+.orchestra-panel :is(button, summary):focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@container (max-width: 290px) {
+  .orchestra-panel-content { padding-inline: 12px; }
+  .orchestra-section-heading .note { display: none; }
+  .orchestra-worker-title { display: grid; gap: 4px; }
+  .orchestra-worker-lifecycle { margin-left: 0; }
+}
+.orchestra-composer-bar { display: flex; align-items: center; gap: 8px; padding: 9px 12px 10px; border-bottom: 1px solid var(--border); margin: -2px -2px 8px; font-size: 10px; color: var(--text-2); }
+.orchestra-composer-bar[hidden] { display: none; }
+.orchestra-composer-bar > .icon { width: 14px; height: 14px; }
+.orchestra-composer-title { border: 0; background: none; padding: 0; font-size: 11px; font-weight: 550; color: var(--text); cursor: pointer; }
+.orchestra-composer-bar > span { margin-left: auto; }
+.orchestra-composer-bar .icon-button { width: 20px; height: 20px; }
+.orchestra-turn .prompt-bubble { margin-left: auto; white-space: pre-wrap; padding: 12px 17px; border-radius: 16px; background: var(--inset); max-width: 85%; width: fit-content; }
+.orchestra-turn-status { display: flex; align-items: center; gap: 9px; margin-top: 23px; padding: 0; background: transparent; border: 0; cursor: pointer; color: var(--text-2); font-size: 11px; }
+.orchestra-turn-status strong { color: var(--text); font-weight: 550; }
+.orchestra-turn-status > span { margin-left: 8px; color: var(--text-3); }
+.orchestra-turn-status .icon { width: 14px; height: 14px; }
+.orchestra-turn-agents { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.orchestra-turn-agents > span { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-2); background: var(--inset); border-radius: 5px; padding: 5px 7px; }
+.orchestra-turn-agents .icon { width: 12px; height: 12px; }
+@media (max-width: 850px) {
+  .orchestra-modal { width: calc(100vw - 24px); height: calc(100vh - 30px); }
+  .orchestra-studio-body { grid-template-columns: minmax(0, 1fr) 275px; }
+  .orchestra-stage { padding: 18px; }
+  .orchestra-studio-heading { padding: 18px; }
+  .orchestra-conductor small { display: none; }
+}
+@media (max-width: 620px) {
+  .orchestra-studio-body { display: flex; flex-direction: column; overflow-y: auto; }
+  .orchestra-stage, .orchestra-inspector { overflow: visible; }
+  .orchestra-inspector { border-left: 0; border-top: 1px solid var(--border); }
+  .orchestra-studio-footer .note { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .orchestra-step { transition: none; } }
+.orchestra-timeline-activity { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 18px; }
+.orchestra-timeline-activity[hidden] { display: none; }
+.orchestra-timeline-run { display: flex; align-items: center; gap: 9px; background: var(--inset); border: 1px solid var(--border); padding: 10px; border-radius: 8px; margin-top: 10px; width: 100%; text-align: left; color: var(--text); cursor: pointer; }
+.orchestra-timeline-run > span { flex: 1; min-width: 0; }
+.orchestra-timeline-run strong { font-size: 11px; font-weight: 500; }
+.orchestra-timeline-run small { display: block; font-size: 10px; line-height: 1.7; color: var(--text-2); margin-top: 5px; }
+.orchestra-timeline-run .icon { width: 14px; height: 14px; flex-shrink: 0; }
+.orchestra-studio-heading .orchestra-name { font-family: inherit; }
+.orchestra-studio-heading .orchestra-description { font-family: inherit; }
+.orchestra-drag { touch-action: none; user-select: none; }
+.orchestra-step.dragging { opacity: .5; }
+.orchestra-draft-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; width: 100%; }
+.orchestra-draft-actions .dropdown { flex: 1 1 140px; min-width: 0; max-width: 100%; }
+.orchestra-draft-actions .dropdown-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orchestra-draft-actions > .button { flex: 0 0 auto; }
+/* Draft lifecycle controls stay outside the optional description disclosure.
+ * Questions keep their own scroll area, allowing long forms at laptop height. */
+.orchestra-generation-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 16px; padding: 14px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--inset); }
+.orchestra-generation-notice[hidden] { display: none; }
+.orchestra-generation-copy { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.orchestra-generation-status { margin: 0 0 5px; font-size: 12px; font-weight: 550; line-height: 1.5; }
+.orchestra-generation-copy .note { display: block; line-height: 1.6; }
+.orchestra-generation-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.orchestra-stage > .question-requests { max-width: 100%; }
+.orchestra-stage .question-actions { flex-wrap: wrap; }
+.orchestra-generate .note { align-self: stretch; margin: 0; overflow-wrap: anywhere; }
+.designer-recovery { flex-wrap: wrap; }
+.designer-recovery > span:not(.icon) { flex: 1 1 180px; }
+.designer-recovery > .button { margin-left: auto; }
+
+/* Workflow authoring keeps cards and settings readable at laptop sizes. */
+.orchestra-studio-heading .orchestra-name { font-size: 25px; letter-spacing: -.6px; }
+.orchestra-step-main { min-height: 76px; }
+.orchestra-step-actions .icon-button { width: 30px; height: 28px; }
+.orchestra-step-models > span { font-size: 10px; line-height: 1.5; }
+.orchestra-loop { font-size: 11px; line-height: 1.6; }
+.orchestra-inspector > .label, .orchestra-field > .label { font-size: 10px; }
+.orchestra-inspector h3 { font-size: 17px; letter-spacing: -.25px; }
+.orchestra-context-note { font-size: 11px; }
+.orchestra-studio-footer > div { min-width: 0; }
+.orchestra-studio-footer .button { flex-shrink: 0; }
+.orchestra-field [aria-invalid="true"], .orchestra-name[aria-invalid="true"] { outline: 2px solid var(--danger); outline-offset: 2px; }
+.orchestra-model-inheritance { margin: 8px 0 0; font-size: 11px; color: var(--text-2); line-height: 1.65; }
+.orchestra-generate-note { margin: 0; align-self: stretch; font-size: 11px; color: var(--text-3); line-height: 1.65; }
+.orchestra-step-main[aria-pressed="true"], .orchestra-conductor[aria-pressed="true"] { color: var(--text); }
+@media (max-width: 720px) {
+  .orchestra-studio-footer { flex-wrap: wrap; padding: 12px 18px; }
+  .orchestra-studio-footer > div { flex-basis: 100%; }
+  .orchestra-studio-footer > .button:first-of-type { margin-left: auto; }
+}
+
+/* Lifecycle text already names terminal outcomes; avoid repeating it in the
+ * action line, while retaining its projection for accessible inspection. */
+.orchestra-panel h3[tabindex="-1"]:focus { outline: none; }
+
+/* Orchestration sidebar: workflow titles when idle; agents, models and a
+   tool waterfall while a workflow runs. Nodes persist across updates, so the
+   entry animation plays once per tool and spinners keep turning. */
+.orchestra-titles { list-style: none; margin: 0 -8px; padding: 0; display: grid; gap: 1px; }
+.orchestra-title-row { position: relative; display: flex; align-items: center; border-radius: 7px; }
+.orchestra-title-row:hover, .orchestra-title-row:focus-within { background: var(--overlay); }
+.orchestra-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 0; background: none; color: var(--text); font: inherit; font-size: var(--font-sm); text-align: left; cursor: pointer; border-radius: 7px; }
+.orchestra-title:disabled { cursor: default; color: var(--text-2); }
+.orchestra-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orchestra-title-row.applied .orchestra-title { font-weight: 550; }
+.orchestra-applied-mark { width: 13px; height: 13px; flex: none; color: var(--text-2); }
+.orchestra-title-actions { display: flex; gap: 2px; padding-right: 4px; opacity: 0; transition: opacity .12s ease; }
+.orchestra-title-row:hover .orchestra-title-actions, .orchestra-title-row:focus-within .orchestra-title-actions { opacity: 1; }
+.orchestra-title-actions .icon-button { width: 26px; height: 26px; }
+.orchestra-title-actions .icon { width: 13px; height: 13px; }
+.orchestra-create { align-self: flex-start; margin-left: -10px; }
+
+.orchestra-run { display: grid; gap: 14px; min-width: 0; }
+.orchestra-run-header { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.orchestra-run-header .orchestra-back { margin: -2px 0 0 -8px; width: 28px; height: 28px; flex: none; }
+.orchestra-run-title { flex: 1; min-width: 0; display: grid; gap: 5px; }
+.orchestra-run-title h3 { margin: 0; font-size: var(--font-md); font-weight: 550; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orchestra-run-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); }
+.orchestra-run-status.waiting_approval { color: var(--text); animation: orchestra-breathe 1.8s ease-in-out infinite; }
+.orchestra-run-status:is(.failed, .interrupted) { color: var(--danger, #b44a4a); }
+.orchestra-run-controls { display: flex; gap: 2px; flex: none; }
+.orchestra-run-controls .icon-button { width: 28px; height: 28px; }
+.orchestra-run-controls .icon { width: 14px; height: 14px; }
+.orchestra-run-actions:empty { display: none; }
+.orchestra-run-actions { display: grid; gap: 8px; }
+.orchestra-run-actions .orchestra-required-action { margin: 0; align-items: center; }
+.orchestra-run-actions .orchestra-required-action .button { margin-left: 0; }
+
+.orchestra-agents { display: grid; gap: 6px; }
+.orchestra-agent { border: 1px solid var(--border); border-radius: 9px; background: var(--card); interpolate-size: allow-keywords; transition: border-color .2s ease; }
+.orchestra-agent.running { border-color: var(--border-strong); }
+.orchestra-agent > summary { display: flex; align-items: center; gap: 8px; padding: 9px 10px; list-style: none; cursor: pointer; min-width: 0; border-radius: 9px; }
+.orchestra-agent > summary::-webkit-details-marker { display: none; }
+.orchestra-agent > summary:hover { background: var(--overlay); }
+.orchestra-agent > summary .orchestra-agent-name { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-sm); font-weight: 550; }
+.orchestra-agent > summary .orchestra-agent-name small { color: var(--text-3); font-weight: 400; }
+.orchestra-agent-model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--font-code); color: var(--text-2); }
+.orchestra-agent-count { flex: none; min-width: 18px; padding: 1px 5px; border-radius: 9px; background: var(--overlay); font: 10px/1.5 var(--font-code); color: var(--text-2); text-align: center; }
+.orchestra-agent-caret { flex: none; width: 12px; height: 12px; color: var(--text-3); transition: transform .2s ease; }
+.orchestra-agent[open] > summary .orchestra-agent-caret { transform: rotate(90deg); }
+/* Animated open/close: the details content grows/shrinks to its height. */
+.orchestra-agent::details-content { block-size: 0; overflow: hidden; transition: block-size .28s cubic-bezier(.2, .7, .2, 1), content-visibility .28s allow-discrete; }
+.orchestra-agent[open]::details-content { block-size: auto; }
+.orchestra-agent-body { padding: 0 10px 10px 10px; }
+
+/* Waterfall: a rail connects tool rows; new rows drop in, staggered. */
+.orchestra-waterfall { position: relative; list-style: none; margin: 0; padding: 2px 0 0 0; display: grid; gap: 2px; }
+.orchestra-waterfall::before { content: ""; position: absolute; left: 6px; top: 10px; bottom: 10px; width: 1px; background: var(--border); }
+.orchestra-tool-row { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; font-size: 11px; color: var(--text-2); }
+.orchestra-node { position: relative; z-index: 1; display: inline-grid; place-items: center; width: 13px; height: 17px; flex: none; background: var(--card); }
+.orchestra-tool-row.entering { animation: orchestra-drop .36s cubic-bezier(.2, .8, .2, 1) both; animation-delay: var(--enter-delay, 0ms); }
+.orchestra-tool-row[data-status="running"] { color: var(--text); }
+.orchestra-tool-row[data-status="failed"] { color: var(--danger, #b44a4a); }
+.orchestra-tool-title { flex: none; font-weight: 500; }
+.orchestra-tool-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10.5px var(--font-code); color: var(--text-3); }
+.orchestra-tool-overflow { padding: 2px 0 4px 21px; font-size: 10.5px; color: var(--text-3); }
+
+/* Status marks and the live spinner (a rotating gradient arc, phase-locked
+   to the clock by the panel so rebuilt nodes continue smoothly). */
+.orchestra-mark { display: inline-grid; place-items: center; width: 13px; height: 13px; flex: none; color: var(--text-3); }
+.orchestra-mark .icon { width: 13px; height: 13px; }
+.orchestra-mark.completed { color: var(--git-add); }
+.orchestra-mark.failed { color: var(--danger, #b44a4a); }
+.orchestra-spinner { display: inline-block; width: 13px; height: 13px; flex: none; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0deg, color-mix(in srgb, var(--primary) 15%, transparent) 60deg, var(--primary) 300deg, transparent 360deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  animation: orchestra-spin .9s linear infinite; }
+.orchestra-shimmer { background: linear-gradient(90deg, var(--text-3) 0%, var(--text-3) 35%, var(--text) 50%, var(--text-3) 65%, var(--text-3) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: orchestra-shimmer 1.8s linear infinite; }
+@keyframes orchestra-spin { to { transform: rotate(360deg); } }
+@keyframes orchestra-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes orchestra-drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes orchestra-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) {
+  .orchestra-spinner { animation-duration: 3s; }
+  .orchestra-shimmer { animation: none; color: var(--text-2); background: none; }
+  .orchestra-tool-row.entering, .orchestra-run-status.waiting_approval { animation: none; }
+  .orchestra-agent::details-content, .orchestra-agent-caret { transition: none; }
+}

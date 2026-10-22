@@ -1,3 +1,4 @@
+import { sessionWorkerRunIds, sessionGenerationRunIds } from "./orchestra-state.js";
 /** Persistent question forms above the composer. Streaming updates and
  * session switches retain drafts/focus; only host-owned pending requests
  * can be answered, and resolved requests release their DOM and draft text.
@@ -6,15 +7,21 @@ import type { UserQuestionRequest, UserQuestionResponse } from "../../../contrac
 import type { Controller } from "../controller.js";
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import type { Store } from "../store.js";
+import type { AppState, Store } from "../store.js";
 
 export function createQuestionRequests(store: Store, controller: Controller): HTMLElement {
+  return createQuestionRequestsView(store, controller).element;
+}
+
+/** A scoped question region for temporary views such as workflow drafting.
+ * The same broker-owned form is used everywhere; disposing releases its watch. */
+export function createQuestionRequestsView(store: Store, controller: Controller, visibleRun?: (runId: string, state: AppState) => boolean): { element: HTMLElement; dispose: () => void } {
   const region = h("div", { class: "question-requests", role: "region", aria: { label: "Questions from the agent", live: "polite" } });
   const cards = new Map<string, HTMLElement>();
-  store.watch((state) => [state.live, state.selection.sessionId], (_slice, state) => {
+  const dispose = store.watch((state) => [state.live, state.orchestra, state.selection.sessionId], (_slice, state) => {
     const pending = Object.values(state.live).flatMap((live) => (live.pendingQuestions ?? []).map((request) => ({ run: live.run, request })));
     const all = new Set(pending.map(({ run, request }) => `${run.id}:${request.id}`));
-    const visible = pending.filter(({ run }) => run.sessionId === state.selection.sessionId);
+    const visible = pending.filter(({ run }) => visibleRun ? visibleRun(run.id, state) : run.sessionId === state.selection.sessionId || sessionWorkerRunIds(state).has(run.id) || sessionGenerationRunIds(state).has(run.id));
     const visibleKeys = new Set(visible.map(({ run, request }) => `${run.id}:${request.id}`));
     for (const [key, card] of cards) {
       if (!visibleKeys.has(key)) card.remove();
@@ -31,7 +38,7 @@ export function createQuestionRequests(store: Store, controller: Controller): HT
     }
     region.hidden = visible.length === 0;
   });
-  return region;
+  return { element: region, dispose };
 }
 
 function questionCard(runId: string, request: UserQuestionRequest, controller: Controller): HTMLElement {
@@ -39,7 +46,7 @@ function questionCard(runId: string, request: UserQuestionRequest, controller: C
   const error = h("p", { class: "question-error", role: "alert" });
   const submit = h("button", { class: "button button-primary button-small", type: "button", onClick: () => void answer(false) }, "Submit answers");
   const dismiss = h("button", { class: "button button-small", type: "button", onClick: () => void answer(true) }, "Dismiss");
-  const card = h("section", { class: "question-card", role: "group", aria: { label: "Answer the agent's questions" },
+  const card = h("section", { class: "question-card", data: { pendingRequest: request.id, executionId: runId }, role: "group", aria: { label: "Answer the agent's questions" },
     onKeydown: (event) => {
       // Enter inside an answer field must never submit the outer composer
       // form (whose submit action can stop an active run).

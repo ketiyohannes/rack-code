@@ -298,15 +298,29 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       const toolConfig = appTools === undefined ? {} : { config: { mcp_servers: { rack: {
         url: appTools.url, http_headers: { Authorization: `Bearer ${appTools.token}` }, tool_timeout_sec: 3600,
       } } } };
-      const threadResponse = resume
-        ? await childProcess.request("thread/resume", { ...this.threadResumeParams(input), ...toolConfig })
-        : await childProcess.request("thread/start", { ...this.threadStartParams(input), ...toolConfig });
+      let threadResponse: unknown;
+      if (resume) {
+        try {
+          threadResponse = await childProcess.request("thread/resume", { ...this.threadResumeParams(input), ...toolConfig });
+        } catch (error) {
+          // A thread that cannot be opened (typically "no rollout found" for
+          // a thread whose first turn never started) is reported as an
+          // unavailable continuation so ExecutionService can start a fresh
+          // thread with conversation context. Nothing has run yet. Other
+          // resume errors (authentication, transport) keep their meaning.
+          const message = error instanceof Error ? error.message : String(error);
+          if (input.signal.aborted || !isMissingThreadError(message)) throw error;
+          yield { type: "failed", error: message, reason: "continuation_unavailable" };
+          return;
+        }
+      } else {
+        threadResponse = await childProcess.request("thread/start", { ...this.threadStartParams(input), ...toolConfig });
+      }
       threadId = readString(threadResponse, ["thread", "id"])
         ?? input.continuation?.nativeSessionId;
       if (threadId === undefined) {
         throw new Error("Codex did not return a thread id.");
       }
-      yield { type: "native_session", nativeSessionId: threadId };
 
       const collaborationModel = input.model ?? readString(threadResponse, ["model"]);
       if (input.interactionMode === "plan" && !collaborationModel) throw new Error("Codex did not report the model required for Plan mode.");
@@ -335,6 +349,11 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       if (turnId === undefined) {
         throw new Error("Codex did not return a turn id.");
       }
+      // Report the thread only after turn/start succeeds. Codex writes a new
+      // thread's rollout when its first turn starts; a thread ID reported
+      // after thread/start alone would be saved even when that turn fails,
+      // and every later resume of it would fail with "no rollout found".
+      yield { type: "native_session", nativeSessionId: threadId };
       this.active.set(input.attemptId, { process: childProcess, threadId, turnId });
 
       for (;;) {
@@ -704,4 +723,14 @@ function codexSpeeds(entry: Record<string, unknown>, current: RuntimeModel | und
   }
   const reported = typeof entry.defaultServiceTier === "string" ? entry.defaultServiceTier : CODEX_STANDARD_TIER;
   return { speeds: tiers, defaultSpeed: tiers.some((tier) => tier.id === reported) ? reported : CODEX_STANDARD_TIER };
+}
+
+/**
+ * Whether a `thread/resume` failure means the native thread does not exist in
+ * this CODEX_HOME. Codex reports this as "no rollout found for thread id";
+ * other phrasings are matched defensively. Kept narrow so transient or
+ * authentication failures are not mistaken for a dead thread.
+ */
+export function isMissingThreadError(message: string): boolean {
+  return /no rollout|rollout[^.]*not found|thread[^.]*not found|unknown thread|no such thread/i.test(message);
 }
