@@ -143,7 +143,13 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
     onChange: ref => { const branch = branches?.branches.find(b => b.ref === ref); if (branch) confirmCheckout(branch); } });
   const branchContext = h("span", { class: "note timeline-checkout-context" });
   const branchControls = h("div", { class: "timeline-branch-controls" }, branchPicker.element, branchContext);
-  const element = h("div", { class: "git-changes-content timeline-content" }, repositoryContext, tabs, branchControls, controls, notices, list);
+  const orchestraActivity = h("section", { class: "orchestra-timeline-activity", aria: { label: "Agent activity" } });
+  store.watch((state) => [state.orchestra, state.selection.sessionId], (_slice, state) => {
+    const runs = state.orchestra.runs.filter((run) => run.sessionId === state.selection.sessionId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
+    orchestraActivity.hidden = runs.length === 0;
+    replace(orchestraActivity, h("span", { class: "label" }, "AGENT ACTIVITY"), ...runs.map((run) => h("button", { class: "orchestra-timeline-run", type: "button", onClick: () => controller.openOrchestra({ sessionId: run.sessionId, workflowRunId: run.id }) }, icon("flow-arrow"), h("span", {}, h("strong", {}, run.workflow.name), h("small", {}, run.workers.map((worker) => `${worker.name}: ${worker.status}`).join(" · ") || "Starting workflow")), icon("caret-right"))));
+  });
+  const element = h("div", { class: "git-changes-content timeline-content" }, orchestraActivity, repositoryContext, tabs, branchControls, controls, notices, list);
 
   /** Drop state whenever the query identity changes, including during a load. */
   function reset(): void {

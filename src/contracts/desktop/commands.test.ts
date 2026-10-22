@@ -35,6 +35,14 @@ test("parameterless commands accept undefined", () => {
   assert.deepEqual(validateCommandParams("accounts.list", undefined), {});
 });
 
+test("workflow drafting requires a request identity shared by cancellation", () => {
+  const params = { sessionId: "root", generationId: "designer-request", description: "Plan and build", model: { providerId: "provider", runtimeId: "runtime", model: "model" } };
+  assert.deepEqual(validateCommandParams("orchestra.generate", params), params);
+  assert.deepEqual(validateCommandParams("orchestra.cancelGeneration", { generationId: "designer-request" }), { generationId: "designer-request" });
+  assert.throws(() => validateCommandParams("orchestra.generate", { ...params, generationId: undefined }), ContractValidationError);
+  assert.throws(() => validateCommandParams("orchestra.cancelGeneration", { runId: "hidden-run" }), ContractValidationError);
+});
+
 test("session removal accepts only an explicit saved-session identity", () => {
   assert.deepEqual(validateCommandParams("sessions.remove", { sessionId: "saved" }), { sessionId: "saved" });
   for (const value of [{}, { sessionId: "" }, { sessionId: 3 }, { sessionId: "saved", path: "/project" }]) {

@@ -204,7 +204,7 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
           seenSessionId = sessionId;
           yield { type: "native_session", nativeSessionId: sessionId };
         }
-        yield* mapClaudeMessage(message, eventState);
+        for (const event of mapClaudeMessage(message, eventState)) yield tagMissingSession(event, input);
         if (input.signal.aborted) {
           yield { type: "interrupted" };
           break;
@@ -215,7 +215,7 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
         yield { type: "interrupted" };
       } else {
         const text = error instanceof Error ? error.message : String(error);
-        yield { type: "failed", error: text };
+        yield tagMissingSession({ type: "failed", error: text }, input);
       }
     } finally {
       input.signal.removeEventListener("abort", abort);
@@ -280,6 +280,12 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
     // auto-review/bypass modes must collect the user's own answer here.
     options.canUseTool = async (toolName, toolInput, callbackOptions): Promise<PermissionResult> => {
       if (input.interactionMode === "plan" && toolName === "ExitPlanMode") return { behavior: "deny", message: "Finish the plan in your response. The user must click Implement in Rack to leave Plan mode." };
+      // Read-only runs outside Plan mode (for example workflow planners,
+      // reviewers and the coordinator) also use Claude's native plan mode as
+      // their sandbox. Without explicit guidance the model keeps retrying
+      // ExitPlanMode or leaves its result inside the denied call, and the
+      // workflow appears stuck. Tell it where the result belongs instead.
+      if (input.permissionMode === "read_only" && toolName === "ExitPlanMode") return { behavior: "deny", message: "This is a read-only Rack run, not an approval step. Do not call ExitPlanMode again: write your complete result directly in your response and finish." };
       if (toolName !== "AskUserQuestion") return permissionHandler === undefined
         ? { behavior: "deny", message: "Native permission policy did not authorize this action." }
         : (await permissionHandler(toolName, toolInput, callbackOptions)) ?? { behavior: "deny", message: "This action was not authorized." };
@@ -524,4 +530,15 @@ function claudeFastMode(value: string): boolean {
   if (value === "fast") return true;
   if (value === "standard") return false;
   throw new Error(`Claude does not support speed '${value}'.`);
+}
+
+/**
+ * Marks a resume failure caused by a Claude session that no longer exists in
+ * this account's CLAUDE_CONFIG_DIR ("No conversation found with session ID")
+ * so ExecutionService can continue in a fresh session with conversation
+ * context. Only resumed runs are tagged; other failures pass through.
+ */
+function tagMissingSession(event: RuntimeEvent, input: RuntimeRunInput): RuntimeEvent {
+  if (event.type !== "failed" || input.continuation === undefined || event.reason !== undefined) return event;
+  return /no conversation found|session[^.]*not found/i.test(event.error) ? { ...event, reason: "continuation_unavailable" } : event;
 }

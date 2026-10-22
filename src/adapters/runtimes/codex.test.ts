@@ -364,3 +364,34 @@ test("Codex skill discovery preserves disabled entries and diagnostics without a
   assert.equal(catalog.skills[0]!.enabled, false); assert.deepEqual(catalog.errors, ["Malformed other skill"]);
   assert.equal(closed, true); assert.ok(!methods.includes("turn/start"));
 });
+
+const codexAccount = { accountId: "account", providerId: "codex", credential: { id: "credential", providerId: "codex", method: "native_login" as const }, runtimeContextId: "context" };
+
+test("Codex reports a new thread only after its first turn starts", async () => {
+  // thread/start succeeds but turn/start fails: Codex has written no rollout,
+  // so reporting the ID would save a thread that can never be resumed.
+  const adapter = new CodexRuntimeAdapter({ resolve: async () => ({ environment: {} }) }, { resolve: async () => ({ directory: "/context" }) }, { createProcess: () => ({
+    request: async (method) => { if (method === "turn/start") throw new Error("model unavailable"); return method === "thread/start" ? { thread: { id: "thread" } } : {}; },
+    notify: () => {}, respond: () => {}, respondError: () => {}, close: async () => {},
+    nextMessage: async () => ({ done: true, value: undefined }),
+  }) });
+  const events = [];
+  for await (const event of adapter.startRun({ runId: "run", attemptId: "attempt", sessionId: "session", projectPath: "/project", prompt: "test", permissionMode: "full_access",
+    account: codexAccount, signal: new AbortController().signal, requestApproval: async () => "deny" })) events.push(event);
+  assert.equal(events.some((event) => event.type === "native_session"), false);
+  assert.deepEqual(events.map((event) => event.type), ["failed"]);
+});
+
+test("Codex marks a resume of a thread without a rollout as an unavailable continuation", async () => {
+  const requests: string[] = [];
+  const adapter = new CodexRuntimeAdapter({ resolve: async () => ({ environment: {} }) }, { resolve: async () => ({ directory: "/context" }) }, { createProcess: () => ({
+    request: async (method) => { requests.push(method); if (method === "thread/resume") throw new Error("no rollout found for thread id stale"); return {}; },
+    notify: () => {}, respond: () => {}, respondError: () => {}, close: async () => {},
+    nextMessage: async () => ({ done: true, value: undefined }),
+  }) });
+  const events = [];
+  for await (const event of adapter.resumeRun({ runId: "run", attemptId: "attempt", sessionId: "session", projectPath: "/project", prompt: "test", permissionMode: "full_access",
+    account: codexAccount, continuation: { nativeSessionId: "stale" }, signal: new AbortController().signal, requestApproval: async () => "deny" })) events.push(event);
+  assert.deepEqual(events, [{ type: "failed", error: "no rollout found for thread id stale", reason: "continuation_unavailable" }]);
+  assert.equal(requests.includes("turn/start"), false);
+});

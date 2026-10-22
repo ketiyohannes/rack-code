@@ -118,3 +118,12 @@ test("thinking summaries and traces keep distinct identities when streams interl
   assert.equal(state.items[1]?.kind === "thinking" && state.items[1].text, "Trace continues");
   assert.equal(state.items[0]?.kind === "thinking" && state.items[0].format, "summary");
 });
+
+test("routine account availability stays out of the reply; problems remain visible", () => {
+  const state = foldEvents([
+    { type: "availability", status: "available" },
+    { type: "message_delta", text: "done" },
+    { type: "availability", status: "reauth_required", reason: "Token expired" },
+  ]);
+  assert.deepEqual(state.items.map((item) => item.kind === "status" ? item.label : item.kind), ["text", "account reauth required"]);
+});

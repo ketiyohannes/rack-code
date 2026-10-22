@@ -1,3 +1,5 @@
+import { OrchestraService } from "../features/orchestration/service.js";
+import { JsonOrchestraStore } from "../adapters/storage/json-orchestra-store.js";
 import { GitProjectBranches } from "../adapters/projects/git-branches.js";
 import { GitSourceControl } from "../adapters/projects/git-source-control.js";
 import { ReviewInboxService } from "../features/pull-requests/index.js";
@@ -51,6 +53,7 @@ import { BrowserService, type BrowserDriver } from "../features/browser/index.js
 import { validateCommandParams } from "../contracts/desktop/commands.js";
 
 export interface Application {
+  readonly orchestra?: OrchestraService;
   readonly pullRequests: PullRequestsService;
   readonly reviewInbox: ReviewInboxService;
   readonly usage: UsageService;
@@ -72,6 +75,8 @@ export interface Application {
 }
 
 export interface CreateApplicationOptions {
+  /** Assemble Rack-owned workflows (default true). */
+  readonly orchestra?: boolean;
   /** Root for local MVP metadata and isolated provider configuration. */
   readonly dataDirectory?: string;
   /** Protected credential implementation supplied by the host. */
@@ -162,6 +167,8 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
     }] },
   );
 
+  const orchestra = options.orchestra === false ? undefined : new OrchestraService(new JsonOrchestraStore(join(dataDirectory, "orchestra.json")), execution, sessions);
+
   const connections = new ConnectionsService(
     accounts,
     runtimeContexts,
@@ -207,6 +214,7 @@ export function createApplication(options: CreateApplicationOptions = {}): Appli
   const usage = new UsageService(() => execution.listRunUsage());
 
   return {
+    ...(orchestra === undefined ? {} : { orchestra }),
     pullRequests, reviewInbox, usage,
     files, terminal, ...(browser === undefined ? {} : { browser }),
     ...(timeline === undefined ? {} : { timeline }),

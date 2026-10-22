@@ -1,3 +1,4 @@
+import { activeWorkflow, sessionWorkerRunIds, sessionGenerationRunIds } from "./orchestra-state.js";
 import { createSkillsPicker } from "./skills-picker.js";
 /**
  * Run composer. Provider runtimes are implementation details: the only
@@ -27,10 +28,9 @@ import { accountLabel, isActiveStatus, PERMISSION_LABELS } from "./run-format.js
 import { presentTool } from "./tool-presentation.js";
 import { createAttachmentPicker } from "./attachments.js";
 import { modelKey } from "../components/model-settings.js";
-import { choiceFromRuns } from "../session-model-choice.js";
+import { loadSessionChoice, saveSessionChoice } from "../session-model-choice.js";
 import { createQuestionRequests } from "./user-questions.js";
-
-type AccountChoice = `auto:${string}` | `account:${string}:${string}`;
+import { initialComposerSelection, type AccountChoice, type ComposerSelection } from "./composer-selection.js";
 
 const MODE_ICONS: Readonly<Record<PermissionMode, Parameters<typeof icon>[0]>> = {
   read_only: "lock-simple", ask: "hand", approve_for_me: "shield-check", full_access: "lightning",
@@ -42,9 +42,10 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   let workflow: "normal" | "plan" = "normal";
   let draftSession: string | undefined;
   let workflowInitializedFor: string | undefined;
-  const drafts = new Map<string, { prompt: string; workflow: "normal" | "plan" }>();
+  const drafts = new Map<string, { prompt: string; workflow: "normal" | "plan"; selection: ComposerSelection }>();
   const skills = createSkillsPicker(controller, () => refresh(store.get()));
   const planToggle = h("button", { class: "icon-button composer-action plan-toggle", type: "button", aria: { label: "Plan mode", pressed: "false" }, title: "Research and plan before implementing", onClick: () => { workflow = workflow === "plan" ? "normal" : "plan"; refresh(store.get()); } }, icon("list-checks"));
+  const orchestraBar = h("div", { class: "orchestra-composer-bar" });
   const planCard = h("div", { class: "plan-ready", role: "region", aria: { label: "Plan ready for review" } });
   const attachments = createAttachmentPicker(controller, () => refresh(store.get()));
 
@@ -57,7 +58,12 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     formatValue: (option) => option.label.toLowerCase() === "auto" ? "Auto" : option.label,
     onChange: () => refresh(store.get()),
   });
-  const model = createModelPicker(() => refresh(store.get()), () => controller.openSettings("models"));
+  const model = createModelPicker(() => {
+    // An explicit change becomes the session's saved choice, so it survives
+    // restarts and outranks the session's history on the next visit.
+    if (draftSession !== undefined && model.selection !== undefined) saveSessionChoice(draftSession, model.selection);
+    refresh(store.get());
+  }, () => controller.openSettings("models"));
   const workspace = createWorkspacePill(controller);
 
   const connectPill = h("button", {
@@ -78,6 +84,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     // must never consume its fixed height or hide the send/stop control.
     h("div", { class: "composer-overlays" }, createQuestionRequests(store, controller), guard, planCard),
     h("div", { class: "composer-card" },
+      orchestraBar,
       attachments.list,
       skills.chips,
       prompt,
@@ -93,6 +100,9 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   prompt.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
+      // Enter never stops a workflow: a follow-up typed while agents work
+      // must not silently cancel them. Stop stays on the button and Escape.
+      if (activeWorkflow(store.get())) return;
       void submitOrStop();
     }
   });
@@ -107,6 +117,8 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     if (event.key !== "Escape" || event.repeat || event.isComposing || event.defaultPrevented) return;
     if (document.querySelector(".popover, .modal-backdrop, .settings-overlay:not([hidden])") !== null) return;
     const state = store.get();
+    const orchestra = activeWorkflow(state);
+    if (orchestra) { event.preventDefault(); void controller.controlWorkflow(orchestra.id, "stop"); return; }
     const active = activeRunId(state);
     if (active === undefined || state.live[active]?.cancelRequested) return;
     event.preventDefault();
@@ -122,6 +134,8 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
 
   async function submitOrStop(approvedPlanRunId?: string): Promise<void> {
     const state = store.get();
+    const orchestra = activeWorkflow(state);
+    if (orchestra) { await controller.controlWorkflow(orchestra.id, "stop"); return; }
     const active = activeRunId(state);
     if (active !== undefined) {
       if (!state.live[active]?.cancelRequested) await controller.cancelRun(active);
@@ -164,13 +178,13 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   }
 
   function canRun(state: AppState): boolean {
-    if (state.modelsLoading) return false;
+    if (state.modelsLoading || state.orchestra.generations?.some((entry) => entry.sessionId === state.selection.sessionId)) return false;
     const selected = model.selected;
     // Settings updates synchronously, while DOM watchers run next frame. Check
     // the current preference here too, so an unstarred model cannot be sent
     // through a stale picker during that interval.
     return state.session !== undefined && state.selection.sessionId === state.session.id && state.host.status === "ready" && selected !== undefined && state.favoriteModelKeys.includes(modelKey(selected)) &&
-      account.value !== undefined && unacknowledgedUnknown(state) === undefined && !modeDisabled(capabilitiesFor(state));
+      account.value !== undefined && (parseChoice(account.value)?.accountId === undefined || effectiveAccount(state) !== undefined) && unacknowledgedUnknown(state) === undefined && !modeDisabled(capabilitiesFor(state));
   }
 
   function selectedModel(): ModelView | undefined {
@@ -202,11 +216,16 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
 
   function refresh(state: AppState): void {
     if (draftSession !== state.selection.sessionId) {
-      if (draftSession && workflowInitializedFor === draftSession) drafts.set(draftSession, { prompt: prompt.value, workflow });
+      if (draftSession && workflowInitializedFor === draftSession) drafts.set(draftSession, { prompt: prompt.value, workflow, selection: {
+        permissionMode: mode, ...(model.selection ? { model: model.selection } : {}), ...(account.value ? { account: account.value } : {}),
+      } });
       draftSession = state.selection.sessionId;
       const draft = draftSession ? drafts.get(draftSession) : undefined;
       prompt.value = draft?.prompt ?? "";
       workflow = draft?.workflow ?? "normal";
+      model.setSelection(draft?.selection.model);
+      account.setValue(draft?.selection.account);
+      mode = draft?.selection.permissionMode ?? "approve_for_me";
       workflowInitializedFor = draft ? draftSession : undefined;
       prompt.scrollTop = 0;
     }
@@ -214,21 +233,32 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     // workflow only once they belong to this chat, without overwriting a draft.
     if (draftSession && workflowInitializedFor !== draftSession && state.session?.id === draftSession) {
       workflow = state.runs.at(-1)?.interactionMode ?? "normal";
+      const selection = initialComposerSelection(state, draftSession);
+      const chosen = loadSessionChoice(draftSession) ?? selection.model;
+      model.setSelection(chosen);
+      // History's account belongs to history's provider; a saved choice for
+      // another provider starts with that provider's automatic account.
+      const provider = chosen?.key.split("|")[0];
+      account.setValue(provider === undefined || selection.account?.split(":")[1] === provider ? selection.account : `auto:${provider}`);
+      mode = selection.permissionMode;
       workflowInitializedFor = draftSession;
     }
     workspace.refresh(state);
+    const orchestra = activeWorkflow(state);
+    const boundId = state.selection.sessionId && state.enabledPlugins.includes("orchestration") ? state.orchestra.bindings[state.selection.sessionId] : undefined;
+    const bound = state.orchestra.workflows.find((entry) => entry.id === boundId);
+    orchestraBar.hidden = !orchestra && !bound;
+    replace(orchestraBar, icon("flow-arrow"), h("button", { type: "button", class: "orchestra-composer-title", onClick: () => controller.openTool("orchestration") }, orchestra?.workflow.name ?? bound?.name ?? ""),
+      orchestra ? h("span", {}, orchestra.status === "waiting_approval" ? "Waiting for you" : orchestra.status === "paused" ? "Paused" : "Working") : h("span", {}, "For your next task"),
+      orchestra?.status === "waiting_approval" ? h("button", { class: "button button-small", type: "button", disabled: !!state.workflowControls?.[orchestra.id]?.pending, onClick: () => void controller.controlWorkflow(orchestra.id, "approve") }, "Approve & continue") : null,
+      !orchestra && bound && state.selection.sessionId ? h("button", { class: "icon-button", type: "button", aria: { label: "Remove workflow from conversation" }, onClick: () => void controller.bindWorkflow(state.selection.sessionId!) }, icon("x")) : null);
     const activeId = activeRunId(state);
     if (activeId !== undefined) { mode = state.live[activeId]!.run.permissionMode; workflow = state.live[activeId]!.run.interactionMode ?? "normal"; }
-    // Model, reasoning and Fast belong to the session: an explicit choice made
-    // in it, else its latest run (persisted or live), else the last choice.
-    const sessionId = state.selection.sessionId;
-    model.setScope(sessionId, sessionId === undefined ? undefined
-      : choiceFromRuns(sessionId, [...state.runs, ...Object.values(state.live).map((live) => live.run)]));
     model.update(state.models, state.favoriteModelKeys);
     const selected = selectedModel();
-    const targetProvider = selected?.providerId;
+    const targetProvider = selected?.providerId ?? model.selection?.key.split("|")[0];
     const accounts = targetProvider === undefined ? [] : state.accounts.filter((entry) => entry.providerId === targetProvider);
-    const accountOptions: DropdownOption<AccountChoice>[] = targetProvider === undefined || accounts.length === 0 ? [] : [
+    const accountOptions: DropdownOption<AccountChoice>[] = targetProvider === undefined ? [] : [
       {
         value: `auto:${targetProvider}` as AccountChoice, label: "Auto",
         description: accounts.find((entry) => entry.selected) === undefined
@@ -241,6 +271,11 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
         description: entry.availability.replace("_", " "), icon: "user-circle", group: selected?.providerName ?? "",
       })),
     ];
+    // A disconnected explicit account remains the choice until the user
+    // replaces it. Changing providers deliberately starts a new Auto choice.
+    const savedAccount = account.value;
+    const missingAccount = savedAccount !== undefined && parseChoice(savedAccount)?.providerId === targetProvider && parseChoice(savedAccount)?.accountId !== undefined && !accountOptions.some((option) => option.value === savedAccount);
+    if (missingAccount) accountOptions.push({ value: savedAccount, label: "Selected account unavailable", disabled: true });
     account.element.hidden = accountOptions.length === 0;
     connectPill.hidden = accountOptions.length > 0 || (selected === undefined && state.accounts.length > 0);
     const currentAccount = account.value;
@@ -259,33 +294,41 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     const approvals = pendingApprovals(state);
     const catalogMessage = state.session === undefined ? undefined : modelCatalogMessage(state);
     const needsFavorites = state.models.length > 0 && selected === undefined;
+    const unsupportedMode = modeDisabled(caps);
+    const designer = state.orchestra.generations?.find((entry) => entry.sessionId === state.selection.sessionId);
     replace(guard,
+      ...(designer ? [h("div", { class: "guard-warning designer-recovery", role: "region", aria: { label: "Workflow designer" } }, icon("info"), h("span", {}, designer.stopping ? "Stopping workflow designer…" : "Workflow drafting is active. Answer the designer's questions or cancel to return to this conversation."),
+        h("button", { class: "button button-small", type: "button", disabled: designer.stopping, onClick: () => void controller.cancelWorkflowGeneration(designer.id) }, "Cancel generation"))] : []),
       ...approvals.map(({ run, live, request }) => renderApproval(request, run, live, state, controller)),
       ...(catalogMessage === undefined ? [] : [
         h("div", { class: "guard-warning catalog-warning" }, icon("info"), h("span", {}, catalogMessage)),
       ]),
       ...(needsFavorites ? [h("div", { class: "guard-warning" }, icon("star"),
-        h("span", {}, state.favoriteModelKeys.length === 0 ? "Star models in Settings to use them here." : "Your starred models are currently unavailable."),
+        h("span", {}, model.unavailable ? "This conversation's selected model is unavailable or no longer starred. Choose a replacement to continue." : state.favoriteModelKeys.length === 0 ? "Star models in Settings to use them here." : "Your starred models are currently unavailable."),
         h("button", { class: "button button-small", type: "button", onClick: () => controller.openSettings("models") }, "Choose favorites"))] : []),
       ...(unknownRunId === undefined ? [] : [
         h("div", { class: "guard-warning" }, icon("warning-circle"),
           h("span", {}, "The last run ended with an unknown outcome. Review its details before continuing; nothing is replayed automatically."),
           h("button", { class: "button button-small", type: "button", onClick: () => controller.acknowledgeUnknown(unknownRunId) }, "I reviewed it")),
       ]),
+      ...(missingAccount ? [h("div", { class: "guard-warning" }, icon("warning-circle"), h("span", {}, "This conversation's selected account is unavailable. Choose another account to continue."))] : []),
+      ...(unsupportedMode ? [h("div", { class: "guard-warning" }, icon("warning-circle"), h("span", {}, `${selected?.label ?? "This model"} does not support ${PERMISSION_LABELS[mode].label}. Choose a supported permission mode to run.`),
+        ...(["read_only", "full_access"] as const).map((candidate) => h("button", { class: "button button-small", type: "button", onClick: () => { mode = candidate; refresh(store.get()); } }, PERMISSION_LABELS[candidate].label)))] : []),
     );
-    guard.hidden = approvals.length === 0 && catalogMessage === undefined && !needsFavorites && unknownRunId === undefined;
+    guard.hidden = approvals.length === 0 && catalogMessage === undefined && !needsFavorites && unknownRunId === undefined && !unsupportedMode && !missingAccount && !designer;
     guard.classList.toggle("approval-open", approvals.length > 0);
 
     workspace.element.disabled ||= submitting;
     const noSession = state.session === undefined || state.selection.sessionId !== state.session.id || state.host.status !== "ready";
     const targetAccount = effectiveAccount(state);
-    skills.update(state.session && selected && targetAccount ? { sessionId: state.session.id, runtimeId: selected.runtimeId, accountId: targetAccount.id, ...(state.session.projectId === undefined ? {} : { projectId: state.session.projectId }) } : undefined, noSession || submitting || activeId !== undefined);
-    planToggle.disabled = noSession || submitting || activeId !== undefined;
+    skills.update(state.session && selected && targetAccount ? { sessionId: state.session.id, runtimeId: selected.runtimeId, accountId: targetAccount.id, ...(state.session.projectId === undefined ? {} : { projectId: state.session.projectId }) } : undefined, noSession || submitting || activeId !== undefined || !!bound || !!orchestra);
+    planToggle.disabled = noSession || submitting || activeId !== undefined || !!bound || !!orchestra;
+    if (bound) workflow = "normal";
     planToggle.setAttribute("aria-pressed", String(workflow === "plan"));
     planToggle.classList.toggle("active", workflow === "plan");
     planToggle.title = workflow === "plan" ? "Plan mode on · Research before implementing" : "Plan mode · Research before implementing";
     const latest = state.runs.at(-1);
-    const readyPlan = latest?.interactionMode === "plan" && latest.status === "completed" && latest.result?.trim() && activeId === undefined ? latest : undefined;
+    const readyPlan = latest?.interactionMode === "plan" && latest.status === "completed" && latest.result?.trim() && activeId === undefined && !orchestra && !bound ? latest : undefined;
     planCard.hidden = !readyPlan;
     if (readyPlan) replace(planCard,
       h("div", { class: "plan-ready-label" }, icon("list-checks"), h("span", {}, "Plan ready"), h("span", { class: "note" }, "Review the plan above before implementing.")),
@@ -302,7 +345,10 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     model.setDisabled(noSession || submitting);
 
     const active = activeRunId(state);
-    if (active !== undefined) {
+    if (orchestra) {
+      const pending = state.workflowControls?.[orchestra.id];
+      replace(send, icon("stop")); send.classList.add("is-stop"); send.disabled = state.host.status !== "ready" || !!pending?.pending; send.title = pending?.pending && pending.action === "stop" ? "Stopping workflow" : "Stop workflow (Esc)"; send.setAttribute("aria-label", send.title);
+    } else if (active !== undefined) {
       const cancelling = state.live[active]?.cancelRequested === true;
       replace(send, icon("stop"));
       send.classList.add("is-stop"); send.disabled = cancelling; send.title = cancelling ? "Cancelling" : "Stop the running agent (Esc)";
@@ -316,7 +362,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   }
 
   store.watch(
-    (state) => [state.models, state.modelsLoading, state.favoriteModelKeys, state.modelCatalogFailures, state.runtimes, state.accounts, state.capabilities, state.session, state.selection.sessionId, state.runs, state.acknowledgedUnknown, state.host, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId).flatMap((live) => [live.run, live.cancelRequested, live.pendingApprovals, live.pendingQuestions])],
+    (state) => [state.orchestra, state.workflowControls, state.enabledPlugins, state.models, state.modelsLoading, state.favoriteModelKeys, state.modelCatalogFailures, state.runtimes, state.accounts, state.capabilities, state.session, state.selection.sessionId, state.runs, state.acknowledgedUnknown, state.host, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId || sessionWorkerRunIds(state).has(live.run.id) || sessionGenerationRunIds(state).has(live.run.id)).flatMap((live) => [live.run, live.cancelRequested, live.pendingApprovals, live.pendingQuestions])],
     (_slice, state) => refresh(state),
   );
 }
@@ -337,7 +383,7 @@ function modelCatalogMessage(state: AppState): string | undefined {
 function pendingApprovals(state: AppState): readonly { readonly run: RunView; readonly live: LiveRun; readonly request: ApprovalRequest }[] {
   if (state.session === undefined) return [];
   return Object.values(state.live)
-    .filter((live) => live.run.sessionId === state.session?.id)
+    .filter((live) => live.run.sessionId === state.session?.id || sessionWorkerRunIds(state).has(live.run.id))
     .flatMap((live) => live.pendingApprovals.map((request) => ({ run: live.run, live, request })));
 }
 
@@ -358,7 +404,7 @@ function renderApproval(request: ApprovalRequest, run: RunView, _live: LiveRun, 
   // The command or path is already the card's target line; repeating it as a
   // labelled section adds noise. Diffs and unknown arguments are kept.
   const sections = view.sections.filter((section) => section.label !== "Command" && section.label !== "Directory");
-  return h("div", { class: "approval approval-overlay-card" },
+  return h("div", { class: "approval approval-overlay-card", data: { pendingRequest: request.id, executionId: run.id } },
     h("div", { class: "approval-head" },
       h("span", { class: "activity-icon" }, icon(view.icon)),
       h("span", { class: "approval-title" }, view.title)),

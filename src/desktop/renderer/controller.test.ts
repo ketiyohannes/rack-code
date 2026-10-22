@@ -6,6 +6,8 @@ import type { HostClient } from "./host-client.js";
 import type { RunView } from "../../contracts/desktop/views.js";
 import type { HostEvent } from "../../contracts/desktop/events.js";
 import { foldEvents } from "./transcript.js";
+import { initialComposerSelection } from "./features/composer-selection.js";
+import type { OrchestraSnapshot } from "../../features/orchestration/types.js";
 
 // The controller is tested with view state, not a browser or native UI.
 class ImmediateStore extends Store {
@@ -18,6 +20,34 @@ const run: RunView = { id: "run", sessionId: "session", projectId: "project", pr
   permissionMode: "ask", status: "completed", attemptIds: [], attempts: [], createdAt: stamp, updatedAt: stamp };
 const session = { id: "session", projectId: "project", messages: [], continuations: [], createdAt: stamp, updatedAt: stamp };
 
+for (const first of ["sessions", "orchestra"] as const) test(`startup waits for complete routing history when ${first} arrives first`, async () => {
+  const store = new ImmediateStore();
+  let sessionsReady!: (value: unknown) => void;
+  let orchestraReady!: (value: unknown) => void;
+  const sessions = new Promise((resolve) => { sessionsReady = resolve; });
+  const orchestra = new Promise((resolve) => { orchestraReady = resolve; });
+  const history: OrchestraSnapshot = { workflows: [], bindings: {}, runs: [{ id: "newer-workflow", sessionId: session.id, workflow: { id: "definition", name: "Workflow", description: "", revision: 1, steps: [] }, prompt: "Workflow task", status: "completed", stepIndex: 0, workers: [], reviewRounds: {}, revision: 1,
+    defaultModel: { providerId: "new-provider", runtimeId: "new-runtime", model: "new-model" }, defaultAccountId: "new-account", permissionMode: "read_only", createdAt: "2026-10-15", updatedAt: "2026-10-15" }] };
+  const root = { ...run, model: "old-model", permissionMode: "full_access", attempts: [{ id: "attempt", runtimeId: "old-runtime" }] };
+  const host = { onEvent: () => () => {}, call: async (command: string) => {
+    if (command === "sessions.list") return sessions;
+    if (command === "orchestra.snapshot") return orchestra;
+    if (command === "sessions.get") return session;
+    if (command === "runs.list") return [root];
+    if (command === "models.list") return { models: [], failures: [] };
+    if (command === "sessions.workspace") return undefined;
+    return [];
+  } } as unknown as HostClient;
+  const starting = new Controller(host, store).start();
+  if (first === "sessions") sessionsReady([session]); else orchestraReady(history);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(store.get().session, undefined, "composer must not see a session before routing history is complete");
+  if (first === "sessions") orchestraReady(history); else sessionsReady([session]);
+  await starting;
+  assert.equal(store.get().session?.id, session.id);
+  assert.deepEqual(initialComposerSelection(store.get(), session.id), { model: { key: "new-provider|new-runtime|new-model", label: "new-model" }, account: "account:new-provider:new-account", permissionMode: "read_only" });
+});
+
 test("opening a side-chat draft performs no host calls and plain reopening does not replay it", () => {
   const store = new ImmediateStore();
   const controller = new Controller({ call: () => { throw new Error("Opening a draft must not contact a provider"); } } as unknown as HostClient, store);
@@ -26,6 +56,51 @@ test("opening a side-chat draft performs no host calls and plain reopening does 
   controller.openTool("side-chat");
   assert.deepEqual(store.get().toolRequest, { id: "side-chat", seq: 2 });
   assert.equal(store.get().page, "chat");
+});
+
+test("workflow control suppresses duplicate commands and retains Stop until cancellation settles", async () => {
+  const store = new ImmediateStore();
+  let finish!: () => void;
+  let controls = 0;
+  const host = { call: async (command: string) => {
+    if (command === "orchestra.control") { controls++; await new Promise<void>((resolve) => { finish = resolve; }); return null; }
+    if (command === "orchestra.snapshot") return store.get().orchestra;
+    throw new Error(command);
+  } } as unknown as HostClient;
+  const controller = new Controller(host, store);
+  const first = controller.controlWorkflow("workflow", "stop");
+  const duplicate = controller.controlWorkflow("workflow", "stop");
+  assert.equal(controls, 1);
+  assert.deepEqual(store.get().workflowControls?.["workflow"], { action: "stop", pending: true });
+  finish(); await Promise.all([first, duplicate]);
+  assert.equal(store.get().workflowControls?.["workflow"], undefined);
+});
+
+test("failed workflow commands retain an actionable error and allow retry", async () => {
+  const store = new ImmediateStore();
+  let controls = 0;
+  const controller = new Controller({ call: async (command: string) => {
+    if (command === "orchestra.control") { if (++controls === 1) throw new Error("Unable to pause"); return null; }
+    if (command === "orchestra.snapshot") return store.get().orchestra;
+    throw new Error(command);
+  } } as unknown as HostClient, store);
+  await controller.controlWorkflow("workflow", "pause");
+  assert.deepEqual(store.get().workflowControls?.["workflow"], { action: "pause", pending: false, error: "Unable to pause" });
+  await controller.controlWorkflow("workflow", "pause");
+  assert.equal(controls, 2);
+  assert.equal(store.get().workflowControls?.["workflow"], undefined);
+});
+
+test("orchestra links retain the exact historical run and worker target", () => {
+  const store = new ImmediateStore();
+  store.update((state) => ({ ...state, selection: { sessionId: "session" } }));
+  const controller = new Controller({ call: () => { throw new Error("Same-session navigation is local"); } } as unknown as HostClient, store);
+  const target = { sessionId: "session", workflowRunId: "older-run", workerId: "previous-revision" };
+  controller.openOrchestra(target);
+  assert.deepEqual(store.get().orchestraTarget, { ...target, seq: 1 });
+  assert.equal(store.get().toolRequest?.id, "orchestration");
+  controller.openOrchestra(target);
+  assert.equal(store.get().orchestraTarget?.seq, 2);
 });
 
 test("provider diagnostics suppress duplicate clicks and clear stale successes on retry failure", async () => {
@@ -372,6 +447,8 @@ test("host exit replaces loading runs with unknown history and preserves streame
   store.update((state) => ({ ...state, session, selection: { projectId: "project", sessionId: "session" } }));
   emit({ type: "run.started", run: { ...run, status: "running" } });
   emit({ type: "run.event", runId: run.id, index: 0, event: { type: "message_delta", text: "Partial work" } });
+  store.update((state) => ({ ...state, orchestra: { ...state.orchestra, runs: [{ id: "workflow-run", sessionId: "session", workflow: { id: "workflow", name: "Feature", description: "", revision: 1, steps: [] }, prompt: "Task", status: "running", stepIndex: 0, workers: [], reviewRounds: {}, defaultModel: { providerId: "fake", runtimeId: "fake-runtime", model: "test" }, permissionMode: "ask", revision: 1, createdAt: stamp, updatedAt: stamp }] } }));
+
   emit({ type: "host.status", status: "exited", detail: "Host stopped" });
   assert.deepEqual(store.get().live, {});
   assert.equal(store.get().runs[0]?.status, "unknown");
@@ -379,6 +456,9 @@ test("host exit replaces loading runs with unknown history and preserves streame
   assert.match(store.get().runs[0]?.error ?? "", /host stopped/);
   emit({ type: "run.started", run: { ...run, status: "running" } });
   assert.deepEqual(store.get().live, {}, "late IPC must not resurrect a dead host run");
+  assert.equal(store.get().orchestra.runs[0]?.status, "interrupted");
+  emit({ type: "orchestra.changed" });
+  assert.equal(store.get().orchestra.runs[0]?.status, "interrupted", "late workflow events must not revive running indicators");
 });
 
 test("only explicitly confirmed deletion sends force and cancellation errors restore retry", async () => {

@@ -1,3 +1,4 @@
+import { isWorkflowActive } from "../../../features/orchestration/types.js";
 /**
  * Unified project navigator.
  *
@@ -278,14 +279,16 @@ export function mountNavigator(root: HTMLElement, store: Store, controller: Cont
  * renderer reloads and reflects answers given from any client.
  */
 function waitingKey(state: AppState): string {
-  return [...new Set(Object.values(state.live)
+  const workflows = state.orchestra.runs;
+  const parentFor = (runId: string, fallback: string) => workflows.find((run) => run.workers.some((worker) => worker.runId === runId))?.sessionId ?? state.orchestra.generations?.find((entry) => entry.executionId === runId)?.sessionId ?? fallback;
+  return [...new Set([...Object.values(state.live)
     .filter((live) => live.pendingApprovals.length > 0 || (live.pendingQuestions?.length ?? 0) > 0)
-    .map((live) => live.run.sessionId))].sort().join("|");
+    .map((live) => parentFor(live.run.id, live.run.sessionId)), ...workflows.filter((run) => run.status === "waiting_approval").map((run) => run.sessionId)])].sort().join("|");
 }
 
 /** Sorted IDs of sessions with at least one active host run. */
 function runningKey(state: AppState): string {
-  return [...new Set(Object.values(state.live).map((live) => live.run.sessionId))].sort().join("|");
+  return [...new Set([...Object.values(state.live).map((live) => live.run.sessionId), ...state.orchestra.runs.filter(isWorkflowActive).map((run) => run.sessionId), ...(state.orchestra.generations ?? []).map((entry) => entry.sessionId)])].sort().join("|");
 }
 
 function basename(path: string): string {

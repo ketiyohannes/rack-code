@@ -112,6 +112,9 @@ export function applyEvent(state: TranscriptState, event: RuntimeEvent): Transcr
     case "usage":
       return { ...state, usage: mergeUsage(state.usage, event) };
     case "availability":
+      // "Available" is routine (providers report it after ordinary turns) and
+      // is reflected on the Accounts page; only problems belong in the reply.
+      if (event.status === "available") return state;
       return {
         ...state,
         items: [...state.items, {
