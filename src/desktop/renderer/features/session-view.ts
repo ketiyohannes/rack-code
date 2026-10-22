@@ -45,6 +45,8 @@ import { type TranscriptItem, type TranscriptState } from "../transcript.js";
 import { reconcileChildren, TranscriptCache } from "../render-cache.js";
 import { accountLabel, isActiveStatus } from "./run-format.js";
 import { importedTool, presentTool } from "./tool-presentation.js";
+import { collectRunChanges, type RunFileChange } from "./run-changes.js";
+import { renderFileDiff, renderFileRow } from "./changes-view.js";
 import { formatAttachmentSize } from "./attachments.js";
 import { compacts, groupConsecutiveActivity, type ActivityItem } from "./tool-groups.js";
 import { renderWorkspaceChip } from "./workspace.js";
@@ -59,7 +61,10 @@ interface ViewMemory {
   readonly expandedPrompts: Set<string>;
   readonly openTools: Set<string>;
   readonly openToolGroups: Set<string>;
-  readonly collapsedThinking: Set<string>;
+  /** Selected file in each reply's "files changed" card, by run ID. */
+  readonly selectedChanges: Map<string, string>;
+  /** Inline/split diff choice shared by every reply's changes card. */
+  readonly splitChanges: { value: boolean };
 }
 
 export function mountSessionView(root: HTMLElement, header: HTMLElement, store: Store, controller: Controller): void {
@@ -83,7 +88,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     ];
   });
 
-  const memory: ViewMemory = { expandedPrompts: new Set(), openTools: new Set(), openToolGroups: new Set(), collapsedThinking: new Set() };
+  const memory: ViewMemory = { expandedPrompts: new Set(), openTools: new Set(), openToolGroups: new Set(), selectedChanges: new Map(), splitChanges: { value: false } };
   let current: AppState | undefined;
   const folds = new TranscriptCache();
   const turns = new Map<string, { signature: readonly unknown[]; node: HTMLElement }>();
@@ -336,6 +341,10 @@ function renderTurn(
   }
 
   const active = isActiveStatus(run.status);
+  // Edits appear once the response has finished, so the summary does not
+  // grow and reflow while the agent is still working.
+  const changes = active || folded === undefined ? [] : collectRunChanges(folded.items);
+  if (changes.length > 0) reply.push(renderRunChanges(run.id, changes, memory, rerender, actions.openPath));
   const meta = active ? h("div", { class: "run-progress", role: "status", aria: { label: live?.cancelRequested ? "Stopping" : "Run in progress" } },
     h("span", { class: "progress-dots", aria: { hidden: "true" } }, h("span"), h("span"), h("span")),
   ) : h("div", { class: "turn-meta" },
@@ -388,7 +397,7 @@ function renderItem(
 ): Node {
   switch (item.kind) {
     case "text": return h("div", { class: "md" }, renderMarkdown(item.text, actions));
-    case "thinking": return thinkingLine(key, memory, item.text, item.format, actions);
+    case "thinking": return thinkingLine(item.text, item.format, actions);
     case "tool": return activityLine(key, memory, item, active, actions.openPath);
     case "tool_output": return activityLine(key, memory, {
       kind: "tool", tool: "Tool output", input: undefined, output: item.output, hasOutput: true, finished: true,
@@ -436,7 +445,7 @@ function renderActivityGroup(key: string, entries: readonly { key: string; item:
 function renderActivityEntry(entry: { key: string; item: ActivityItem }, memory: ViewMemory, actions: MarkdownActions, active: boolean): HTMLElement {
   const { key, item } = entry;
   return item.kind === "thinking"
-    ? thinkingLine(key, memory, item.text, item.format, actions)
+    ? thinkingLine(item.text, item.format, actions)
     : activityLine(key, memory, asTool(item), active, actions.openPath);
 }
 
@@ -488,33 +497,76 @@ function activityLine(key: string, memory: ViewMemory, item: Extract<TranscriptI
 }
 
 /**
- * Exposed thinking text, shown directly with a lightbulb and no text label.
- *
- * The trace is open by default. The lightbulb is the only control: it
- * collapses the trace to a one-line preview and expands it again, and the
- * choice survives re-renders through `memory.collapsedThinking`. Summaries
- * and readable traces must stay distinguishable (architecture: runtime
- * activity presentation), so the kind is carried by the button's accessible
- * name and tooltip rather than a visible heading.
+ * Exposed thinking text, shown directly as muted prose beside a thin rule,
+ * with no icon, label or collapse control. Summaries and readable traces must
+ * stay distinguishable (architecture: runtime activity presentation), so the
+ * kind is carried by the panel's accessible name and tooltip.
  */
-function thinkingLine(key: string, memory: ViewMemory, text: string, format: "trace" | "summary" | undefined, actions: MarkdownActions): HTMLElement {
+function thinkingLine(text: string, format: "trace" | "summary" | undefined, actions: MarkdownActions): HTMLElement {
   const kind = format === "summary" ? "Reasoning summary" : format === "trace" ? "Thinking trace" : "Thinking";
-  const prose = h("div", { class: "thinking-prose md" }, renderMarkdown(text, actions));
-  const toggle = h("button", { class: "thinking-toggle", type: "button" }, icon("lightbulb"));
-  const panel = h("div", { class: "thinking-panel", data: { format: format ?? "unknown" } }, toggle, prose);
-  const sync = () => {
-    const collapsed = memory.collapsedThinking.has(key);
-    panel.classList.toggle("collapsed", collapsed);
-    toggle.setAttribute("aria-expanded", String(!collapsed));
-    toggle.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${kind.toLowerCase()}`);
-    toggle.title = kind;
+  return h("div", { class: "thinking-panel", title: kind, role: "note", aria: { label: kind }, data: { format: format ?? "unknown" } },
+    h("div", { class: "thinking-prose md" }, renderMarkdown(text, actions)));
+}
+
+/**
+ * Collapsible summary of the files a finished response edited, placed at the
+ * end of the reply. Collapsed by default. Inside, files and the selected
+ * file's diff render through the Changes tab's own components
+ * (`renderFileRow`/`renderFileDiff`), so rows, status letters, colors, font
+ * sizes and the inline/split toggle match it exactly. Selection, split mode
+ * and open state live in ViewMemory and survive redraws. Rows come from the
+ * run's own tool activity (see run-changes.ts); the Changes tab remains the
+ * complete working-tree view.
+ */
+const MAX_CHANGE_ROWS = 2000;
+function renderRunChanges(runId: string, changes: readonly RunFileChange[], memory: ViewMemory, rerender: () => void, openPath?: (path: string) => void): HTMLElement {
+  const key = `${runId}:changes`;
+  const added = changes.reduce((sum, file) => sum + file.additions, 0);
+  const removed = changes.reduce((sum, file) => sum + file.deletions, 0);
+  const selected = changes.find((file) => file.path === memory.selectedChanges.get(runId));
+  const select = (path?: string) => {
+    if (path === undefined) memory.selectedChanges.delete(runId); else memory.selectedChanges.set(runId, path);
+    rerender();
   };
-  toggle.addEventListener("click", () => {
-    if (memory.collapsedThinking.has(key)) memory.collapsedThinking.delete(key); else memory.collapsedThinking.add(key);
-    sync();
+  const list = h("div", { class: "git-file-list", role: "listbox", aria: { label: "Files changed in this reply" } },
+    ...changes.map((file) => renderFileRow(file, file === selected, "changed in this reply", () => select(file.path))));
+  const body = h("div", { class: "run-changes-body" }, list);
+  if (selected !== undefined) {
+    const rows = selected.rows.slice(0, MAX_CHANGE_ROWS);
+    body.append(renderFileDiff({
+      path: selected.path, status: selected.status, rows, source: "This reply",
+      ...(rows.length < selected.rows.length ? { notice: `Showing the first ${MAX_CHANGE_ROWS} lines. Open the Changes tab for the full diff.` } : {}),
+      split: memory.splitChanges.value,
+      toggleSplit: () => { memory.splitChanges.value = !memory.splitChanges.value; rerender(); },
+      openFile: (path) => openPath?.(path),
+      close: () => select(undefined),
+    }));
+  }
+  // Same keyboard model as the Changes tab file list.
+  list.addEventListener("keydown", (event) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const rows = [...list.querySelectorAll<HTMLButtonElement>(".git-file-row")];
+    const current = rows.indexOf(event.target as HTMLButtonElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : (current + (event.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length;
+    event.preventDefault(); rows[next]?.focus();
   });
-  sync();
-  return panel;
+  const details = h("details", { class: "run-changes", open: memory.openToolGroups.has(key), data: { runChanges: runId } },
+    h("summary", {}, icon("git-diff"),
+      h("span", { class: "run-changes-title" }, `${changes.length} ${changes.length === 1 ? "file" : "files"} changed`),
+      h("span", { class: "run-changes-stats" }, h("span", { class: "added" }, `+${added}`), h("span", { class: "removed" }, `−${removed}`)),
+      icon("caret-right", { className: "activity-caret" })),
+    body);
+  rememberOpen(details, key, memory.openToolGroups);
+  return details;
+}
+
+/** Keeps a disclosure's open state in view memory across transcript redraws. */
+function rememberOpen(details: HTMLDetailsElement, key: string, memory: Set<string>): void {
+  details.addEventListener("toggle", () => {
+    // Detached disclosures can still deliver queued toggle events after a redraw.
+    if (!details.isConnected) return;
+    if (details.open) memory.add(key); else memory.delete(key);
+  });
 }
 
 /** Links open in the browser; paths open through main, relative to the session's project. */
@@ -562,8 +614,8 @@ function renderWorkflowTurn(run: WorkflowRun, state: AppState, controller: Contr
   const reply = state.session?.messages.find((message) => message.role === "assistant" && message.metadata?.["workflowRunId"] === run.id);
   return h("article", { class: "turn orchestra-turn", id: `workflow-${run.id}` },
     h("div", { class: "prompt-bubble" }, run.prompt),
-    h("button", { class: "orchestra-turn-status", type: "button", onClick: () => controller.openTool("orchestration") }, icon("flow-arrow"), h("strong", {}, run.workflow.name), h("span", {}, workflowStatusLabel(run.status)), icon("caret-right")),
-    h("div", { class: "orchestra-turn-agents" }, ...run.workers.map((worker) => h("span", {}, icon(worker.status === "completed" ? "check-circle" : worker.status === "running" ? "circle-notch" : worker.status === "failed" ? "warning-circle" : "clock"), worker.name))),
+    h("button", { class: "orchestra-turn-status", type: "button", onClick: () => controller.openOrchestra({ sessionId: run.sessionId, workflowRunId: run.id }) }, icon("flow-arrow"), h("strong", {}, run.workflow.name), h("span", {}, workflowStatusLabel(run.status)), icon("caret-right")),
+    h("div", { class: "orchestra-turn-agents" }, ...run.workers.map((worker) => h("span", {}, icon(worker.status === "completed" ? "check-circle" : worker.status === "running" ? "circle-notch" : worker.status === "failed" ? "warning-circle" : "clock", { className: worker.status === "running" ? "spin" : "" }), worker.name))),
     reply ? h("div", { class: "assistant-message markdown" }, renderMarkdown(reply.content, markdownActions(controller))) : run.error ? h("p", { class: "error-line" }, run.error) : isWorkflowActive(run) ? h("p", { class: "note" }, run.status === "waiting_approval" ? "Review the plan in Orchestration, then approve to continue." : "Your agents are working. Follow their activity in Orchestration.") : null,
     h("div", { class: "turn-footer" }, formatTime(run.createdAt)));
 }

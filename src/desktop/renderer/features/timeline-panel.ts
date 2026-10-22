@@ -150,7 +150,7 @@ export function createTimelinePanel(store: Store, controller: Controller, isVisi
   store.watch((state) => [state.orchestra, state.selection.sessionId], (_slice, state) => {
     const runs = state.orchestra.runs.filter((run) => run.sessionId === state.selection.sessionId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
     orchestraActivity.hidden = runs.length === 0;
-    replace(orchestraActivity, h("span", { class: "label" }, "AGENT ACTIVITY"), ...runs.map((run) => h("button", { class: "orchestra-timeline-run", type: "button", onClick: () => controller.openTool("orchestration") }, icon("flow-arrow"), h("span", {}, h("strong", {}, run.workflow.name), h("small", {}, run.workers.map((worker) => `${worker.name}: ${worker.status}`).join(" · ") || "Starting workflow")), icon("caret-right"))));
+    replace(orchestraActivity, h("span", { class: "label" }, "AGENT ACTIVITY"), ...runs.map((run) => h("button", { class: "orchestra-timeline-run", type: "button", onClick: () => controller.openOrchestra({ sessionId: run.sessionId, workflowRunId: run.id }) }, icon("flow-arrow"), h("span", {}, h("strong", {}, run.workflow.name), h("small", {}, run.workers.map((worker) => `${worker.name}: ${worker.status}`).join(" · ") || "Starting workflow")), icon("caret-right"))));
   });
   const element = h("div", { class: "git-changes-content timeline-content" }, orchestraActivity, repositoryContext, tabs, branchControls, controls, notices, list);
 

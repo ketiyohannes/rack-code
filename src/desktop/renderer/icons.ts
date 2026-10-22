@@ -77,7 +77,6 @@ import SidebarSimple from "@phosphor-icons/core/assets/regular/sidebar-simple.sv
 import Globe from "@phosphor-icons/core/assets/regular/globe.svg";
 import Files from "@phosphor-icons/core/assets/regular/files.svg";
 import ClockCounterClockwise from "@phosphor-icons/core/assets/regular/clock-counter-clockwise.svg";
-import Lightbulb from "@phosphor-icons/core/assets/regular/lightbulb.svg";
 import Brain from "@phosphor-icons/core/assets/regular/brain.svg";
 import Gauge from "@phosphor-icons/core/assets/regular/gauge.svg";
 import FlowArrow from "@phosphor-icons/core/assets/regular/flow-arrow.svg";
@@ -182,7 +181,6 @@ const ICONS = {
   "globe": Globe,
   "files": Files,
   "clock-counter-clockwise": ClockCounterClockwise,
-  "lightbulb": Lightbulb,
   "brain": Brain,
   "gauge": Gauge,
   "flow-arrow": FlowArrow,

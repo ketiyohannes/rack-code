@@ -64,18 +64,9 @@ export function renderRepositoryChanges(input: RepositoryViewInput): HTMLElement
     const details = h("details", { class: "git-change-group", open: !memory.collapsedGroups.has(key) },
       h("summary", {}, icon("caret-right", { className: "activity-caret" }), h("span", {}, group.label), h("span", { class: "git-group-count" }, entries.length)),
       h("div", { class: "git-file-list", role: "listbox", aria: { label: group.label } }, ...entries.map((file) => {
-        const status = STATUS[file.status];
-        const name = basename(file.path);
-        const folder = file.path.slice(0, Math.max(0, file.path.lastIndexOf("/")));
-        return h("button", {
-          class: `git-file-row status-${file.status}${file === selected ? " selected" : ""}`, type: "button", role: "option",
-          title: `${file.path} · ${status.label}${file.previousPath === undefined ? "" : ` · from ${file.previousPath}`}`,
-          aria: { selected: String(file === selected), label: `${file.path}, ${status.label}, ${group.label}` },
-          data: { changePath: file.path, changeGroup: file.group }, onClick: () => {
-            memory.selectedFiles.set(input.key, fileKey(file)); input.redraw();
-          },
-        }, icon("file-text"), h("span", { class: "git-file-name" }, name), h("span", { class: "git-file-directory" }, folder),
-          h("span", { class: "git-file-status", title: status.label }, status.letter));
+        return renderFileRow(file, file === selected, `${group.label}`, () => {
+          memory.selectedFiles.set(input.key, fileKey(file)); input.redraw();
+        });
       })),
     );
     details.addEventListener("toggle", () => {
@@ -98,22 +89,65 @@ export function renderRepositoryChanges(input: RepositoryViewInput): HTMLElement
 }
 
 function renderDiff(file: ProjectChangeFile, input: RepositoryViewInput): HTMLElement {
-  const rows = diffRows(file.diff);
-  const diff = h("div", { class: "git-file-diff", aria: { label: `${file.path} diff` }, data: { diffPath: file.path } },
-    h("div", { class: "git-diff-heading" }, h("span", { class: "git-diff-filename", title: file.path }, basename(file.path)),
-      h("span", { class: "git-diff-source" }, file.group === "staged" ? "Index" : file.group === "conflicts" ? "Conflict" : "Working Tree"),
-      h("button", { class: "icon-button", type: "button", aria: { label: "Toggle split diff", pressed: String(input.memory.split) }, title: input.memory.split ? "Show inline diff" : "Show split diff", onClick: () => {
-        input.memory.split = !input.memory.split; input.redraw();
-      } }, icon("sidebar-simple")),
-      h("button", { class: "icon-button", type: "button", title: "Open file", aria: { label: "Open changed file" }, disabled: file.status === "deleted", onClick: () => input.openFile(file.path) }, icon("arrow-up-right")),
-      h("button", { class: "icon-button", type: "button", title: "Close diff", aria: { label: "Close diff" }, onClick: () => {
-        input.memory.selectedFiles.delete(input.key); input.redraw();
-      } }, icon("x"))),
-    file.previousPath === undefined ? null : h("p", { class: "git-preview-note" }, `${file.previousPath} → ${file.path}`),
-    file.notice === undefined ? null : h("p", { class: "git-preview-note" }, file.notice),
+  return renderFileDiff({
+    path: file.path, status: file.status, rows: diffRows(file.diff),
+    source: file.group === "staged" ? "Index" : file.group === "conflicts" ? "Conflict" : "Working Tree",
+    ...(file.previousPath === undefined ? {} : { previousPath: file.previousPath }),
+    ...(file.notice === undefined ? {} : { notice: file.notice }),
+    split: input.memory.split,
+    toggleSplit: () => { input.memory.split = !input.memory.split; input.redraw(); },
+    openFile: input.openFile,
+    close: () => { input.memory.selectedFiles.delete(input.key); input.redraw(); },
+  });
+}
+
+/**
+ * One file row exactly as the Changes tab shows it: file icon, name, folder
+ * and a colored status letter. Shared with the transcript's per-reply
+ * "files changed" card so both surfaces look and behave the same.
+ */
+export function renderFileRow(file: { readonly path: string; readonly status: ProjectChangeStatus; readonly previousPath?: string }, selected: boolean, context: string, select: () => void): HTMLElement {
+  const status = STATUS[file.status];
+  const name = basename(file.path);
+  const folder = file.path.slice(0, Math.max(0, file.path.lastIndexOf("/")));
+  return h("button", {
+    class: `git-file-row status-${file.status}${selected ? " selected" : ""}`, type: "button", role: "option",
+    title: `${file.path} · ${status.label}${file.previousPath === undefined ? "" : ` · from ${file.previousPath}`}`,
+    aria: { selected: String(selected), label: `${file.path}, ${status.label}, ${context}` },
+    data: { changePath: file.path }, onClick: select,
+  }, icon("file-text"), h("span", { class: "git-file-name" }, name), h("span", { class: "git-file-directory" }, folder),
+    h("span", { class: "git-file-status", title: status.label }, status.letter));
+}
+
+/** Inputs for the shared numbered diff view. */
+export interface FileDiffInput {
+  readonly path: string;
+  readonly status: ProjectChangeStatus;
+  readonly rows: readonly DiffRow[];
+  /** Where the diff comes from, for example "Working Tree" or "This reply". */
+  readonly source: string;
+  readonly previousPath?: string;
+  readonly notice?: string;
+  readonly split: boolean;
+  readonly toggleSplit: () => void;
+  readonly openFile: (path: string) => void;
+  readonly close: () => void;
+}
+
+/** The selected file's diff, inline or split, as used by the Changes tab. */
+export function renderFileDiff(input: FileDiffInput): HTMLElement {
+  const { rows } = input;
+  const diff = h("div", { class: "git-file-diff", aria: { label: `${input.path} diff` }, data: { diffPath: input.path } },
+    h("div", { class: "git-diff-heading" }, h("span", { class: "git-diff-filename", title: input.path }, basename(input.path)),
+      h("span", { class: "git-diff-source" }, input.source),
+      h("button", { class: "icon-button", type: "button", aria: { label: "Toggle split diff", pressed: String(input.split) }, title: input.split ? "Show inline diff" : "Show split diff", onClick: input.toggleSplit }, icon("sidebar-simple")),
+      h("button", { class: "icon-button", type: "button", title: "Open file", aria: { label: "Open changed file" }, disabled: input.status === "deleted", onClick: () => input.openFile(input.path) }, icon("arrow-up-right")),
+      h("button", { class: "icon-button", type: "button", title: "Close diff", aria: { label: "Close diff" }, onClick: input.close }, icon("x"))),
+    input.previousPath === undefined ? null : h("p", { class: "git-preview-note" }, `${input.previousPath} → ${input.path}`),
+    input.notice === undefined ? null : h("p", { class: "git-preview-note" }, input.notice),
   );
-  if (rows.length === 0) diff.append(h("p", { class: "git-empty" }, file.notice === undefined ? "No text differences in this file." : "Preview unavailable"));
-  else if (input.memory.split) {
+  if (rows.length === 0) diff.append(h("p", { class: "git-empty" }, input.notice === undefined ? "No text differences in this file." : "Preview unavailable"));
+  else if (input.split) {
     const aligned = splitDiffRows(rows);
     const panes = [true, false].map((old) => h("div", { class: "git-split-pane", data: { diffSide: old ? "old" : "current" } },
       ...aligned.map((row) => row.heading === undefined ? splitCell(old ? row.old : row.current, old) : h("div", { class: "git-diff-hunk" }, row.heading.text))));

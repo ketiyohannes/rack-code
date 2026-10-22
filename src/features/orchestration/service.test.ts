@@ -1,7 +1,7 @@
 /** Scheduler behavior is verified without provider credentials or model calls. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OrchestraService } from "./service.js";
+import { OrchestraService, parseVerdict } from "./service.js";
 import { validateWorkflow, type OrchestraSnapshot, type OrchestraStore, type WorkflowDefinition, type WorkflowStep } from "./types.js";
 import { SessionsService } from "../../core/sessions/service.js";
 import { InMemorySessionStore } from "../../core/sessions/in-memory-store.js";
@@ -20,12 +20,12 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const end = Date.now() + 3000;
   while (!await check()) { if (Date.now() > end) throw new Error("Timed out waiting for workflow state."); await new Promise((resolve) => setTimeout(resolve, 2)); }
 }
-async function setup() {
+async function setup(startGate?: Promise<void>) {
   const store = new MemoryStore();
   const sessions = new SessionsService(new InMemorySessionStore(), { workspace: async (id) => `/tmp/chat-${id}` });
   await sessions.create({ id: "root" });
   const calls: { input: StartRunInput; settle: (result?: string, status?: RunRecord["status"]) => void; cancelled: boolean }[] = [];
-  const execution = { async start(input: StartRunInput): Promise<ExecutionHandle> {
+  const execution = { conversationContext: async (sessionId: string) => `context of ${sessionId}`, async start(input: StartRunInput): Promise<ExecutionHandle> {
     const id = `run-${calls.length}`;
     let resolve!: (run: RunRecord) => void;
     const completed = new Promise<RunRecord>((done) => { resolve = done; });
@@ -33,6 +33,7 @@ async function setup() {
       resolve({ id, sessionId: input.sessionId, providerId: input.providerId, accountId: "test-account", model: input.model ?? "default", prompt: input.prompt, permissionMode: input.permissionMode, status, result, attemptIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     } };
     calls.push(call);
+    if (startGate) await startGate;
     return { runId: id, attemptId: id, completed, events: (async function* () { await completed; })(), respondToApproval() {}, async cancel() { call.cancelled = true; call.settle("Interrupted", "interrupted"); } };
   } };
   const service = new OrchestraService(store, execution, sessions);
@@ -120,7 +121,7 @@ test("restart preserves history and never replays uncertain work", async () => {
   const run = await service.start(base, "workflow"); await until(() => calls.length === 1);
   const restoredStore = new MemoryStore(); restoredStore.state = structuredClone(store.state);
   let executions = 0;
-  const restored = new OrchestraService(restoredStore, { start: async () => { executions++; throw new Error("Must not execute"); } }, sessions);
+  const restored = new OrchestraService(restoredStore, { conversationContext: async () => undefined, start: async () => { executions++; throw new Error("Must not execute"); } }, sessions);
   await restored.initialize();
   assert.equal(restoredStore.state.runs[0]!.status, "interrupted"); assert.equal(executions, 0);
   await assert.rejects(restored.control(run.id, "resume"), /no longer active/);
@@ -165,4 +166,82 @@ test("workflow generation uses a read-only model request and validates its outpu
   const invalid = service.generate("root", "Run a workflow", { providerId: "alpha", runtimeId: "alpha-runtime", model: "model-a" });
   await until(() => calls.length === 2); calls[1]!.settle('{"steps":[]}');
   await assert.rejects(invalid, /valid coordinator|workflow needs/);
+});
+
+test("review verdicts tolerate model formatting but still require an explicit verdict line", () => {
+  assert.equal(parseVerdict("Looks good.\nVERDICT: APPROVED"), "APPROVED");
+  assert.equal(parseVerdict("Findings...\n\n**VERDICT: CHANGES_REQUESTED**\n"), "CHANGES_REQUESTED");
+  assert.equal(parseVerdict("`VERDICT: approved.`\nLet me know if you need anything else."), "APPROVED");
+  assert.equal(parseVerdict("VERDICT: changes requested"), "CHANGES_REQUESTED");
+  assert.equal(parseVerdict("I would say this is APPROVED overall."), undefined);
+  assert.equal(parseVerdict("VERDICT: APPROVED\n1\n2\n3\n4\n5"), undefined, "only the closing lines are considered");
+});
+
+test("designer executions expose a transient root association and cancel without saving a draft", async () => {
+  const { service, calls, store } = await setup();
+  const generated = service.generate("root", "Ask a question", { providerId: "alpha", runtimeId: "alpha-runtime", model: "model-a" }, "designer-request");
+  const rejected = assert.rejects(generated, /cancelled/);
+  await until(async () => (await service.snapshot()).generations?.[0]?.executionId === "run-0");
+  assert.deepEqual((await service.snapshot()).generations, [{ id: "designer-request", sessionId: "root", executionId: "run-0", stopping: false }]);
+  assert.equal(service.isBusy("root"), true);
+  assert.equal(store.state.generations, undefined, "designer associations must never enter durable storage");
+  await Promise.all([service.cancelGeneration("designer-request"), service.cancelGeneration("designer-request")]);
+  await rejected;
+  assert.equal(calls[0]!.cancelled, true);
+  assert.equal(service.isBusy("root"), false);
+  assert.deepEqual((await service.snapshot()).generations, []);
+  assert.deepEqual(store.state.workflows, []);
+});
+
+test("cancelling a designer before its execution starts prevents launching it", async () => {
+  const { service, calls } = await setup();
+  const generated = service.generate("root", "Cancel immediately", { providerId: "alpha", runtimeId: "alpha-runtime", model: "model-a" }, "early-request");
+  const rejected = assert.rejects(generated, /cancelled/);
+  await service.cancelGeneration("early-request");
+  await rejected;
+  assert.equal(calls.length, 0);
+  assert.equal(service.isBusy("root"), false);
+});
+
+test("shutdown also settles a designer execution waiting for input", async () => {
+  const { service, calls } = await setup();
+  const generated = service.generate("root", "Wait for an answer", { providerId: "alpha", runtimeId: "alpha-runtime", model: "model-a" }, "shutdown-request");
+  const rejected = assert.rejects(generated, /cancelled/);
+  await until(async () => !!(await service.snapshot()).generations?.[0]?.executionId);
+  await service.stopAll(); await rejected;
+  assert.equal(calls[0]!.cancelled, true);
+  assert.equal(service.isBusy("root"), false);
+});
+
+test("designer cancellation waits for an in-flight execution start and cancels its eventual handle", async () => {
+  let release!: () => void;
+  const { service, calls } = await setup(new Promise<void>((resolve) => { release = resolve; }));
+  const generated = service.generate("root", "Slow startup", { providerId: "alpha", runtimeId: "alpha-runtime", model: "model-a" }, "starting-request");
+  const rejected = assert.rejects(generated, /cancelled/);
+  await until(() => calls.length === 1);
+  let stopped = false;
+  const cancelled = service.cancelGeneration("starting-request").then(() => { stopped = true; });
+  assert.equal(stopped, false);
+  assert.equal((await service.snapshot()).generations?.[0]?.stopping, true);
+  release(); await cancelled; await rejected;
+  assert.equal(calls[0]!.cancelled, true);
+  assert.equal(service.isBusy("root"), false);
+});
+
+test("designer observation failure cancels its execution before removing the association", async () => {
+  const { service, calls } = await setup();
+  service.observeExecutions(async () => { throw new Error("Host observation failed"); });
+  await assert.rejects(service.generate("root", "Draft a workflow", { providerId: "alpha", runtimeId: "alpha-runtime", model: "model-a" }, "observation-request"), /Host observation failed/);
+  assert.equal(calls[0]!.cancelled, true);
+  assert.equal(service.isBusy("root"), false);
+  assert.deepEqual((await service.snapshot()).generations, []);
+});
+
+test("workers are briefed with the existing conversation of the session", async () => {
+  const { service, calls, sessions } = await setup();
+  await sessions.appendMessage("root", { role: "user", content: "Earlier work" });
+  await service.save(definition([agent("build")]));
+  const run = await service.start(base, "workflow"); await until(() => calls.length === 1);
+  assert.match(calls[0]!.input.prompt, /CONVERSATION CONTEXT \(historical data\):\ncontext of root/);
+  await service.control(run.id, "stop");
 });

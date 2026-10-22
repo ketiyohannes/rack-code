@@ -9,7 +9,7 @@ import type { ModelView } from "../../../contracts/desktop/index.js";
 import { h, replace } from "../dom.js";
 import { icon } from "../icons.js";
 import { openPopover, type PopoverHandle } from "./popover.js";
-import { effortStops, fastOptions, modelKey, PROVIDER_DEFAULT, selectedEffort, selectedSpeed } from "./model-settings.js";
+import { effortStops, fastOptions, modelKey, PROVIDER_DEFAULT, selectedEffort, selectedSpeed, resolveModelSelectionKey } from "./model-settings.js";
 import { favoriteModels } from "../model-favorites.js";
 
 export interface ModelPicker {
@@ -17,8 +17,20 @@ export interface ModelPicker {
   readonly selected: ModelView | undefined;
   readonly reasoningEffort: string | undefined;
   readonly speed: string | undefined;
+  /** Retains routing even when the catalog/favorites temporarily omit it. */
+  readonly selection: ModelPickerSelection | undefined;
+  readonly unavailable: boolean;
+  /** Restores a session choice without firing onChange or choosing a substitute. */
+  setSelection(selection: ModelPickerSelection | undefined): void;
   update(models: readonly ModelView[], favoriteKeys: readonly string[]): void;
   setDisabled(disabled: boolean): void;
+}
+
+export interface ModelPickerSelection {
+  readonly key: string;
+  readonly label?: string;
+  readonly reasoningEffort?: string;
+  readonly speed?: string;
 }
 
 export function createModelPicker(onChange: () => void, onManageFavorites: () => void): ModelPicker {
@@ -26,12 +38,13 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
   let catalog: readonly ModelView[] | undefined;
   let favorites: readonly string[] | undefined;
   let selectedKey: string | undefined;
+  let selectedLabel: string | undefined;
   let popover: PopoverHandle | undefined;
   let body: HTMLElement | undefined;
   let stage: "models" | "settings" = "models";
   let preferredEffort = load("composer.reasoningEffort");
   let preferredFast = load("composer.fast") === "true" ? true : load("composer.fast") === "false" ? false : undefined;
-  const legacySpeed = load("composer.speed");
+  let legacySpeed = load("composer.speed");
   const selected = () => models.find((entry) => modelKey(entry) === selectedKey);
   const reasoning = () => {
     const entry = selected();
@@ -59,7 +72,7 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
     const options = entry === undefined ? undefined : fastOptions(entry);
     const fast = options !== undefined && options.fast.id === speed();
     replace(trigger,
-      h("span", { class: "dropdown-value" }, entry?.label ?? (catalog?.length ? "Choose favorites" : "Choose a model")),
+      h("span", { class: "dropdown-value" }, entry?.label ?? (selectedKey ? `${selectedLabel ?? selectedKey.split("|").at(-1)} · unavailable` : catalog?.length ? "Choose favorites" : "Choose a model")),
       effort === undefined ? null : h("span", { class: "model-pill-effort" }, effort.label),
       fast ? icon("lightning", { className: "model-pill-fast" }) : null,
       icon("caret-up-down", { className: "dropdown-caret" }));
@@ -111,7 +124,7 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
           title: entry.description ?? entry.label,
           aria: { pressed: String(modelKey(entry) === selectedKey) }, data: { modelKey: modelKey(entry) },
           onClick: () => {
-            selectedKey = modelKey(entry); stage = "settings";
+            selectedKey = modelKey(entry); selectedLabel = entry.label; stage = "settings";
             renderTrigger(); renderBody(); onChange();
             container.querySelector<HTMLElement>(".reasoning-slider:not(:disabled), .fast-toggle:not(:disabled), .model-done")?.focus();
           },
@@ -184,6 +197,7 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
     fast.addEventListener("click", () => {
       if (options === undefined) return;
       preferredFast = speed() !== options.fast.id; save("composer.fast", String(preferredFast));
+      legacySpeed = speed();
       syncFast(); renderTrigger(); onChange();
     });
     syncFast();
@@ -200,12 +214,28 @@ export function createModelPicker(onChange: () => void, onManageFavorites: () =>
   renderTrigger();
   return {
     element: trigger, get selected() { return selected(); }, get reasoningEffort() { return reasoning(); }, get speed() { return speed(); },
+    get selection() {
+      const effort = selected() ? reasoning() : preferredEffort === PROVIDER_DEFAULT ? undefined : preferredEffort;
+      const chosenSpeed = selected() ? speed() : legacySpeed;
+      return selectedKey ? { key: selectedKey, label: selected()?.label ?? selectedLabel ?? selectedKey.split("|").at(-1)!, ...(effort === undefined ? {} : { reasoningEffort: effort }), ...(chosenSpeed === undefined ? {} : { speed: chosenSpeed }) } : undefined;
+    },
+    get unavailable() { return selectedKey !== undefined && selected() === undefined; },
+    setSelection(value) {
+      popover?.close();
+      selectedKey = resolveModelSelectionKey(catalog ?? [], value?.key); selectedLabel = value?.label;
+      preferredEffort = value?.reasoningEffort ?? PROVIDER_DEFAULT;
+      legacySpeed = value?.speed;
+      preferredFast = undefined;
+      renderTrigger();
+    },
     update(next, favoriteKeys) {
-      if (catalog === next && favorites === favoriteKeys) return;
+      if (catalog === next && favorites === favoriteKeys && selectedKey !== undefined) return;
       const focused = body?.contains(document.activeElement) ? document.activeElement?.getAttribute("aria-label") : undefined;
+      if (selected()) { legacySpeed = speed(); selectedLabel = selected()!.label; }
       catalog = next; favorites = favoriteKeys;
+      selectedKey = resolveModelSelectionKey(next, selectedKey);
       models = favoriteModels(next, favoriteKeys);
-      if (selected() === undefined) {
+      if (selectedKey === undefined) {
         const first = models.find((entry) => entry.isDefault) ?? models[0];
         selectedKey = first === undefined ? undefined : modelKey(first);
       }

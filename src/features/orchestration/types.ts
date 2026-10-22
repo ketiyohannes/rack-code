@@ -76,6 +76,16 @@ export interface OrchestraSnapshot {
   readonly workflows: readonly WorkflowDefinition[];
   readonly bindings: Readonly<Record<string, string>>;
   readonly runs: readonly WorkflowRun[];
+  /** Host-memory designer executions, never persisted as workflow runs. */
+  readonly generations?: readonly WorkflowGeneration[];
+}
+
+/** Links a designer's live broker requests to its owning editor/root session. */
+export interface WorkflowGeneration {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly executionId?: string;
+  readonly stopping: boolean;
 }
 
 export interface OrchestraStore {

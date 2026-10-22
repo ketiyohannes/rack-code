@@ -20,6 +20,18 @@ export function modelKey(model: ModelView): string {
   return `${model.providerId}|${model.runtimeId}|${model.id}`;
 }
 
+/** A historical omitted model is the host's symbolic provider default. Resolve
+ * that alias when discovery arrives; concrete unavailable IDs never substitute.
+ * Catalog ordering/default flags match workflow start validation in the host. */
+export function resolveModelSelectionKey(models: readonly ModelView[], key: string | undefined): string | undefined {
+  if (!key || models.some((entry) => modelKey(entry) === key)) return key;
+  const [providerId, runtimeId, id] = key.split("|");
+  if (id !== "default") return key;
+  const candidates = models.filter((entry) => entry.providerId === providerId && entry.runtimeId === runtimeId);
+  const entry = candidates.find((candidate) => candidate.isDefault) ?? candidates[0];
+  return entry ? modelKey(entry) : key;
+}
+
 /** A synthetic Default stop is needed only when the provider reports no valid default. */
 export function effortStops(model: ModelView): readonly EffortStop[] {
   const levels = model.reasoningEfforts ?? [];

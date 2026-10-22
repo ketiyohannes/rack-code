@@ -37,6 +37,7 @@ import { MAX_ATTACHMENTS, type SessionAttachment } from "../../core/sessions/att
 import { loadModelFavorites, saveModelFavorites } from "./model-favorites.js";
 import { modelKey } from "./components/model-settings.js";
 import type { BrowserPresentation, BrowserRequest } from "../../features/browser/index.js";
+import type { OrchestraTarget } from "./features/orchestra-state.js";
 
 interface CachedSession {
   readonly session: SessionView;
@@ -61,6 +62,7 @@ export class Controller {
   private readonly removedSessions = new Set<string>();
   /** Timeline panel subscribers; Timeline data is panel-owned, not stored globally. */
   private readonly timelineListeners = new Set<(sessionId: string) => void>();
+  private readonly workflowControlRequests = new Map<string, Promise<void>>();
 
   constructor(
     private readonly host: HostClient,
@@ -187,6 +189,10 @@ export class Controller {
         this.host.call("projects.list", {}),
         this.host.call("sessions.list", {}),
         this.host.call("runs.active", {}),
+        // Routing history must arrive before sessions become selectable. The
+        // composer initializes once; publishing sessions first could seed it
+        // from an older root turn and retain the wrong model/permissions.
+        this.reloadOrchestra(),
       ]);
       this.store.update((state) => ({
         ...state,
@@ -199,7 +205,6 @@ export class Controller {
         connects: Object.fromEntries(connecting.map((connect) => [connect.connectId, connect])),
         live: liveFromSnapshot(active, state.live),
       }));
-      void this.reloadOrchestra();
       this.ready = true;
       for (const event of this.bufferedEvents.splice(0)) {
         this.handleEvent(event);
@@ -282,6 +287,15 @@ export class Controller {
   /** Shows the right panel with the given tool tab open, e.g. "side-chat". */
   openTool(id: string, draft?: string): void {
     this.store.update((state) => ({ ...state, page: "chat", toolRequest: { id, seq: (state.toolRequest?.seq ?? 0) + 1, ...(draft === undefined ? {} : { draft }) } }));
+  }
+
+  /** Exact run/attempt navigation; session selection happens synchronously so
+   * a later user navigation is never undone by completion of its history load. */
+  openOrchestra(target: OrchestraTarget): void {
+    if (this.removedSessions.has(target.sessionId)) return;
+    if (this.store.get().selection.sessionId !== target.sessionId) void this.selectSession(target.sessionId);
+    this.store.update((state) => ({ ...state, orchestraTarget: { ...target, seq: (state.orchestraTarget?.seq ?? 0) + 1 } }));
+    this.openTool("orchestration");
   }
 
   openSettings(section?: SettingsSection): void {
@@ -613,7 +627,11 @@ export class Controller {
     return this.attempt(async () => {
       const workflowId = this.store.get().orchestra.bindings[params.sessionId];
       if (workflowId && this.store.get().enabledPlugins.includes("orchestration")) {
-        await this.host.call("orchestra.start", { input: params, workflowId });
+        // Workers follow their saved instructions. Skill chips selected for
+        // ordinary turns persist per session, so drop them here instead of
+        // letting the host reject the workflow for them.
+        const { skillIds: _skills, ...input } = params;
+        await this.host.call("orchestra.start", { input: { ...input, interactionMode: "normal" }, workflowId });
         this.openTool("orchestration");
         await Promise.all([this.reloadOrchestra(), this.reloadSession(params.sessionId), this.reloadSessions()]);
         return;
@@ -662,6 +680,10 @@ export class Controller {
   async saveWorkflow(definition: WorkflowDefinition): Promise<boolean> {
     return this.attempt(async () => { await this.host.call("orchestra.save", { definition }); await this.reloadOrchestra(); });
   }
+  /** Recovery control for a designer still running after renderer reload. */
+  async cancelWorkflowGeneration(generationId: string): Promise<boolean> {
+    return this.attempt(async () => { await this.host.call("orchestra.cancelGeneration", { generationId }); await this.reloadOrchestra(); });
+  }
   async bindWorkflow(sessionId: string, workflowId?: string): Promise<void> {
     await this.attempt(async () => { await this.host.call("orchestra.bind", { sessionId, ...(workflowId === undefined ? {} : { workflowId }) }); await this.reloadOrchestra(); });
   }
@@ -669,7 +691,28 @@ export class Controller {
     await this.attempt(async () => { await this.host.call("orchestra.remove", { workflowId }); await this.reloadOrchestra(); });
   }
   async controlWorkflow(runId: string, action: "pause" | "resume" | "approve" | "stop"): Promise<void> {
-    await this.attempt(async () => { await this.host.call("orchestra.control", { runId, action }); await this.reloadOrchestra(); });
+    // One command per run, even if clicked from two surfaces. Keep Stop
+    // pending after the host publishes Stopped until its cancellation RPC
+    // settles; that snapshot alone does not mean all workers have exited.
+    const existing = this.workflowControlRequests.get(runId);
+    if (existing) return existing;
+    this.store.update((state) => ({ ...state, workflowControls: { ...state.workflowControls, [runId]: { action, pending: true } } }));
+    const request = (async () => {
+      let error: string | undefined;
+      try { await this.host.call("orchestra.control", { runId, action }); await this.reloadOrchestra(); }
+      catch (failure) { error = failure instanceof Error ? failure.message : String(failure); this.report(failure); }
+      finally {
+        this.workflowControlRequests.delete(runId);
+        this.store.update((state) => {
+          const controls = { ...state.workflowControls };
+          if (error) controls[runId] = { action, pending: false, error };
+          else delete controls[runId];
+          return { ...state, workflowControls: controls };
+        });
+      }
+    })();
+    this.workflowControlRequests.set(runId, request);
+    await request;
   }
 
   async cancelRun(runId: string): Promise<void> {
@@ -714,12 +757,22 @@ export class Controller {
     if (this.store.get().host.status === "exited" && (event.type.startsWith("run.") || event.type === "orchestra.changed")) return;
     const { selection } = this.store.get();
     switch (event.type) {
-      case "orchestra.changed":
+      case "orchestra.changed": {
+        // The service persists (and announces) every worker update. Only
+        // status transitions append conversation messages (the final reply,
+        // a stop notice), so reload the selected session only then; reloading
+        // a long session on every update made the window unresponsive.
+        const statuses = (): string => {
+          const id = this.store.get().selection.sessionId;
+          return JSON.stringify(this.store.get().orchestra.runs.filter((run) => run.sessionId === id).map((run) => [run.id, run.status]));
+        };
+        const before = statuses();
         void this.reloadOrchestra().then(() => {
           const id = this.store.get().selection.sessionId;
-          if (id) { this.invalidateSession(id); void this.reloadSession(id); }
+          if (id && statuses() !== before) { this.invalidateSession(id); void this.reloadSession(id); }
         });
         return;
+      }
       case "host.status": {
         if (event.status === "exited") {
           this.sessionCache.clear();

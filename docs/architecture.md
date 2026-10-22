@@ -145,8 +145,10 @@ unavailable favorites never fall back to an unstarred model, and unavailable
 keys survive catalog/account changes. Run submission rechecks membership
 against current preferences before sending. This is renderer selection policy;
 host discovery, provider routing and permission enforcement are unchanged.
-`components/model-picker.ts` owns this presentation and per-device effort/Fast
-preferences; `model-settings.ts` validates them against each catalog entry.
+`components/model-picker.ts` owns this presentation and exposes an explicit
+selection snapshot/setter. The composer retains unsent routing/settings per root
+session and initializes from root execution/workflow history. Unavailable
+selections survive catalog/favorite changes and require deliberate replacement; `model-settings.ts` validates them against each catalog entry.
 The shared popover repositions when the list transforms into the smaller
 settings panel, keeping both stages anchored to the same composer control.
 The provider-neutral `SpeedOption.fast` flag lets adapters explicitly mark
@@ -361,6 +363,10 @@ Proposed identities: a session is the ongoing application conversation; a run is
 Cross-runtime continuation is a context handoff, not an assumption that opaque native sessions are interchangeable. Prefer native continuation when supported; otherwise prepare context at the handoff boundary. Do not invent missing tool results or transfer hidden model state.
 
 Track how much of the application conversation each native continuation has seen. For a Codex-to-Claude-to-Codex sequence, the old Codex thread must receive relevant intervening work before continuing. Merely reopening its previous native ID would leave it unaware of Claude's work. Use supported input mechanisms or a fresh native context; do not rewrite opaque runtime transcripts into an invented universal format.
+
+Implemented: `NativeContinuationReference.seenThroughMessageId` records the last session message each native thread has seen. ExecutionService sets it to the run's prompt when the adapter confirms the thread, and to the run's reply when the run settles. Before resuming, it hands the thread only the later messages (other runtimes, accounts and workflow turns) as a quoted, attributed context block followed by the current request. A fresh thread receives the recent conversation the same way. `core/execution/handoff.ts` renders both blocks: whole turns within a 60,000-character budget (newest first, omitted turns counted, an oversized newest turn shortened with an explicit notice), each attributed by provider and model, with tool activity and changed files summarized from the run journal. Raw tool messages and readable thinking are excluded, and tool calls are never replayed. Records saved before the marker existed derive their position from attempts that recorded the same native session ID. When the position cannot be established, a fresh thread with full context is used instead of a blind resume.
+
+Adapters report a resumed thread that cannot be opened as `failed` with `reason: "continuation_unavailable"`: Codex "no rollout found" from `thread/resume`, Claude "No conversation found". If that is the first activity of the turn, ExecutionService removes the stale association, journals a `run_status` note and continues the same attempt in a fresh thread with full context. Codex reports a new thread ID only after `turn/start` succeeds, because Codex writes the rollout when the first turn starts; a thread whose first turn failed is no longer saved.
 
 Recovery must distinguish completed actions, failed actions, and actions whose outcome is unknown. A continuation prompt alone cannot guarantee safe replay of an interrupted side effect. Maintain progress during execution so recovery does not require an exhausted account to generate a summary.
 
@@ -581,3 +587,34 @@ does not stop work. Startup marks active saved workflows Interrupted and never
 replays uncertain worker actions. Parallel groups are read-only until workspace
 integration and merge policies are implemented. Definitions and execution
 snapshots live in the feature-owned atomic JSON store.
+
+### Orchestration renderer projections (2026-10-22)
+
+Pure renderer queries in `features/orchestra-state.ts` derive stage progress from
+worker attempts, cursor, review rounds and run outcome. They expose separate
+broker-owned required actions and exact session/workflow/worker navigation
+targets. `orchestra-worker-state.ts` reuses `foldEvents`/`presentTool` for readable
+inspection and caches retained journals with selection epochs. Controller/store
+own transient pending controls, navigation and errors. The panel separates the
+session overview, library and inline worker details, with per-session view,
+scroll and disclosure memory. Renderer-only request/execution anchors connect
+worker action links to the existing composer broker forms. No core dependency,
+provider contract, persisted workflow schema or scheduler rule changes.
+
+Workflow drafting uses a separate, transient association in
+`OrchestraSnapshot.generations` (`id`, root `sessionId`, optional `executionId`,
+`stopping`). The renderer supplies `generationId` to `orchestra.generate` and
+cancels it through `orchestra.cancelGeneration`; the host keeps the association
+until startup/execution and pending brokers settle. These associations live only
+in Orchestration host memory, not the workflow store. The editor uses the shared
+question form with explicit execution scope; root composer forms and navigator
+input indicators also route designer requests after renderer reload. Host
+shutdown cancels designers as well as workflow workers. Failed observation after
+execution start cancels and settles the hidden execution before releasing it.
+
+Renderer startup joins the local orchestration snapshot with initial session
+discovery before publishing selectable sessions. This prevents one-time composer
+initialization from using older root settings before discovering a newer
+workflow's routing/permissions. Provider catalog discovery remains independent.
+The drafting picker watches catalog updates without replacing the local draft
+or substituting an unavailable assigned model.

@@ -230,6 +230,23 @@ export class SessionsService {
   }
 
   /**
+   * Drops the association for one runtime and account context, for example
+   * after the provider reported that the native thread cannot be resumed.
+   * Only an entry naming `nativeSessionId` is removed, so a newer thread
+   * associated concurrently is never discarded by a stale failure.
+   */
+  async removeContinuation(
+    sessionId: SessionId,
+    reference: Pick<NativeContinuationReference, "runtimeId" | "runtimeContextId" | "nativeSessionId">,
+  ): Promise<void> {
+    const session = await this.get(sessionId);
+    const continuations = session.continuations.filter((candidate) => !(candidate.runtimeId === reference.runtimeId
+      && candidate.runtimeContextId === reference.runtimeContextId && candidate.nativeSessionId === reference.nativeSessionId));
+    if (continuations.length === session.continuations.length) return;
+    await this.store.save({ ...session, continuations, updatedAt: this.now().toISOString() });
+  }
+
+  /**
    * Returns the native thread this runtime can resume for the given account
    * context. Resuming a thread from another context fails natively (Codex
    * reports "no rollout found for thread id"), so no match means the caller

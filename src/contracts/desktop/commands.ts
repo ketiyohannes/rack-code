@@ -110,7 +110,8 @@ export interface HostCommandMap {
   "orchestra.bind": { params: { sessionId: string; workflowId?: string }; result: null };
   "orchestra.start": { params: { input: StartRunParams; workflowId: string }; result: WorkflowRun };
   "orchestra.control": { params: { runId: string; action: "pause" | "resume" | "approve" | "stop" }; result: null };
-  "orchestra.generate": { params: { sessionId: string; description: string; model: AgentModel }; result: WorkflowDefinition };
+  "orchestra.generate": { params: { sessionId: string; description: string; model: AgentModel; generationId: string }; result: WorkflowDefinition };
+  "orchestra.cancelGeneration": { params: { generationId: string }; result: null };
   "reviews.accounts": { params: { refresh?: boolean }; result: AccountCatalog };
   /** Browser sign-in through gh: begin returns the device code, finish waits for authorization. */
   "reviews.accountLoginBegin": { params: { host: string }; result: AccountLogin };
@@ -266,7 +267,8 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "orchestra.bind": object({ sessionId: id, workflowId: optional(id) }),
   "orchestra.start": object({ input: (value, path): StartRunParams => COMMAND_VALIDATORS["runs.start"](value, path), workflowId: id }),
   "orchestra.control": object({ runId: id, action: oneOf(["pause", "resume", "approve", "stop"]) }),
-  "orchestra.generate": object({ sessionId: id, description: text({ maxLength: 8000 }), model: object({ providerId: id, runtimeId: id, model: id, reasoningEffort: optional(text({ maxLength: 64 })) }) }),
+  "orchestra.generate": object({ sessionId: id, generationId: id, description: text({ maxLength: 8000 }), model: object({ providerId: id, runtimeId: id, model: id, reasoningEffort: optional(text({ maxLength: 64 })) }) }),
+  "orchestra.cancelGeneration": object({ generationId: id }),
   "reviews.accounts": object({ refresh: optional(boolean) }),
   "reviews.accountLoginBegin": object({ host: id }),
   "reviews.accountLoginFinish": object({ loginId: id }),

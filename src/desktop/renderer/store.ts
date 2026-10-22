@@ -1,4 +1,5 @@
 import type { OrchestraSnapshot } from "../../features/orchestration/types.js";
+import type { OrchestraTarget } from "./features/orchestra-state.js";
 /**
  * Renderer state container.
  *
@@ -59,6 +60,9 @@ export type SettingsSection = "general" | "accounts" | "models" | "plugins" | "s
 
 export interface AppState {
   readonly orchestra: OrchestraSnapshot;
+  /** Renderer-only control settlement; the durable workflow schema is unchanged. */
+  readonly workflowControls?: Readonly<Record<string, { readonly action: "pause" | "resume" | "approve" | "stop"; readonly pending: boolean; readonly error?: string }>>;
+  readonly orchestraTarget?: (OrchestraTarget & { readonly seq: number }) | undefined;
   readonly page: "chat" | "usage" | "pull-requests";
   readonly reviewProjectId?: string;
   readonly host: { readonly status: "connecting" | "ready" | "exited"; readonly detail?: string };

@@ -241,7 +241,7 @@ function renderAbout(store: Store, controller: Controller): HTMLElement {
   const hostStatus = h("div", { class: "settings-group-title", role: "status" });
   store.watch((state) => state.host, (host) => {
     const ready = host.status === "ready";
-    replace(hostStatus, icon(ready ? "check-circle" : host.status === "connecting" ? "circle-notch" : "warning-circle"),
+    replace(hostStatus, icon(ready ? "check-circle" : host.status === "connecting" ? "circle-notch" : "warning-circle", { className: host.status === "connecting" ? "spin" : "" }),
       ready ? "Execution host connected" : host.status === "connecting" ? "Connecting to execution host…" : "Execution host unavailable");
   });
   return h("div", { class: "settings-pane" },

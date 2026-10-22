@@ -20,6 +20,14 @@ export interface NativeContinuationReference {
    */
   readonly runtimeContextId?: string;
   readonly nativeSessionId: string;
+  /**
+   * ID of the last session message this native thread has seen: the run's
+   * own prompt as soon as the thread is confirmed, then its reply when the
+   * run settles. Messages after it were produced by other runtimes, accounts
+   * or workflows and are handed to the thread before its next turn. Records
+   * saved before this was maintained lack it; ExecutionService then derives
+   * the position from attempts that recorded this native session ID.
+   */
   readonly seenThroughMessageId?: string;
 }
 

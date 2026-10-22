@@ -171,6 +171,52 @@ export class HostApi {
       if (!this.app.reviewInbox) throw new HostOperationError("feature_unavailable", "The account review inbox is unavailable in this host.");
       return this.app.reviewInbox;
     };
+    /** Shared model catalog for `models.list` and workflow validation. */
+    const listModels = async (projectId: string | undefined, allowStale: boolean) => {
+        // Discovery runs in the selected project when one is available so
+        // providers see the same working directory that a subsequent run
+        // will use. The catalog remains account-scoped and never receives
+        // renderer credentials or provider SDK objects.
+        const projectPath = projectId === undefined
+          ? undefined
+          : (await projects.getProject(projectId)).path;
+        const providerNames = new Map(connections.providers().map((provider) => [provider.providerId, provider.displayName]));
+        const accountsByProvider = new Map<string, AccountRecord[]>();
+        for (const account of await accounts.list()) {
+          const list = accountsByProvider.get(account.providerId) ?? [];
+          list.push(account);
+          accountsByProvider.set(account.providerId, list);
+        }
+        const models = new Map<string, { readonly model: import("../../core/execution/types.js").RuntimeModel; readonly runtimeId: string; readonly accountIds: string[] }>();
+        const failures: { readonly providerName: string; readonly accountId: string }[] = [];
+        for (const runtimeId of runtimes.list()) {
+          const runtime = runtimes.get(runtimeId);
+          if (runtime.models === undefined || runtime.providerId === undefined) continue;
+          await Promise.all((accountsByProvider.get(runtime.providerId) ?? []).map(async (account) => {
+            try {
+              const key = JSON.stringify([runtimeId, account.id, account.runtimeContextId, account.credential.id, projectPath]);
+              const entries = await this.modelCatalogs.get(key, () => runtime.models!({
+                account: { accountId: account.id, providerId: account.providerId, credential: account.credential, runtimeContextId: account.runtimeContextId },
+                ...(projectPath === undefined ? {} : { projectPath }),
+              }), { allowStale });
+              for (const model of entries) {
+                const key = `${runtimeId}|${model.providerId}|${model.id}`;
+                const current = models.get(key);
+                if (current === undefined) models.set(key, { model, runtimeId, accountIds: [account.id] });
+                else if (!current.accountIds.includes(account.id)) current.accountIds.push(account.id);
+              }
+            } catch {
+              failures.push({ providerName: providerNames.get(account.providerId) ?? account.providerId, accountId: account.id });
+            }
+          }));
+        }
+        return {
+          models: [...models.values()].map(({ model, runtimeId, accountIds }) => ({
+            ...model, runtimeId, accountIds: [...accountIds], providerName: providerNames.get(model.providerId) ?? model.providerId,
+          })),
+          failures,
+        };
+    };
     return {
       "orchestra.snapshot": async () => this.orchestra().snapshot(),
       "orchestra.save": async (p) => this.orchestra().save(p.definition),
@@ -182,23 +228,31 @@ export class HostApi {
         const definition = (await this.orchestra().snapshot()).workflows.find((entry) => entry.id === p.workflowId);
         if (!definition) throw new HostOperationError("invalid_input", "This workflow no longer exists.");
         // Validate all assignments before the first worker can edit anything.
-        const catalog = await this.handlers["models.list"]({ ...(p.input.projectId === undefined ? {} : { projectId: p.input.projectId }) });
+        // Validate against the last good catalog: fresh discovery can take
+        // seconds per account and previously held this session's lane, so the
+        // Run button appeared frozen. Discovery still refreshes in the background.
+        const catalog = await listModels(p.input.projectId, true);
         const fallback = definition.coordinator ?? { providerId: p.input.providerId, runtimeId: p.input.runtimeId, model: p.input.model ?? "default", ...(p.input.reasoningEffort === undefined ? {} : { reasoningEffort: p.input.reasoningEffort }) };
         const assignments = [fallback, ...definition.steps.flatMap((step) => step.agents.map((agent) => agent.model ?? fallback))];
         for (const binding of assignments) {
           const runtime = runtimes.get(binding.runtimeId);
           if (runtime.providerId !== binding.providerId) throw new HostOperationError("invalid_input", "A workflow model has an invalid provider assignment.");
-          const model = catalog.models.find((entry) => entry.runtimeId === binding.runtimeId && entry.providerId === binding.providerId && (binding.model === "default" || entry.id === binding.model));
-          if (!model) throw new HostOperationError("invalid_input", `Workflow model '${binding.model}' is unavailable. Update its assignment before running.`);
+          const candidates = catalog.models.filter((entry) => entry.runtimeId === binding.runtimeId && entry.providerId === binding.providerId && (binding.model === "default" || entry.id === binding.model));
+          if (!candidates.length) throw new HostOperationError("invalid_input", `Workflow model '${binding.model}' is unavailable. Update its assignment before running.`);
+          // Workers reuse the chosen account only for its own provider.
+          const usable = p.input.accountId && binding.providerId === p.input.providerId ? candidates.filter((entry) => entry.accountIds.includes(p.input.accountId!)) : candidates;
+          if (!usable.length) throw new HostOperationError("invalid_input", "A workflow model is unavailable on the selected account. Choose Auto or another account.");
+          // "default" means the provider default, so compare effort against that model rather than the first catalog entry.
+          const model = binding.model === "default" ? usable.find((entry) => entry.isDefault) ?? usable[0]! : usable[0]!;
           if (binding.reasoningEffort && !model.reasoningEfforts?.some((entry) => entry.id === binding.reasoningEffort)) throw new HostOperationError("invalid_input", `Reasoning effort '${binding.reasoningEffort}' is unavailable for '${binding.model}'.`);
-          if (p.input.accountId && binding.providerId === p.input.providerId && !model.accountIds.includes(p.input.accountId)) throw new HostOperationError("invalid_input", "A workflow model is unavailable on the selected account. Choose Auto or another account.");
         }
         const run = await this.orchestra().start(p.input, p.workflowId);
         this.emit({ type: "sessions.changed", sessionId: run.sessionId });
         return run;
       }),
       "orchestra.control": async (p) => { await this.orchestra().control(p.runId, p.action); this.emit({ type: "sessions.changed", sessionId: (await this.orchestra().snapshot()).runs.find((run) => run.id === p.runId)?.sessionId ?? "" }); return null; },
-      "orchestra.generate": async (p) => this.orchestra().generate(p.sessionId, p.description, p.model),
+      "orchestra.generate": async (p) => this.orchestra().generate(p.sessionId, p.description, p.model, p.generationId),
+      "orchestra.cancelGeneration": async (p) => { await this.orchestra().cancelGeneration(p.generationId); return null; },
       "reviews.accounts": async (p) => inbox().accounts(p.refresh),
       "reviews.accountLoginBegin": async (p) => inbox().beginLogin(p.host),
       "reviews.accountLoginFinish": async (p) => inbox().finishLogin(p.loginId),
@@ -427,51 +481,7 @@ export class HostApi {
         ) as Record<PermissionMode, string>;
         return { runtimeId, ...(runtime.providerId === undefined ? {} : { providerId: runtime.providerId }), permissionMappings };
       }),
-      "models.list": async (params) => {
-        // Discovery runs in the selected project when one is available so
-        // providers see the same working directory that a subsequent run
-        // will use. The catalog remains account-scoped and never receives
-        // renderer credentials or provider SDK objects.
-        const projectPath = params.projectId === undefined
-          ? undefined
-          : (await projects.getProject(params.projectId)).path;
-        const providerNames = new Map(connections.providers().map((provider) => [provider.providerId, provider.displayName]));
-        const accountsByProvider = new Map<string, AccountRecord[]>();
-        for (const account of await accounts.list()) {
-          const list = accountsByProvider.get(account.providerId) ?? [];
-          list.push(account);
-          accountsByProvider.set(account.providerId, list);
-        }
-        const models = new Map<string, { readonly model: import("../../core/execution/types.js").RuntimeModel; readonly runtimeId: string; readonly accountIds: string[] }>();
-        const failures: { readonly providerName: string; readonly accountId: string }[] = [];
-        for (const runtimeId of runtimes.list()) {
-          const runtime = runtimes.get(runtimeId);
-          if (runtime.models === undefined || runtime.providerId === undefined) continue;
-          await Promise.all((accountsByProvider.get(runtime.providerId) ?? []).map(async (account) => {
-            try {
-              const key = JSON.stringify([runtimeId, account.id, account.runtimeContextId, account.credential.id, projectPath]);
-              const entries = await this.modelCatalogs.get(key, () => runtime.models!({
-                account: { accountId: account.id, providerId: account.providerId, credential: account.credential, runtimeContextId: account.runtimeContextId },
-                ...(projectPath === undefined ? {} : { projectPath }),
-              }));
-              for (const model of entries) {
-                const key = `${runtimeId}|${model.providerId}|${model.id}`;
-                const current = models.get(key);
-                if (current === undefined) models.set(key, { model, runtimeId, accountIds: [account.id] });
-                else if (!current.accountIds.includes(account.id)) current.accountIds.push(account.id);
-              }
-            } catch {
-              failures.push({ providerName: providerNames.get(account.providerId) ?? account.providerId, accountId: account.id });
-            }
-          }));
-        }
-        return {
-          models: [...models.values()].map(({ model, runtimeId, accountIds }) => ({
-            ...model, runtimeId, accountIds: [...accountIds], providerName: providerNames.get(model.providerId) ?? model.providerId,
-          })),
-          failures,
-        };
-      },
+      "models.list": async (params) => listModels(params.projectId, false),
       "runtimes.capabilities": async (params) => {
         const account = await accounts.get(params.accountId);
         return runtimes.get(params.runtimeId).capabilities({

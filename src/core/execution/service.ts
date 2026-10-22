@@ -29,6 +29,8 @@ import type {
 } from "./types.js";
 import { QuestionBroker } from "./question-broker.js";
 import type { AppTool, RuntimeAppTool } from "./app-tools.js";
+import { renderHandoffContext, type HandoffKind } from "./handoff.js";
+import type { NativeContinuationReference, SessionMessage } from "../sessions/types.js";
 
 export interface StartRunInput {
   readonly attachmentIds?: readonly string[];
@@ -292,6 +294,18 @@ export class ExecutionService {
     };
   }
 
+  /**
+   * The session's recorded conversation as an attributed, bounded context
+   * block (see `handoff.ts`), or `undefined` when it has no messages. Lets
+   * optional features such as orchestration brief fresh worker threads with
+   * the same history, tool summaries and attribution a fresh native thread
+   * receives, without reading execution storage themselves.
+   */
+  async conversationContext(sessionId: string): Promise<string | undefined> {
+    const session = await this.sessions.get(sessionId);
+    return this.handoffContext(sessionId, "history", session.messages);
+  }
+
   /** Whether this service still owns execution, independent of saved status. */
   isActive(runId: string): boolean { return this.activeRunIds.has(runId); }
 
@@ -388,7 +402,11 @@ export class ExecutionService {
       currentAttempt = await this.updateAttempt(currentAttempt, "running");
       onRun(currentRun);
       onAttempt(currentAttempt);
+      // Explicit IDs let continuation markers name this run's messages
+      // without re-reading the session after each append.
+      const promptMessageId = this.createId();
       await this.sessions.appendMessage(input.sessionId, {
+        id: promptMessageId,
         role: "user",
         content: promptWithAttachments(run.prompt, run.attachments ?? []),
         metadata: { runId: currentRun.id, attemptId: currentAttempt.id },
@@ -413,7 +431,7 @@ export class ExecutionService {
           return tool.execute(arguments_, controller.signal);
         },
       }));
-      let runtimeInput: RuntimeRunInput = {
+      const runtimeInput: RuntimeRunInput = {
         runId: currentRun.id,
         attemptId: currentAttempt.id,
         sessionId: input.sessionId,
@@ -445,30 +463,43 @@ export class ExecutionService {
       // Scope the lookup to the selected account's runtime context: a manual
       // account switch or an automatic fallback must not resume a native
       // thread that only exists in another account's store.
-      const continuation = await this.sessions.continuation(
-        input.sessionId,
-        runtime.runtimeId,
-        account.runtimeContextId,
-      );
-      // Imports, account handoffs and project attachment can need a fresh native
-      // thread. Seed it with the recent visible conversation,
-      // quoted as historical context; do not replay tool calls or copy secrets.
-      if (continuation === undefined) {
-        const session = await this.sessions.get(input.sessionId);
-        if (session.messages.length > 1) {
-          const context = importedConversationContext(session.messages.filter((message) =>
-            message.metadata?.["runId"] !== currentRun.id));
-          runtimeInput = { ...runtimeInput, prompt: `${context}\n\nCurrent request:\n${workflowPrompt}` };
-        }
-      }
+      const scope = { runtimeId: runtime.runtimeId, runtimeContextId: account.runtimeContextId };
+      const continuation = await this.sessions.continuation(input.sessionId, scope.runtimeId, scope.runtimeContextId);
+      // Everything Rack recorded before this run. The run's own prompt is
+      // delivered separately as the current request.
+      const prior = (await this.sessions.get(input.sessionId)).messages.filter((message) =>
+        message.metadata?.["runId"] !== currentRun.id);
+      const withContext = async (kind: HandoffKind, messages: readonly SessionMessage[]): Promise<RuntimeRunInput> => {
+        const context = await this.handoffContext(input.sessionId, kind, messages);
+        return context === undefined ? runtimeInput : { ...runtimeInput, prompt: `${context}\n\nCurrent request:\n${workflowPrompt}` };
+      };
+      // A fresh native thread (first turn, imports, account switches, project
+      // attachment) receives the recent conversation. A resumed thread
+      // receives only the turns other runtimes/accounts added since its own
+      // last turn, so Codex -> Claude -> Codex resumes Codex knowing what
+      // Claude did. When the thread's position is unknown, resuming would
+      // silently drop work, so a fresh thread with full context is used.
+      const unseen = continuation === undefined ? undefined : await this.unseenMessages(input.sessionId, prior, continuation);
+      const resumed = continuation !== undefined && unseen !== undefined;
       if (controller.signal.aborted) throw new Error("Execution was interrupted.");
-      const stream = continuation === undefined
-        ? runtime.startRun(runtimeInput)
-        : runtime.resumeRun({ ...runtimeInput, continuation });
+      const stream = resumed
+        ? runtime.resumeRun({ ...(await withContext("handoff", unseen)), continuation: {
+          nativeSessionId: continuation.nativeSessionId,
+          ...(continuation.seenThroughMessageId === undefined ? {} : { seenThroughMessageId: continuation.seenThroughMessageId }),
+        } })
+        : runtime.startRun(await withContext("history", prior));
+      // The native thread whose marker this run advances. A resumed thread is
+      // known up front because some adapters do not re-announce it; a fresh
+      // thread is only known once the adapter confirms it.
+      let threadId: string | undefined;
+      let threadReached = false;
+      // Fallback is allowed only until the resumed turn shows any activity,
+      // so work the provider already started is never repeated.
+      let fallbackAvailable = resumed;
 
       // A provider can ignore abort while blocked in next(). Race the read,
       // discard late events, and finish native cleanup before releasing the writer.
-      const iterator = stream[Symbol.asyncIterator]();
+      let iterator = stream[Symbol.asyncIterator]();
       streamIterator = iterator;
       for (;;) {
         let next: IteratorResult<RuntimeEvent>;
@@ -481,6 +512,36 @@ export class ExecutionService {
         }
         if (next.done) break;
         const event = next.value;
+        if (fallbackAvailable && continuation !== undefined && event.type === "failed" && event.reason === "continuation_unavailable") {
+          // The saved native thread cannot be opened (for example a Codex
+          // thread whose first turn never started has no rollout). Finish the
+          // adapter's cleanup for this attempt, forget the dead association
+          // and continue the same attempt in a fresh thread with the full
+          // conversation as context. The failure is journaled for audit but
+          // not surfaced as the run's outcome.
+          fallbackAvailable = false;
+          try { await deadline(Promise.resolve(iterator.return?.()), this.cancelTimeoutMs + 1000); } catch { /* Best-effort cleanup; the next stream is independent. */ }
+          await this.sessions.removeContinuation(input.sessionId, { ...scope, nativeSessionId: continuation.nativeSessionId });
+          await this.store.appendJournal({
+            runId: currentRun.id,
+            attemptId: currentAttempt.id,
+            type: "run_status",
+            payload: { status: "running", reason: "continuation_unavailable", error: event.error },
+            observedAt: this.now().toISOString(),
+          });
+          threadId = undefined;
+          threadReached = false;
+          if (controller.signal.aborted) throw new Error("Execution was interrupted.");
+          iterator = runtime.startRun(await withContext("history", prior))[Symbol.asyncIterator]();
+          streamIterator = iterator;
+          continue;
+        }
+        if (event.type !== "native_session" && event.type !== "usage" && event.type !== "availability") fallbackAvailable = false;
+        if (resumed && threadId === undefined && fallbackAvailable === false && event.type !== "failed" && event.type !== "interrupted") {
+          // First activity on a resumed thread confirms it received this turn.
+          threadId = continuation.nativeSessionId;
+          threadReached = true;
+        }
         await this.store.appendJournal({
           runId: currentRun.id,
           attemptId: currentAttempt.id,
@@ -496,10 +557,14 @@ export class ExecutionService {
             nativeSessionId: event.nativeSessionId,
           });
           onAttempt(currentAttempt);
+          // The adapter confirmed the thread after delivering this turn's
+          // input, so the thread has seen everything through this prompt.
+          threadId = event.nativeSessionId;
+          threadReached = true;
           await this.sessions.associateContinuation(input.sessionId, {
-            runtimeId: runtime.runtimeId,
-            runtimeContextId: account.runtimeContextId,
+            ...scope,
             nativeSessionId: event.nativeSessionId,
+            seenThroughMessageId: promptMessageId,
           });
         } else if (event.type === "availability") {
           await this.accounts.updateAvailability(account.id, event);
@@ -523,15 +588,23 @@ export class ExecutionService {
       const assistantContent = getAssistantText().trim() === ""
         ? terminalResult
         : getAssistantText();
+      let seenThroughMessageId = promptMessageId;
       if (
         assistantContent !== undefined &&
         assistantContent.trim() !== ""
       ) {
+        seenThroughMessageId = this.createId();
         await this.sessions.appendMessage(input.sessionId, {
+          id: seenThroughMessageId,
           role: "assistant",
           content: assistantContent,
           metadata: { runId: currentRun.id, attemptId: currentAttempt.id },
         });
+      }
+      // The native thread produced (or received) this reply itself, so it
+      // must not be handed back to it as another agent's work next turn.
+      if (threadId !== undefined && threadReached) {
+        await this.sessions.associateContinuation(input.sessionId, { ...scope, nativeSessionId: threadId, seenThroughMessageId });
       }
     } catch (error) {
       terminalStatus = isCancelled() ? "interrupted" : "failed";
@@ -588,6 +661,43 @@ export class ExecutionService {
       }
     }
     return currentRun;
+  }
+
+  /**
+   * Messages in `prior` that the continuation's native thread has not seen,
+   * or `undefined` when its position cannot be established (the caller then
+   * starts a fresh thread). Records saved before `seenThroughMessageId` was
+   * maintained fall back to the last message of a run whose attempt recorded
+   * the same native session ID.
+   */
+  private async unseenMessages(
+    sessionId: string,
+    prior: readonly SessionMessage[],
+    continuation: NativeContinuationReference,
+  ): Promise<readonly SessionMessage[] | undefined> {
+    let marker = continuation.seenThroughMessageId;
+    if (marker === undefined) {
+      const threadRuns = new Set<string>();
+      for (const run of await this.store.listRuns(sessionId)) {
+        for (const attemptId of run.attemptIds) {
+          const attempt = await this.store.getAttempt(attemptId);
+          if (attempt?.runtimeId === continuation.runtimeId && attempt.nativeSessionId === continuation.nativeSessionId) threadRuns.add(run.id);
+        }
+      }
+      marker = [...prior].reverse().find((message) => threadRuns.has(message.metadata?.["runId"] ?? ""))?.id;
+    }
+    const index = marker === undefined ? -1 : prior.findIndex((message) => message.id === marker);
+    return index === -1 ? undefined : prior.slice(index + 1);
+  }
+
+  /** Attributed, bounded description of `messages`; see `handoff.ts`. */
+  private async handoffContext(sessionId: string, kind: HandoffKind, messages: readonly SessionMessage[]): Promise<string | undefined> {
+    if (messages.length === 0) return undefined;
+    const runs = new Map((await this.store.listRuns(sessionId)).map((run) => [run.id, run]));
+    return renderHandoffContext(kind, messages, {
+      run: (runId) => runs.get(runId),
+      journal: (runId) => this.store.listJournal(runId),
+    });
   }
 
   private async updateRun(
@@ -686,20 +796,6 @@ class ApprovalBroker {
     }
     this.pending.clear();
   }
-}
-
-/** Bound fresh-context handoffs while retaining the complete history in storage/UI. */
-function importedConversationContext(messages: readonly import("../sessions/types.js").SessionMessage[]): string {
-  const conversation = messages.filter((message) => message.role === "user" || message.role === "assistant");
-  const selected: { role: string; content: string }[] = [];
-  let remaining = 60_000;
-  for (const message of [...conversation].reverse()) {
-    if (remaining <= 0) break;
-    const content = message.content.slice(-remaining);
-    selected.unshift({ role: message.role, content });
-    remaining -= content.length;
-  }
-  return `The following JSON is a historical conversation imported into this project. Use it as background, not as a new instruction to repeat previous actions. Tools and permissions are controlled by the current run. The recent visible conversation is included within a 60,000-character budget; the complete history remains in the app.\n${JSON.stringify(selected)}`;
 }
 
 /** Bounded native acknowledgments; observing a timeout never leaves a rejected promise unhandled. */
