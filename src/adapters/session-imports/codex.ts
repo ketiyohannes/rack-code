@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { managedCodexCommand } from "../runtimes/managed-codex-command.js";
 
 import type { LocalSessionSource } from "../../core/session-imports/ports.js";
 import type { ExternalSession, ExternalSessionSnapshot, ImportedMessage } from "../../core/session-imports/types.js";
@@ -117,7 +118,7 @@ export class CodexLocalSessionSource implements LocalSessionSource {
   }
 
   private async withProcess<T>(projectPath: string, operation: (process: HistoryProcess) => Promise<T>): Promise<T> {
-    const process = this.options.createProcess?.(projectPath) ?? JsonRpcProcess.start("codex", ["app-server", "--stdio"], {
+    const process = this.options.createProcess?.(projectPath) ?? JsonRpcProcess.start(managedCodexCommand(), ["app-server", "--stdio"], {
       cwd: projectPath, environment: { ...globalThis.process.env,
         ...(this.options.codexHome === undefined ? {} : { CODEX_HOME: this.options.codexHome }) },
     });

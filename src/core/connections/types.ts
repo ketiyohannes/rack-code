@@ -9,6 +9,8 @@ export type ConnectStatus = "waiting" | "completed" | "failed" | "cancelled";
 export interface ConnectView {
   readonly connectId: string;
   readonly providerId: string;
+  /** Reuse flow; retries must preserve the user's choice. */
+  readonly useExistingLogin?: boolean;
   /** Account the user asked to reconnect, when this is a reconnect. */
   readonly targetAccountId?: string;
   readonly status: ConnectStatus;

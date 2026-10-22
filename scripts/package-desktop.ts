@@ -4,7 +4,7 @@
  *
  * Decisions:
  * - The renderer, main, preload, and host bundles come from
- *   `npm run build:desktop` (run first by the `package` script).
+ *   `npm run build:desktop` (run first by the `package:desktop` script).
  * - asar is disabled. The Claude Agent SDK runs a native `claude` binary
  *   from its platform package, and an executable cannot be launched from
  *   inside an asar archive.
@@ -19,10 +19,15 @@
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { bundledCodexCommand } from "../src/adapters/runtimes/managed-codex-command.js";
 
 import { packager } from "@electron/packager";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Fail before distributing a build with omitted/mismatched optional binaries.
+bundledCodexCommand();
 
 const appPaths = await packager({
   dir: root,
@@ -42,6 +47,11 @@ const appPaths = await packager({
 });
 
 for (const appPath of appPaths) {
+  // Validate the pruned package, not just the development node_modules tree.
+  const resources = process.platform === "darwin"
+    ? join(appPath, "Thinking and Code.app", "Contents", "Resources")
+    : join(appPath, "resources");
+  bundledCodexCommand({ resolve: createRequire(join(resources, "app", "package.json")).resolve });
   if (process.platform === "darwin") {
     const bundle = join(appPath, "Thinking and Code.app");
     execFileSync("codesign", ["--force", "--deep", "--sign", "-", bundle], { stdio: "inherit" });

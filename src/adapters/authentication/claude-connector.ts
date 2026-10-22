@@ -38,6 +38,7 @@ const BLOCKED_ENVIRONMENT = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUD
 export class ClaudeConnector implements AccountConnector {
   readonly providerId = "claude";
   readonly displayName = "Claude";
+  readonly existingRuntimeContextId = "local-claude-login";
 
   constructor(private readonly command = "claude", private readonly probe: typeof probeProcess = probeProcess) {}
 
@@ -84,7 +85,31 @@ export class ClaudeConnector implements AccountConnector {
     }
   }
 
+  /** Read the CLI's own identity without launching login or exporting secrets.
+   * The persisted context continues to point at the original native store.
+   */
+  private existingLogin(context: ConnectContext): ConnectAttempt {
+    const events = new AsyncQueue<ConnectEvent>();
+    let stopped = false;
+    void (async () => {
+      try {
+        const environment = claudeEnvironment(context);
+        const command = resolveClaudeCommand(this.command, environment);
+        const result = await this.probe(command, ["auth", "status", "--json"], context.directory, environment);
+        if (result.code !== 0) throw new Error("Sign in to Claude Code first with claude auth login, then retry.");
+        const identity = parseIdentity(result.stdout);
+        if (!stopped) events.push({ type: "completed", identity });
+      } catch {
+        if (!stopped) events.push({ type: "failed", error: "Could not use the existing Claude login. Install Claude Code and run claude auth login, then retry." });
+      } finally { events.complete(); }
+    })();
+    return { events, submitCode: () => undefined, cancel: async () => { stopped = true; events.complete(); } };
+  }
+
   connect(context: ConnectContext): ConnectAttempt {
+    if (context.runtimeContextId === this.existingRuntimeContextId) {
+      return this.existingLogin(context);
+    }
     const events = new AsyncQueue<ConnectEvent>();
     const environment = claudeEnvironment(context);
     const command = resolveClaudeCommand(this.command, environment);
@@ -158,6 +183,11 @@ async function readIdentity(
   environment: NodeJS.ProcessEnv,
 ): Promise<ConnectedIdentity> {
   const output = await run(command, ["auth", "status", "--json"], directory, environment);
+  return parseIdentity(output);
+}
+
+/** Only safe identity fields leave the provider boundary. */
+function parseIdentity(output: string): ConnectedIdentity {
   let status: Record<string, unknown>;
   try {
     status = JSON.parse(output) as Record<string, unknown>;

@@ -308,3 +308,15 @@ description settings. Answer designer focuses the existing question form; after
 completion or cancellation focus returns to Generate. Controls wrap within the
 980×600 layout. The conversation's recovery notice explains how to answer or
 cancel after reload; pending input remains owned by the shared question broker.
+
+## Provider installation (2026-10-22)
+
+Codex ships as a pinned native runtime. Users can connect through the app without
+installing Node, npm or a global Codex CLI. Claude still requires Claude Code.
+Accounts offers existing CLI login reuse alongside isolated sign-in; see
+[provider setup](accounts.md#provider-setup-and-existing-logins-2026-10-22).
+Existing-login accounts share the CLI account and settings. Private accounts keep
+their current directories. Package with `npm run package:desktop` on the target
+platform; install optional dependencies there rather than copying node_modules.
+Packaging requires Node 22.12 or later for Electron Packager.
+The macOS packaging script uses ad hoc signing, not distribution notarization.

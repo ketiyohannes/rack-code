@@ -99,8 +99,8 @@ export class ConnectionsService {
   }
 
   /** Providers that offer an interactive sign-in. */
-  providers(): readonly { readonly providerId: string; readonly displayName: string }[] {
-    return [...this.connectors.values()].map(({ providerId, displayName }) => ({ providerId, displayName }));
+  providers(): readonly { readonly providerId: string; readonly displayName: string; readonly supportsExistingLogin?: boolean }[] {
+    return [...this.connectors.values()].map(({ providerId, displayName, existingRuntimeContextId }) => ({ providerId, displayName, ...(existingRuntimeContextId === undefined ? {} : { supportsExistingLogin: true }) }));
   }
 
   /** Sign-ins currently in progress, for clients that (re)connect mid-flow. */
@@ -112,7 +112,7 @@ export class ConnectionsService {
    * Starts a sign-in. Returns as soon as the provider process is launched;
    * progress and the outcome arrive through `onUpdate`.
    */
-  async connect(input: { readonly providerId: string; readonly accountId?: string }): Promise<ConnectView> {
+  async connect(input: { readonly providerId: string; readonly accountId?: string; readonly useExistingLogin?: boolean }): Promise<ConnectView> {
     const connector = this.connectors.get(input.providerId);
     if (connector === undefined) {
       throw new ConnectorNotFoundError(input.providerId);
@@ -126,7 +126,12 @@ export class ConnectionsService {
     }
 
     const connectId = this.createId();
-    const runtimeContextId = `ctx-${this.createId()}`;
+    if (input.useExistingLogin && connector.existingRuntimeContextId === undefined) {
+      throw new Error("This provider does not support an existing local login.");
+    }
+    const runtimeContextId = input.useExistingLogin
+      ? connector.existingRuntimeContextId!
+      : `ctx-${this.createId()}`;
     const context = await this.contexts.resolve(runtimeContextId);
     const attempt = connector.connect({
       runtimeContextId,
@@ -139,6 +144,7 @@ export class ConnectionsService {
         connectId,
         providerId: input.providerId,
         ...(input.accountId === undefined ? {} : { targetAccountId: input.accountId }),
+        ...(input.useExistingLogin ? { useExistingLogin: true } : {}),
         status: "waiting",
         needsCode: false,
       },

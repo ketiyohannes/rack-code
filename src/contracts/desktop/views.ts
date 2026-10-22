@@ -166,6 +166,7 @@ export interface StartRunResult {
 
 /** A provider that offers "Connect <displayName> account". */
 export interface ConnectProviderView {
+  readonly supportsExistingLogin?: boolean;
   readonly providerId: string;
   readonly displayName: string;
 }

@@ -490,10 +490,11 @@ export class Controller {
    * given. When the provider does not open the sign-in page itself, this
    * window opens it in the default browser once the URL is known.
    */
-  async connectAccount(providerId: string, accountId?: string): Promise<void> {
+  async connectAccount(providerId: string, accountId?: string, useExistingLogin = false): Promise<void> {
     await this.attempt(async () => {
       const connect = await this.host.call("auth.connect", {
         providerId,
+        useExistingLogin,
         ...(accountId === undefined ? {} : { accountId }),
       });
       this.ownConnects.add(connect.connectId);

@@ -20,7 +20,7 @@ import { nativeQuestions } from "./user-questions.js";
 import type { NativeTerminalInput, TerminalProcess } from "../../core/execution/terminal.js";
 import { startAppToolServer } from "./app-tool-server.js";
 import { StringDecoder } from "node:string_decoder";
-import { resolveCodexCommand } from "./codex-command.js";
+import { managedCodexCommand } from "./managed-codex-command.js";
 
 type CodexProcessFactory = (options: {
   readonly cwd: string;
@@ -57,10 +57,10 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       readonly createProcess?: CodexProcessFactory;
     } = {},
   ) {
-    const command = options.command ?? "codex";
+    const command = options.command;
     const args = options.args ?? ["app-server", "--stdio"];
     this.createProcess = options.createProcess ?? ((processOptions) =>
-      JsonRpcProcess.start(resolveCodexCommand(command, { environment: processOptions.environment }), args, processOptions));
+      JsonRpcProcess.start(managedCodexCommand(command, processOptions.environment), args, processOptions));
   }
 
   /**

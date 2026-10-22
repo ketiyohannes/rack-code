@@ -42,7 +42,7 @@ export interface ConnectAttempt {
   cancel(): Promise<void>;
 }
 
-/** Isolated directory and environment for the account being connected. */
+/** Native directory and environment, either private or explicitly linked. */
 export interface ConnectContext {
   readonly runtimeContextId: string;
   readonly directory: string;
@@ -54,6 +54,8 @@ export interface AccountConnector {
   readonly providerId: string;
   /** Human-readable provider name for "Connect <name> account". */
   readonly displayName: string;
+  /** Opaque context for explicitly reusing a provider's existing local login. */
+  readonly existingRuntimeContextId?: string;
   connect(context: ConnectContext): ConnectAttempt;
   /** Read-only local readiness check; omitted context checks installation only.
    * Implementations bound process lifetime and return only display-safe fields.

@@ -75,7 +75,7 @@ A project and a project workspace are the same product concept: the selected fol
 
 The first six rows describe the implemented foundational modules. Timeline is the first implemented optional feature (phase 1, `src/features/timeline/`). Connections sits above Accounts and Authentication so the dependency graph stays acyclic: Accounts depends on Authentication's credential types, and Connections depends on both.
 
-Connected accounts use the `native_login` credential method: the provider keeps the credential in its own login store scoped to the account's private runtime-context directory (`auth.json` under `CODEX_HOME`, or the macOS Keychain entry keyed to `CLAUDE_CONFIG_DIR`). The app records only the opaque reference, and `NativeLoginCredentialResolver` resolves it to an empty environment because the runtime adapters already point the provider at that directory. Credential material therefore never passes through application code or records. Timeline, retrospective, and orchestration are optional modules maintained and shipped by the product owner, with on/off controls in settings. Third-party installation is not the intended meaning of optional. Specific adapter boundaries may emerge as integrations are validated.
+By default, connected accounts use private contexts with the `native_login` credential method: the provider keeps the credential in its own login store scoped to the account's private runtime-context directory (`auth.json` under `CODEX_HOME`, or the macOS Keychain entry keyed to `CLAUDE_CONFIG_DIR`). The app records only the opaque reference, and `NativeLoginCredentialResolver` resolves it to an empty environment because the runtime adapters already point the provider at that directory. Credential material therefore never passes through application code or records. Timeline, retrospective, and orchestration are optional modules maintained and shipped by the product owner, with on/off controls in settings. Third-party installation is not the intended meaning of optional. Specific adapter boundaries may emerge as integrations are validated.
 
 ### Provider diagnostics (2026-10-16)
 
@@ -631,3 +631,24 @@ initialization from using older root settings before discovering a newer
 workflow's routing/permissions. Provider catalog discovery remains independent.
 The drafting picker watches catalog updates without replacing the local draft
 or substituting an unavailable assigned model.
+
+## Provider runtime setup (2026-10-22)
+
+Codex is a pinned production dependency (`@openai/codex`), resolved to its
+platform-specific native executable by the runtime adapter. Authentication,
+diagnostics, discovery and execution share that resolver; no system Node or
+global CLI is needed. Runtime updates ship with application dependency updates.
+Release builds include optional platform packages, remain outside asar, and must
+be built with dependencies installed for the target OS/architecture.
+
+Connections exposes a provider-neutral existing-login capability and explicit
+`useExistingLogin` request. Connectors supply opaque context IDs; the directory
+adapter resolves those IDs to the user's native Claude/Codex directory. The
+connector reads identity without starting OAuth or copying secrets. Normal
+connections retain fresh private directories and old account records keep their
+existing isolation. The UI offers both choices and preserves the choice on retry.
+Linked accounts share CLI settings, sessions and subsequent CLI login changes;
+private accounts retain the established isolation. Linking does not migrate old
+sessions or sign out the CLI. This is an explicit extension to the earlier
+private-context-only policy. The provider-native store remains responsible for
+credential persistence.

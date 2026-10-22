@@ -1,3 +1,10 @@
+## 2026-10-22 — Provider runtime setup
+
+- Added explicit existing Claude/Codex login reuse alongside isolated account sign-in; retries preserve the selected flow. Credentials remain in provider stores. Linked accounts share CLI state and subsequent login changes.
+- Included pinned Codex 0.163.0 as a production dependency; login, diagnostics, discovery and runs use its native platform binary without global CLI or system Node requirements.
+- Added desktop packaging command/dependency and a preflight for the bundled Codex runtime. Claude installation remains external.
+- Validation: Typecheck passed; the full suite passed (388 tests), and the subsequently added context-isolation test passed separately (8 new tests total). Desktop build and macOS ARM packaging passed, including packaged-runtime preflight; real development and packaged Codex version/app-server startup checks passed using disposable config. The initial sandboxed suite had three local-listener failures; the permitted rerun passed. Browser OAuth, real account reuse, full packaged GUI launch and Windows/Linux execution were not exercised.
+
 # Merge agent orchestra into dev (2026-10-22)
 
 - Combine per-session model memory from dev with the orchestra branch's per-conversation composer selection. The composer owns the selection: on a session's first visit it uses the session's saved explicit choice, then its root history or workflow defaults, then the last model chosen anywhere. Explicit changes are saved per session (up to 300) and survive restarts; choices saved by the earlier format are still read. A saved model that is no longer offered shows as unavailable instead of silently switching models. The picker's `setScope` is replaced by `setSelection`, and the side chat keeps the global starting choice.

@@ -161,7 +161,7 @@ export interface HostCommandMap {
   /** Local readiness observation only; never starts login or changes availability. */
   "auth.diagnose": { params: { readonly providerId: string; readonly accountId?: string }; result: ProviderDiagnostic };
   /** Starts a sign-in; pass `accountId` to reconnect an existing account. */
-  "auth.connect": { params: { readonly providerId: string; readonly accountId?: string }; result: ConnectView };
+  "auth.connect": { params: { readonly providerId: string; readonly accountId?: string; readonly useExistingLogin?: boolean }; result: ConnectView };
   "auth.submitCode": { params: { readonly connectId: string; readonly code: string }; result: null };
   "auth.cancel": { params: { readonly connectId: string }; result: null };
   /** Sign-ins in progress, for clients that open mid-flow. */
@@ -347,7 +347,7 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
   "accounts.reauthenticate": object({ accountId: id, credential, runtimeContextId: optional(id) }),
   "auth.providers": empty,
   "auth.diagnose": object({ providerId: text(), accountId: optional(text()) }),
-  "auth.connect": object({ providerId: id, accountId: optional(id) }),
+  "auth.connect": object({ providerId: id, accountId: optional(id), useExistingLogin: optional(boolean) }),
   "auth.submitCode": object({ connectId: id, code: text({ maxLength: 4096 }) }),
   "auth.cancel": object({ connectId: id }),
   "auth.active": empty,

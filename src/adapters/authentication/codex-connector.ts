@@ -1,6 +1,6 @@
 import { JsonRpcProcess, ProviderRequestTimeoutError, type JsonRpcMessage } from "../runtimes/json-rpc-process.js";
 import { AsyncQueue } from "../../core/shared/async-queue.js";
-import { resolveCodexCommand } from "../runtimes/codex-command.js";
+import { managedCodexCommand } from "../runtimes/managed-codex-command.js";
 import { diagnosticContext, diagnosticExecutable, diagnosticVersion, probeProcess, DiagnosticProcessError } from "./diagnostic-process.js";
 import type {
   AccountConnector,
@@ -30,6 +30,7 @@ import type {
 export class CodexConnector implements AccountConnector {
   readonly providerId = "codex";
   readonly displayName = "Codex";
+  readonly existingRuntimeContextId = "local-codex-login";
 
   constructor(
     private readonly options: {
@@ -56,7 +57,7 @@ export class CodexConnector implements AccountConnector {
     try {
       return await diagnosticContext(context, async (scoped) => {
         const environment = { ...process.env, ...scoped.environment, CODEX_HOME: scoped.directory };
-        executable = diagnosticExecutable(resolveCodexCommand(this.options.command, { environment }), environment, scoped.directory);
+        executable = diagnosticExecutable(managedCodexCommand(this.options.command, environment), environment, scoped.directory);
         stage = "version";
         const probe = await (this.options.probeProcess ?? probeProcess)(executable, ["--version"], scoped.directory, environment);
         version = diagnosticVersion(probe.stdout);
@@ -80,7 +81,7 @@ export class CodexConnector implements AccountConnector {
     } catch (error) {
       return result("failed", (error instanceof DiagnosticProcessError && error.reason === "timeout") || error instanceof ProviderRequestTimeoutError
         ? "Codex did not respond within 10 seconds. Close stalled Codex processes and retry."
-        : stage === "discovery" ? "Codex CLI was not found. Install it and restart Rack, then retry."
+        : stage === "discovery" ? "The bundled Codex runtime was not found. Reinstall the app, then retry."
         : `Codex ${stage} check failed. Verify the CLI installation, update it if needed, and retry.`);
     }
   }
@@ -90,7 +91,7 @@ export class CodexConnector implements AccountConnector {
     const start = this.options.createProcess ?? JsonRpcProcess.start.bind(JsonRpcProcess);
     const environment = { ...process.env, ...context.environment, CODEX_HOME: context.directory };
     const command = this.options.createProcess === undefined
-      ? resolveCodexCommand(this.options.command, { environment })
+      ? managedCodexCommand(this.options.command, environment)
       : this.options.command ?? "codex";
     const child = start(command, this.options.args ?? ["app-server", "--stdio"], {
       cwd: context.directory,
@@ -106,6 +107,17 @@ export class CodexConnector implements AccountConnector {
           capabilities: {},
         }, 10_000);
         child.notify("initialized", {});
+        // Existing-login connections only inspect the provider's native store.
+        // They never start OAuth or overwrite the user's CLI authentication.
+        if (context.runtimeContextId === this.existingRuntimeContextId) {
+          const account = recordAt(await child.request("account/read", { refreshToken: false }, 10_000), "account");
+          const email = stringAt(account, "email");
+          if (stringAt(account, "type") !== "chatgpt" || email === undefined) {
+            throw new Error("No existing ChatGPT login was found. Connect a Codex account to sign in through the app.");
+          }
+          if (!stopped) events.push({ type: "completed", identity: { providerAccountId: email, email } });
+          return;
+        }
         const started = await child.request("account/login/start", { type: "chatgpt" }, 10_000);
         loginId = stringAt(started, "loginId");
         const authUrl = stringAt(started, "authUrl");

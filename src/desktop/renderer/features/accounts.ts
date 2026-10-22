@@ -10,7 +10,7 @@
  *   signs in again for that account; selection affects future runs only.
  *
  * No credential or secret is typed into or shown by this pane. The provider
- * keeps the login in the account's own runtime-context directory.
+ * keeps the login in its native store, either linked or isolated by choice.
  */
 import type { AccountView, ConnectView } from "../../../contracts/desktop/index.js";
 import type { Controller } from "../controller.js";
@@ -30,8 +30,9 @@ export function mountAccounts(root: HTMLElement, store: Store, controller: Contr
   root.append(
     h("header", { class: "settings-pane-header" },
       h("h3", {}, "Accounts ", count),
-      h("p", {}, "Sign in with your own subscriptions. Credentials stay in each provider's own login store, isolated per account."),
+      h("p", {}, "Sign in with your own subscriptions. Use your existing local login or sign in to a separate account."),
     ),
+    h("p", { class: "form-note" }, "Codex is included with the app. Claude requires Claude Code. Existing logins share the CLI account and settings; signing in separately keeps an account private."),
     connectButtons,
     diagnostics,
     connecting,
@@ -42,15 +43,22 @@ export function mountAccounts(root: HTMLElement, store: Store, controller: Contr
     const busy = new Set(Object.values(state.connects)
       .filter((connect) => connect.status === "waiting")
       .map((connect) => connect.providerId));
-    replace(connectButtons, ...state.connectProviders.map((provider) => h("button", {
-      class: "connect-button",
-      disabled: busy.has(provider.providerId),
-      onClick: () => void controller.connectAccount(provider.providerId),
-    },
-      icon("plugs"),
-      h("span", {}, `Connect ${provider.displayName} account`),
-      busy.has(provider.providerId) ? icon("circle-notch", { className: "spin" }) : icon("arrow-right"),
-    )));
+    replace(connectButtons, ...state.connectProviders.flatMap((provider) => [
+      ...(provider.supportsExistingLogin ? [h("button", {
+        class: "connect-button", disabled: busy.has(provider.providerId),
+        title: "Shares the local CLI login and settings. Changing that CLI account also changes the account used here.",
+        onClick: () => void controller.connectAccount(provider.providerId, undefined, true),
+      }, icon("plugs"), h("span", {}, `Use existing ${provider.displayName} login`))] : []),
+      h("button", {
+        class: "connect-button",
+        disabled: busy.has(provider.providerId),
+        onClick: () => void controller.connectAccount(provider.providerId),
+      },
+        icon("plugs"),
+        h("span", {}, provider.supportsExistingLogin ? `Sign in to separate ${provider.displayName} account` : `Connect ${provider.displayName} account`),
+        busy.has(provider.providerId) ? icon("circle-notch", { className: "spin" }) : icon("arrow-right"),
+      ),
+    ]));
     replace(connecting, ...Object.values(state.connects).map((connect) => renderConnect(connect, state, controller)));
   });
 
@@ -93,7 +101,7 @@ function renderConnect(connect: ConnectView, state: AppState, controller: Contro
   const body: Node[] = [];
   if (connect.status === "waiting") {
     body.push(h("p", { class: "form-note" }, connect.url === undefined
-      ? "Starting sign-in..."
+      ? connect.useExistingLogin ? "Checking existing login..." : "Starting sign-in..."
       : connect.urlOpenedByProvider
         ? "Finish signing in on the page that opened in your browser."
         : "Finish signing in in your browser. The page opened automatically."));
@@ -120,7 +128,7 @@ function renderConnect(connect: ConnectView, state: AppState, controller: Contro
         class: "button button-small",
         onClick: () => {
           controller.dismissConnect(connect.connectId);
-          void controller.connectAccount(connect.providerId, connect.targetAccountId);
+          void controller.connectAccount(connect.providerId, connect.targetAccountId, connect.useExistingLogin);
         },
       }, "Try again"));
     }
