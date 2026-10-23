@@ -1,0 +1,73 @@
+# The Rack daemon: @rack/host running headless and exposing its WebSocket
+# transport on loopback. Nothing in this image publishes that port beyond the
+# guest; reaching it is the sidecar's job (tailnet) or apps/vm-manager's
+# (relay, vsock, or a forwarded port).
+
+[Unit]
+Description=Rack daemon
+Requires=var-lib-rack.mount run-rackconfig.mount rack-preflight.service
+After=var-lib-rack.mount run-rackconfig.mount rack-preflight.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rack
+Group=rack
+WorkingDirectory=/var/lib/rack
+
+# Baked at build time from the RACK_DAEMON_ENTRY build argument.
+EnvironmentFile=/etc/rack/daemon-entry.env
+
+# Per-VM identity defaults. These come *before* the config disk on purpose:
+# later assignments win in systemd, so a VM may override them.
+Environment=NODE_ENV=production
+Environment=RACK_MACHINE_ID=%H
+Environment=RACK_DAEMON_PORT=7420
+
+# Written per VM by apps/vm-manager. See infra/images/README.md for the keys.
+EnvironmentFile=/run/rackconfig/daemon.env
+
+# The data disk is mounted empty on a VM's first boot.
+ExecStartPre=/usr/bin/install -d -o rack -g rack -m 0750 /var/lib/rack/data
+
+# Paths that describe this image's own layout are passed as arguments rather
+# than environment variables, because a config disk cannot rewrite an
+# ExecStart line. That makes it impossible for a VM's configuration to move
+# the data directory off the persistent disk or point the daemon at a
+# different pairing token.
+#
+# --host is left at its default (loopback). Binding the daemon to a routable
+# interface would make the pairing token the only thing protecting the VM;
+# the sidecar is how this image expects to be reached.
+ExecStart=/usr/local/bin/node /opt/rack/daemon/${RACK_DAEMON_ENTRY} \
+    --data-directory /var/lib/rack/data \
+    --token-file /run/rackconfig/pairing.token \
+    --machine-id ${RACK_MACHINE_ID} \
+    --port ${RACK_DAEMON_PORT}
+
+Restart=on-failure
+RestartSec=2s
+
+# Agent runs are children of this service, so the default control-group kill
+# covers them. SIGTERM starts the daemon's bounded shutdown: it cancels active
+# runs and waits for their terminal states to reach disk. The timeout must
+# exceed the daemon's own --shutdown-timeout (10s by default) so systemd does
+# not SIGKILL it mid-write; see "Execution recovery and bounded shutdown" in
+# docs/architecture.md.
+TimeoutStopSec=45s
+
+# Agents open many files and watchers.
+LimitNOFILE=65536
+
+# Deliberately minimal sandboxing: the microVM is the isolation boundary, and
+# the guest contains only this project's data. systemd hardening such as
+# ProtectSystem=strict would block ordinary agent tasks (installing a
+# toolchain, writing outside the data directory) while protecting nothing that
+# the VM boundary does not already protect.
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

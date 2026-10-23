@@ -30,7 +30,7 @@ TypeScript describes the source language, not the runtime. Electron provides the
 
 Electron's main process runs in a Node.js environment, its renderers display web content, and its utility processes also run Node.js. A preload bridge connects the interface to privileged application operations. These are Electron's process boundaries; choosing a package manager does not replace them. See [Electron's process model](https://www.electronjs.org/docs/latest/tutorial/process-model).
 
-Use npm for dependency management and project scripts, with Node.js development tooling. Compile application TypeScript for the selected Electron version. Keep application rules independent of Electron APIs and put platform-specific operations behind interfaces.
+Use npm for dependency management and project scripts, with Node.js development tooling. The repository is an npm-workspaces monorepo; see [Repository layout and package boundaries](#repository-layout-and-package-boundaries). Compile application TypeScript for the selected Electron version. Keep application rules independent of Electron APIs and put platform-specific operations behind interfaces.
 
 Pin tooling and dependency versions when the scaffold is approved, commit the npm lockfile, and use reproducible installs in CI. Development Node.js and Electron's embedded Node.js may differ; validate production code against the shipped Electron environment.
 
@@ -73,9 +73,9 @@ Proposed ownership:
 
 A project and a project workspace are the same product concept: the selected folder and its sessions. Standalone chats have a private file workspace supplied by Sessions, without a Project record. The application has one `ProjectRecord`, one `ProjectsService`, and one `projectId` used by sessions, runs, model discovery, and writer locks. The UI consistently calls this entity a project; there is no second folder record or parent/child identity.
 
-The first six rows describe the implemented foundational modules. Timeline is the first implemented optional feature (phase 1, `src/features/timeline/`). Connections sits above Accounts and Authentication so the dependency graph stays acyclic: Accounts depends on Authentication's credential types, and Connections depends on both.
+The first six rows describe the implemented foundational modules. Timeline is the first implemented optional feature (phase 1, `packages/features/src/timeline/`). Connections sits above Accounts and Authentication so the dependency graph stays acyclic: Accounts depends on Authentication's credential types, and Connections depends on both.
 
-Connected accounts use the `native_login` credential method: the provider keeps the credential in its own login store scoped to the account's private runtime-context directory (`auth.json` under `CODEX_HOME`, or the macOS Keychain entry keyed to `CLAUDE_CONFIG_DIR`). The app records only the opaque reference, and `NativeLoginCredentialResolver` resolves it to an empty environment because the runtime adapters already point the provider at that directory. Credential material therefore never passes through application code or records. Timeline, retrospective, and orchestration are optional modules maintained and shipped by the product owner, with on/off controls in settings. Third-party installation is not the intended meaning of optional. Specific adapter boundaries may emerge as integrations are validated.
+By default, connected accounts use private contexts with the `native_login` credential method: the provider keeps the credential in its own login store scoped to the account's private runtime-context directory (`auth.json` under `CODEX_HOME`, or the macOS Keychain entry keyed to `CLAUDE_CONFIG_DIR`). The app records only the opaque reference, and `NativeLoginCredentialResolver` resolves it to an empty environment because the runtime adapters already point the provider at that directory. Credential material therefore never passes through application code or records. Timeline, retrospective, and orchestration are optional modules maintained and shipped by the product owner, with on/off controls in settings. Third-party installation is not the intended meaning of optional. Specific adapter boundaries may emerge as integrations are validated.
 
 ### Provider diagnostics (2026-10-16)
 
@@ -104,7 +104,7 @@ commands and turns have no new deadline.
 
 ### Concrete runtime contract
 
-"Provider-neutral" has a strict meaning: core modules may import only application-owned contracts and data types. They must not import Codex app-server protocol names, Claude Agent SDK classes, provider transcript types, provider credential objects, or provider-specific event names. Those imports belong only inside `adapters/runtimes/codex` and `adapters/runtimes/claude`.
+"Provider-neutral" has a strict meaning: core modules may import only application-owned contracts and data types. They must not import Codex app-server protocol names, Claude Agent SDK classes, provider transcript types, provider credential objects, or provider-specific event names. Those imports belong only inside `packages/runtimes/src/codex` and `packages/runtimes/src/claude`.
 
 The implemented shared runtime contract uses these operations and values:
 
@@ -190,7 +190,7 @@ Subscription authentication has documented technical support for both initial ru
 
 ## Code review and analytics
 
-Pull Requests and Usage are implemented as explicit host services and renderer pages; see [Pull requests and Usage](pull-requests.md). `features/pull-requests` owns the public project and account-inbox gateways, project validation and saved-project resolution. The additive `ReviewInboxService` lists and reviews remote PRs independently of local folders; it uses a narrow project-list port only to find exact repository matches for Timeline. `adapters/code-hosts` owns HTTPS provider APIs, GitHub identities/credential routing, other providers' host-scoped credentials, Git remote discovery, normal branch publishing and isolated review comparison refs. GitHub, GitLab and Bitbucket Cloud share the desktop contract. Provider-specific unsupported controls are disclosed rather than emulated. GitHub has no token entry: new identities are added by browser sign-in, which `GitHubBrowserLogin` delegates to `gh auth login --web` so credentials land in gh's keychain-backed store and persist across restarts without a Rack vault. GitLab/Bitbucket tokens entered in Rack stay in host memory. `GitHubAccounts` discovers every CLI host/user plus independently verified environment identities. Account IDs include host/login, tokens never enter desktop views, and per-user credential subprocesses exclude environmental overrides. `GitHubInbox` binds one credential per operation, fans search across accounts, merges duplicate repository/number identities, and returns partial failures and search-window notices. It never switches global CLI authentication. The renderer shares a tabbed review surface between this inbox and repository workflows.
+Pull Requests and Usage are implemented as explicit host services and renderer pages; see [Pull requests and Usage](pull-requests.md). `packages/features/src/pull-requests` owns the public project and account-inbox gateways, project validation and saved-project resolution. The additive `ReviewInboxService` lists and reviews remote PRs independently of local folders; it uses a narrow project-list port only to find exact repository matches for Timeline. `packages/node-adapters/src/code-hosts` owns HTTPS provider APIs, GitHub identities/credential routing, other providers' host-scoped credentials, Git remote discovery, normal branch publishing and isolated review comparison refs. GitHub, GitLab and Bitbucket Cloud share the desktop contract. Provider-specific unsupported controls are disclosed rather than emulated. GitHub has no token entry: new identities are added by browser sign-in, which `GitHubBrowserLogin` delegates to `gh auth login --web` so credentials land in gh's keychain-backed store and persist across restarts without a Rack vault. GitLab/Bitbucket tokens entered in Rack stay in host memory. `GitHubAccounts` discovers every CLI host/user plus independently verified environment identities. Account IDs include host/login, tokens never enter desktop views, and per-user credential subprocesses exclude environmental overrides. `GitHubInbox` binds one credential per operation, fans search across accounts, merges duplicate repository/number identities, and returns partial failures and search-window notices. It never switches global CLI authentication. The renderer shares a tabbed review surface between this inbox and repository workflows.
 
 Timeline reads `refs/rack-pr-timeline/*` through its existing project-history and snapshot membership checks. The review adapter writes immutable merge-base-to-head comparisons, retains prior versions and never changes HEAD, the index or working files. Host freshness events connect the optional capabilities without making either depend on the other's internals.
 
@@ -201,7 +201,7 @@ The renderer keeps page navigation separate from session selection. Opening a fu
 ## Dependency direction and composition
 
 Terminal, Browser and Files (completed 2026-10-15) are explicitly assembled
-features under `src/features/`. Files consumes a project lookup and a file
+features under `packages/features/src/`. Files consumes a project lookup and a file
 I/O port; its adapter bounds reads and implements version-checked atomic
 saves. Terminal owns context-scoped shells and bounded output; native runtime
 controls use a core-owned optional port, with `node-pty` as the local fallback.
@@ -248,42 +248,99 @@ Arrows describe dependencies or assembly, not event flow. The composition root k
 
 Use direct typed calls for commands and queries. Use structured events to notify observers about facts that already happened. Do not turn all application control flow into an event bus. Optional observers must not be required for a core operation to complete.
 
-## Proposed source layout
+## Repository layout and package boundaries
 
-This is an illustrative ownership map, not directories to create in advance:
+Implemented 2026-10-22 (branch `refactor/monorepo-workspaces`). The repository is an npm-workspaces monorepo. **Packages** are shared libraries; **apps** are things that run or ship. The move relocated folders and rewrote imports only; application behavior did not change.
 
 ```text
-src/
-  composition/             Explicit service and feature assembly
-  desktop/
-    host/                  Execution host utility process: composed app, active runs, command dispatch
-    main/                  Electron lifecycle, windows, IPC handlers
-    preload/               Narrow typed renderer bridge
-    renderer/              UI shell and feature-specific presentation
-  core/
-    authentication/
-    accounts/              Account identity, availability, selection, and switching policy
-    sessions/
-    execution/
-    projects/
-  features/
-    timeline/
-    retrospective/
-    orchestration/
-  adapters/
-    runtimes/              Codex, Claude, and future runtime integrations
-    storage/               Implementations of module-owned storage interfaces
-    platform/              Credentials, filesystem, processes, environments
-  contracts/
-    desktop/               Serializable desktop commands, responses, events
+packages/
+  core/            @rack/core           Domain rules and ports: accounts, authentication, connections,
+                                        execution, projects, sessions, session imports
+  features/        @rack/features       Optional capabilities: timeline, browser, files, terminal,
+                                        orchestration, pull requests, usage
+  contracts/       @rack/contracts      Host commands, events, views, validation, desktop transport
+  runtimes/        @rack/runtimes       Provider code: codex/, claude/, app-tool-server/, shared/,
+                                        authentication/ (connectors, credential and context resolvers),
+                                        session-imports/ (native transcript readers)
+  node-adapters/   @rack/node-adapters  Node implementations of ports: storage/, git/, worktrees/, pty/,
+                                        files/, timeline/ (snapshots, watcher), code-hosts/
+  host/            @rack/host           composition/application.ts (createApplication), HostApi,
+                                        ActiveRuns, host errors, model cache; integration/ tests
+  client/          @rack/client         HostClient plus its transports: the Electron preload bridge
+                                        and a resumable WebSocket to a daemon
+  ui/              @rack/ui             Framework-free renderer; mount.ts mounts it on any HostClient
+apps/
+  desktop/         @rack/desktop        Electron main, preload, the host utility-process entry,
+                                        build, packaging and native fixture scripts
+  daemon/          @rack/daemon         Headless host over WebSocket: config, pairing tokens, ws wiring
+  web/             @rack/web            Browser controller: pairing screen, connection banner, bundle
+  mobile/          @rack/mobile         Capacitor shell packaging the web bundle for iOS and Android
+  vm-manager/      @rack/vm-manager     microVM lifecycle on a bare VPS: create, snapshot, restore
+  cloud/           @rack/cloud          Control plane: accounts, billing, provisioning, relay registry
+native/tsnet-sidecar/                  Go module: joins a tailnet and forwards to the local daemon
+infra/images/                          VM image definitions with the daemon preinstalled
+scripts/check-boundaries.ts            Workspace dependency rule check
 docs/
-  architecture.md
-  changes.md
 ```
 
-Within each capability, keep its rules, use cases, interfaces, and tests together. Add internal subdirectories only when useful. Public exports are intentional; other modules must not deep-import implementation files. Presentation stays grouped by feature inside the renderer, while application behavior remains in the owning core or feature module.
+Previous locations map as follows: `src/core` → `packages/core/src`; `src/features` → `packages/features/src`; `src/contracts/desktop` → `packages/contracts/src`; `src/adapters/{runtimes,authentication,session-imports}` → `packages/runtimes/src`; `src/adapters/{storage,projects,files,terminal,timeline,code-hosts}` → `packages/node-adapters/src` (`projects` became `git` and `worktrees`, `terminal` became `pty`); `src/composition` and `src/desktop/host` → `packages/host/src`, except the Electron entry, which is now `apps/desktop/src/host/entry.ts`; `src/desktop/{main,preload}` → `apps/desktop/src`; `src/desktop/renderer/host-client.ts` → `packages/client/src`; the rest of the renderer → `packages/ui/src`; `scripts/` → `apps/desktop/scripts`. The former library barrel `src/index.ts` is split into `@rack/core`, `@rack/runtimes` and `@rack/host` entry points. Two tests that assemble several layers moved to `packages/host/src/integration/` (`timeline-service.test.ts`, formerly in features; `code-hosts.test.ts`, formerly in adapters) so that no lower package needs a higher one.
 
-Contract ownership stays with the relevant module except for transport-specific schemas. A generic shared-types directory must not become a second domain model. Workspace packages can enforce larger boundaries later if needed; their introduction is not necessary for every module.
+### Dependency rules
+
+Dependencies point inward. A workspace may import another workspace only through its package name, and only if it declares it in `package.json`:
+
+| Package | May depend on |
+| --- | --- |
+| core | nothing |
+| features | core |
+| contracts | core, features |
+| runtimes | core |
+| node-adapters | core, features |
+| host | contracts, core, features, node-adapters, runtimes |
+| client | contracts, features |
+| ui | client, contracts, core, features |
+| desktop | any package |
+| daemon | contracts, host |
+| web | client, contracts, ui |
+| mobile, vm-manager, cloud | nothing |
+
+Tests and a workspace's `scripts/` may additionally use `devDependencies` (node-adapters tests use contracts and runtimes; desktop fixtures use core, node-adapters and runtimes). `npm run check:boundaries` enforces these rules, the declared-dependency requirement and the ban on relative imports that leave a workspace. It is a small script rather than dependency-cruiser so that the check needs no new dependency.
+
+`contracts` depends on core and features because the wire types reuse domain and feature view types. Making contracts dependency-free requires defining wire-level types separately and is not done yet; clients that must run without core sources (for example a mobile app) will need it.
+
+### Package mechanics
+
+- **Source packages.** Workspace packages export TypeScript sources (`"./*": "./src/*.ts"`, plus explicit entries for module `index.ts` files), so there is no per-package build. `@rack/core/execution` resolves to the module's public index, `@rack/core/execution/types` to a single file. Imports between workspaces are extensionless; relative imports inside a workspace keep `.js` extensions.
+- **Type checking.** `tsconfig.base.json` holds the shared Node settings and `tsconfig.browser.json` the DOM/bundler settings used by `ui` and `client` (renderer tests are excluded there, as before). Each workspace has its own `tsconfig.json` and `typecheck` script; the root `npm run typecheck` runs all of them plus the root scripts. A package's program includes the sources it imports from other workspaces. `apps/desktop/scripts` are still not type checked.
+- **Tests.** `npm test` runs `tsx --test` over `packages/*/src/**/*.test.ts` and `apps/*/src/**/*.test.ts`. tsx compiles workspace sources because npm links workspaces by symlink and Node resolves the real path outside `node_modules`.
+- **Bundling.** Because packages ship sources, esbuild's `packages: "external"` is no longer usable for main and the host. `apps/desktop/scripts/esbuild-workspace.ts` marks every bare import external except `@rack/*`, so workspace code is compiled in while third-party packages that locate files at runtime (Claude Agent SDK, Codex binaries, node-pty) stay external as before. The desktop build writes to `apps/desktop/dist/`.
+- **Web and mobile bundling.** `apps/web/scripts/build-web.ts` mirrors the renderer half of the desktop build (same fonts, same inlined SVG icons, same `__APP_VERSION__` define) and emits only browser output; the web controller never loads the host. `apps/mobile` stages that bundle into `www/` for Capacitor, dropping source maps. Build output lives under each app (`apps/desktop/dist`, `apps/desktop/release`, `apps/web/dist`, `apps/mobile/www`) and is ignored by git, so no output outlives the package it came from.
+- **Packaging.** npm hoists all third-party packages to the root `node_modules`, so `apps/desktop` has none of its own. `package-desktop.ts` stages a generated manifest (the runtime dependencies of every workspace the app depends on), the build output and a symlink to the root `node_modules`; the packager dereferences and prunes it. The staged manifest keeps the app name `thinking-and-code`, and `apps/desktop/package.json` sets the same `productName`, because Electron derives the user-data directory and single-instance lock from it.
+
+The three new apps that run no agents — `mobile`, `vm-manager` and `cloud` — declare no workspace dependencies at all. `mobile` wraps the *built* web bundle rather than importing it; `vm-manager` and `cloud` are infrastructure and must never reach into the domain. The rule table makes that structural instead of a matter of review.
+
+### Remote protocol and transports
+
+Implemented 2026-10-23. `HostApi` was already transport-independent; what was missing was a second way to reach it. `packages/host/src/transport/` now holds both, and neither adds a dependency to `@rack/host`:
+
+- **`UtilityPortTransport`** serves the host over an Electron utility-process port (`apps/desktop`). Both ends ship together, so there is no negotiation and no resume: a dead port means a dead host. It also carries the browser round-trip to main, bounded by a timeout. The port is typed structurally, so no Electron dependency is introduced.
+- **`RemoteHostServer`** serves remote controllers (`apps/daemon`). It owns version negotiation, token authorization, request correlation and replay. It accepts a `HostConnection` — a four-method duplex interface — so the socket library is the daemon's choice and the rules are unit-tested with an in-memory fake.
+- **`EventStream`** sequences host events and keeps a bounded replay tail, shared by the remote case.
+- **`startHost`** is the startup sequence both processes need: compose, run `execution.initialize()` to completion before serving any command, then begin Timeline tracking in the background. Serving queries first would hand clients stale `running` statuses and writer locks nobody owns.
+
+`packages/contracts/src/protocol.ts` defines the wire format: `hello`/`welcome` carrying `PROTOCOL_VERSION`, request/response by ID, sequenced events, and ping/pong. Mobile apps and remote daemons update on different schedules, so a daemon that cannot speak a controller's version says so in a `rejected` frame instead of failing later on a field it does not understand.
+
+**Resumable sessions.** Each event carries a monotonic sequence; a controller checkpoints the highest it applied and asks to resume from it. A buffered gap is replayed; an evicted one — or a cursor from a previous daemon process, detected through `instanceId` — answers `truncated` and the controller re-reads state with the ordinary read commands. That fallback is always correct because host events are a freshness signal rather than the source of truth, which makes the replay buffer a bandwidth optimization and never a correctness requirement. The same property means the buffer can stay small enough for a 256 MB VM.
+
+**Delivery guarantees.** A command that never reached a socket is queued and sent on the next `welcome`, so the interface issuing commands before the first connection is not treated as an outage. A command that *was* written and then lost its connection is failed with `host_unavailable`, not retried: the daemon may have executed it, and replaying `projects.add` or `sessions.create` would duplicate real state. This matches what a pending command already does when the desktop host process exits. Safe resending would need idempotency keys and daemon-side deduplication, which the protocol does not have.
+
+**Capability honesty.** Folder pickers, "open in editor", revealing a path and the shared browser belong to the machine the *window* runs on. `ClientTransport.shell` is therefore optional and absent on the WebSocket transport, and `HostClient` turns those calls into `feature_unavailable` — an error the interface already handles — rather than letting them fail unpredictably. Browser commands on a daemon answer the same way, because `createApplication` is called without a browser driver.
+
+**Authentication.** The daemon authenticates devices with a 256-bit pairing token, stored `0600` and compared in constant time; `apps/cloud` is what authenticates people. The daemon binds to loopback unless `--host` is passed explicitly, because the intended remote path is the tsnet sidecar or a relay. End-to-end encryption, so a relay sees only opaque blobs, is not implemented.
+
+Within each capability, keep its rules, use cases, interfaces, and tests together. Add internal subdirectories only when useful. Public exports are intentional. Presentation stays grouped by feature inside `@rack/ui`, while application behavior remains in the owning core or feature module.
+
+Contract ownership stays with the relevant module except for transport-specific schemas. A generic shared-types directory must not become a second domain model.
 
 ## Desktop and application separation
 
@@ -297,7 +354,7 @@ keep their existing boundaries. The combined patch stays available for older
 clients. Reads do not mutate the index. See [Changes panel](changes-view.md).
 
 Explicit Git operations (2026-10-21) are a separate Projects port,
-`ProjectSourceControl`, implemented by `adapters/projects/git-source-control.ts`
+`ProjectSourceControl`, implemented by `packages/node-adapters/src/git/git-source-control.ts`
 and exposed as `projects.sourceControl`. Keeping them apart from the
 read-only `ProjectChangesReader` guarantees that background polling can never
 mutate a checkout. `ProjectsService.sourceControl` resolves the folder (project,
@@ -377,7 +434,7 @@ Cross-runtime continuation is a context handoff, not an assumption that opaque n
 
 Track how much of the application conversation each native continuation has seen. For a Codex-to-Claude-to-Codex sequence, the old Codex thread must receive relevant intervening work before continuing. Merely reopening its previous native ID would leave it unaware of Claude's work. Use supported input mechanisms or a fresh native context; do not rewrite opaque runtime transcripts into an invented universal format.
 
-Implemented: `NativeContinuationReference.seenThroughMessageId` records the last session message each native thread has seen. ExecutionService sets it to the run's prompt when the adapter confirms the thread, and to the run's reply when the run settles. Before resuming, it hands the thread only the later messages (other runtimes, accounts and workflow turns) as a quoted, attributed context block followed by the current request. A fresh thread receives the recent conversation the same way. `core/execution/handoff.ts` renders both blocks: whole turns within a 60,000-character budget (newest first, omitted turns counted, an oversized newest turn shortened with an explicit notice), each attributed by provider and model, with tool activity and changed files summarized from the run journal. Raw tool messages and readable thinking are excluded, and tool calls are never replayed. Records saved before the marker existed derive their position from attempts that recorded the same native session ID. When the position cannot be established, a fresh thread with full context is used instead of a blind resume.
+Implemented: `NativeContinuationReference.seenThroughMessageId` records the last session message each native thread has seen. ExecutionService sets it to the run's prompt when the adapter confirms the thread, and to the run's reply when the run settles. Before resuming, it hands the thread only the later messages (other runtimes, accounts and workflow turns) as a quoted, attributed context block followed by the current request. A fresh thread receives the recent conversation the same way. `packages/core/src/execution/handoff.ts` renders both blocks: whole turns within a 60,000-character budget (newest first, omitted turns counted, an oversized newest turn shortened with an explicit notice), each attributed by provider and model, with tool activity and changed files summarized from the run journal. Raw tool messages and readable thinking are excluded, and tool calls are never replayed. Records saved before the marker existed derive their position from attempts that recorded the same native session ID. When the position cannot be established, a fresh thread with full context is used instead of a blind resume.
 
 Adapters report a resumed thread that cannot be opened as `failed` with `reason: "continuation_unavailable"`: Codex "no rollout found" from `thread/resume`, Claude "No conversation found". If that is the first activity of the turn, ExecutionService removes the stale association, journals a `run_status` note and continues the same attempt in a fresh thread with full context. Codex reports a new thread ID only after `turn/start` succeeds, because Codex writes the rollout when the first turn starts; a thread whose first turn failed is no longer saved.
 
@@ -475,7 +532,7 @@ Native permission parameter verification (2026-10-14): Codex CLI 0.162.1 generat
 
 Added 2026-10-14. Timeline is the first optional feature module and establishes the pattern for later ones. See [Timeline](timeline.md) for behavior, contracts, and limitations.
 
-- **Location and interface.** `src/features/timeline/` holds the rules and ports; `index.ts` is its public interface. Git, filesystem-watch, and JSON-storage implementations live in `src/adapters/timeline/` and `src/adapters/storage/json-timeline-store.ts`.
+- **Location and interface.** `packages/features/src/timeline/` holds the rules and ports; `index.ts` is its public interface. Git, filesystem-watch, and JSON-storage implementations live in `packages/node-adapters/src/timeline/` and `packages/node-adapters/src/storage/json-timeline-store.ts`.
 - **Container project resolution (2026-10-15).** The Git snapshot adapter resolves a project inside Git directly, or a non-Git container through the bounded `GitRepositoryDiscovery` adapter shared with Changes. Only a complete, unambiguous single-repository discovery is accepted; its canonical root is checked inside the selected container. History, snapshots, visibility checks and watcher setup use that same resolved root. Project/session identities and pause settings stay unchanged. Ambiguous or incomplete discovery asks the user to open a repository folder; symlinked child directories are not traversed.
 - **Dependencies.** The feature depends on core only through `TimelineCoreAccess` (project path without a selected session, session project path, Codex import provenance, project writer-lock state), which composition builds from public `SessionsService`/`ProjectsService` calls. No core module imports Timeline. The feature owns `timeline.json` and the hidden `refs/rack-timeline/<session ID>` refs; it never writes session, execution, or project records.
 - **Existing history.** `projectHistory` reads bounded first-parent HEAD history and all Rack/Codex/Relay timeline refs independently of session recording. `projectFileDiff` accepts only a currently reachable commit and visible changed path from that project's history. Ordinary root commits compare against an empty tree; snapshot baselines stay hidden. Immutable commit comparisons use a bounded cache, while current ignore rules are evaluated per query. These reads do not persist a session index or alter opt-in.
@@ -631,3 +688,24 @@ initialization from using older root settings before discovering a newer
 workflow's routing/permissions. Provider catalog discovery remains independent.
 The drafting picker watches catalog updates without replacing the local draft
 or substituting an unavailable assigned model.
+
+## Provider runtime setup (2026-10-22)
+
+Codex is a pinned production dependency (`@openai/codex`), resolved to its
+platform-specific native executable by the runtime adapter. Authentication,
+diagnostics, discovery and execution share that resolver; no system Node or
+global CLI is needed. Runtime updates ship with application dependency updates.
+Release builds include optional platform packages, remain outside asar, and must
+be built with dependencies installed for the target OS/architecture.
+
+Connections exposes a provider-neutral existing-login capability and explicit
+`useExistingLogin` request. Connectors supply opaque context IDs; the directory
+adapter resolves those IDs to the user's native Claude/Codex directory. The
+connector reads identity without starting OAuth or copying secrets. Normal
+connections retain fresh private directories and old account records keep their
+existing isolation. The UI offers both choices and preserves the choice on retry.
+Linked accounts share CLI settings, sessions and subsequent CLI login changes;
+private accounts retain the established isolation. Linking does not migrate old
+sessions or sign out the CLI. This is an explicit extension to the earlier
+private-context-only policy. The provider-native store remains responsible for
+credential persistence.

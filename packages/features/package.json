@@ -1,0 +1,24 @@
+{
+  "name": "@rack/features",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Optional host capabilities (timeline, browser, files, terminal, orchestration, pull requests, usage). Core never imports these.",
+  "type": "module",
+  "exports": {
+    "./browser": "./src/browser/index.ts",
+    "./files": "./src/files/index.ts",
+    "./orchestration": "./src/orchestration/index.ts",
+    "./pull-requests": "./src/pull-requests/index.ts",
+    "./terminal": "./src/terminal/index.ts",
+    "./timeline": "./src/timeline/index.ts",
+    "./usage": "./src/usage/index.ts",
+    "./*": "./src/*.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@rack/core": "*"
+  }
+}

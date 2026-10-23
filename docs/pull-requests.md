@@ -77,7 +77,7 @@ Repeated cumulative usage notifications are replaced per field per attempt, then
 
 ## Implementation boundaries
 
-`features/pull-requests` owns the public project and inbox contracts, project validation and saved-project resolution for Timeline. `ReviewInboxService` consumes a narrow project-list port and never accepts renderer filesystem paths. `adapters/code-hosts` owns provider REST mappings, credential lookup, remote parsing and bounded Git operations. `features/usage` aggregates a narrow public execution audit projection. Startup composition assembles these services explicitly; core execution does not depend on either feature or on Electron. The typed desktop commands validate requests in main and in the host. Pages share a tabbed detail renderer and own query generations plus drafts keyed by account/repository/PR; late replies cannot replace another account or project's results.
+`packages/features/src/pull-requests` owns the public project and inbox contracts, project validation and saved-project resolution for Timeline. `ReviewInboxService` consumes a narrow project-list port and never accepts renderer filesystem paths. `packages/node-adapters/src/code-hosts` owns provider REST mappings, credential lookup, remote parsing and bounded Git operations. `packages/features/src/usage` aggregates a narrow public execution audit projection. Startup composition assembles these services explicitly; core execution does not depend on either feature or on Electron. The typed desktop commands validate requests in main and in the host. Pages share a tabbed detail renderer and own query generations plus drafts keyed by account/repository/PR; late replies cannot replace another account or project's results.
 
 ## Validation
 

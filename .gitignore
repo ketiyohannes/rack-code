@@ -1,6 +1,21 @@
 node_modules/
-dist/
 .DS_Store
-dist-desktop/
 
+# Build output. Each workspace builds into its own directory so that output
+# never outlives the package it came from:
+#   apps/desktop/dist      bundled main, host, preload and renderer
+#   apps/desktop/release    packaged application produced by @electron/packager
+#   apps/web/dist           static browser controller
+#   apps/mobile/www         the web bundle staged for Capacitor
+# The bare patterns match at any depth, which also covers workspaces added
+# later. Nothing here is ever committed; `npm run build` regenerates all of it.
+dist/
 release/
+apps/mobile/www/
+
+# Capacitor generates these from capacitor.config.ts; they are not sources.
+apps/mobile/ios/
+apps/mobile/android/
+
+# Go build output from the tsnet sidecar.
+native/tsnet-sidecar/tsnet-sidecar

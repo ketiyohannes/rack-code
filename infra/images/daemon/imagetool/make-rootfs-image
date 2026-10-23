@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+#
+# Converts an exported container rootfs tarball into an ext4 filesystem image
+# that a microVM can boot from.
+#
+# This runs inside the "imagetool" stage of infra/images/daemon/Dockerfile,
+# as root in a container. That is deliberate: creating a filesystem with
+# correct file ownership normally needs either root on the host or a loop
+# device, and doing it in a container needs neither. mke2fs populates the
+# filesystem directly from a directory (-d), so nothing is ever mounted.
+
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+	cat >&2 <<'USAGE'
+usage: make-rootfs-image <exported-rootfs.tar> <output.ext4> [size-in-MiB]
+
+Both paths are inside the container; the caller bind-mounts a directory.
+USAGE
+	exit 64
+fi
+
+readonly tarball="$1"
+readonly output="$2"
+readonly size_mb="${3:-2048}"
+
+if [[ ! -f "$tarball" ]]; then
+	echo "make-rootfs-image: $tarball does not exist" >&2
+	exit 1
+fi
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+echo "make-rootfs-image: extracting $tarball"
+# --numeric-owner keeps the UIDs and GIDs that systemd-sysusers allocated at
+# build time; resolving names against this container's /etc/passwd would
+# silently reassign ownership of the daemon's files.
+tar --extract \
+	--file "$tarball" \
+	--directory "$workdir" \
+	--preserve-permissions \
+	--same-owner \
+	--numeric-owner
+
+# Fail loudly if the export is not the image this script expects, rather than
+# producing a filesystem that will not boot.
+for required in /sbin/init /usr/local/bin/node /usr/local/bin/tsnet-sidecar /usr/local/sbin/rack-preflight; do
+	if [[ ! -e "$workdir$required" ]]; then
+		echo "make-rootfs-image: the exported rootfs has no $required; it was not built from infra/images/daemon/Dockerfile" >&2
+		exit 1
+	fi
+done
+if [[ ! -d "$workdir/opt/rack/daemon" ]]; then
+	echo "make-rootfs-image: the exported rootfs has no /opt/rack/daemon; the daemon bundle was not copied in" >&2
+	exit 1
+fi
+
+# Docker adds this marker to every container filesystem. It has no meaning in
+# a VM and would mislead anything inside the guest that probes for a container.
+rm -f "$workdir/.dockerenv"
+
+# Each VM must generate its own machine ID on first boot: a shared one makes
+# the journal, systemd's per-machine state and any future DHCP identity
+# collide across clones.
+: >"$workdir/etc/machine-id"
+
+echo "make-rootfs-image: creating a ${size_mb} MiB ext4 image at $output"
+rm -f "$output"
+truncate --size "${size_mb}M" "$output"
+
+# -F: the target is a regular file, not a block device, so mke2fs must not ask
+#     for confirmation.
+# -m 1: 1 percent reserved for root is plenty; the default 5 percent is sized
+#     for a general-purpose system disk.
+mke2fs -q -F -t ext4 -L rack-root -m 1 -d "$workdir" "$output"
+
+# A filesystem left dirty would be checked on first boot, which in a microVM
+# means a slow and confusing start. e2fsck exits 1 when it corrected something,
+# which is acceptable here; anything above that is a real failure.
+fsck_status=0
+e2fsck -fp "$output" >/dev/null || fsck_status=$?
+if ((fsck_status > 1)); then
+	echo "make-rootfs-image: e2fsck reported unrecoverable problems (exit $fsck_status)" >&2
+	exit 1
+fi
+
+echo "make-rootfs-image: done"
+ls -lh "$output"

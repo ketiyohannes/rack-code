@@ -2,7 +2,7 @@
 
 Status: implemented, updated 2026-10-14. The headless API remains the core; the Electron desktop UI built on it is described in [desktop application](desktop.md).
 
-The composition entry point is `createApplication` from `src/index.ts`. It assembles JSON-file stores under one data directory, the Accounts, Projects, Sessions, and Execution services, an isolated runtime-context resolver, and both first-class runtime adapters:
+The composition entry point is `createApplication` from `@rack/host` (`packages/host/src/index.ts`). It assembles JSON-file stores under one data directory, the Accounts, Projects, Sessions, and Execution services, an isolated runtime-context resolver, and both first-class runtime adapters:
 
 - `codex-app-server` starts `codex app-server --stdio` and translates the app-server JSON-RPC protocol.
 - `claude-agent-sdk` uses `@anthropic-ai/claude-agent-sdk` `query()` and translates SDK messages and callbacks.

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      Same strict script policy as the desktop page: bundled scripts only,
+      no inline script, no remote content. Two differences are forced by
+      running in a browser rather than behind the preload bridge:
+
+      - connect-src must allow WebSocket schemes, because the daemon address
+        is chosen by the user at pairing time and cannot be listed here. The
+        policy still forbids every other kind of outbound request, so this
+        widens exactly one channel.
+      - xterm generates local style elements for cell geometry and ANSI
+        colours, so style-src-elem permits inline styles as it does on the
+        desktop page.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ws: wss:; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rack</title>
+    <link rel="stylesheet" href="./xterm.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./web.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>

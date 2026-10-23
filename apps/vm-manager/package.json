@@ -1,0 +1,12 @@
+{
+  "name": "@rack/vm-manager",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Host-side microVM service: creates, snapshots, restores and destroys project VMs from outside them.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {}
+}

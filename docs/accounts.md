@@ -57,3 +57,28 @@ are not included in the diagnostic result.
 ## Validation
 
 The account tests cover duplicate identities, provider-scoped selection, availability-gated failover, stale availability clearing, usage tracking, and defensive copies. Connection diagnostics additionally cover ownership validation, request coalescing, bounded process execution, isolated config, normalized account status and exclusion of raw provider output. No provider credentials are used by these tests.
+
+## Provider setup and existing logins (2026-10-22)
+
+Settings > Accounts offers **Use existing Claude login** and **Use existing
+Codex login**, plus separate account sign-in. Existing-login connections inspect
+the provider's sign-in status and retain the original native configuration
+location (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`, or the standard home directory).
+No credential files are copied. These accounts share CLI settings and history;
+changing the CLI login changes the identity used by a linked account, so use
+separate sign-in when stable isolation is required. Existing private accounts
+are unchanged. Reconnecting uses separate sign-in; choose Use existing login
+again to relink a CLI account. Failed link attempts retry the same flow.
+
+Claude requires a native Claude Code installation and `claude auth login` before
+linking. Separate Claude sign-in remains available inside Rack. Codex is included
+with Rack, so Connect Codex account signs in through the browser without a global
+Codex installation. Linking an existing Codex login is optional and reads its
+native store using Rack's pinned runtime, without refreshing tokens during the
+identity check. Existing API-key-only Codex logins are not subscription accounts.
+
+Build dependencies must include optional packages for the target OS/architecture.
+`npm run package:desktop` builds and packages the app with the runtime files
+outside asar. Codex updates are delivered by updating Rack's pinned dependency
+and release, not by modifying a user's global CLI. Installation-only diagnostics
+continue to use temporary configuration and never read a default CLI login.

@@ -20,10 +20,11 @@ flowchart LR
 
 | Process | Source | Owns |
 | --- | --- | --- |
-| Execution host | `src/desktop/host/` | The composed application, every in-flight `ExecutionHandle`, pending approvals, and the command dispatcher. Started with `utilityProcess.fork`. |
-| Electron main | `src/desktop/main/` | App lifecycle, the window, request validation at the privileged boundary, relaying commands to the host, broadcasting host events, native dialogs (the folder picker), and stop-on-exit. Holds no application state. |
-| Preload | `src/desktop/preload/` | Exposes the typed `window.harness` bridge, including host commands and narrow desktop operations. Raw `ipcRenderer` is never exposed. |
-| Renderer | `src/desktop/renderer/` | Presentation. A view cache of host data that can be rebuilt from host queries at any time. |
+| Execution host | `packages/host/src/` (utility-process entry: `apps/desktop/src/host/entry.ts`) | The composed application, every in-flight `ExecutionHandle`, pending approvals, and the command dispatcher. Started with `utilityProcess.fork`. |
+| | | The entry is now Electron-specific glue only. `startHost` (composition plus recovery) and `UtilityPortTransport` (the ready/request/response/event/shutdown protocol and the browser round-trip to main) live in `packages/host/src/transport/` and are shared with `apps/daemon`, which serves the same `HostApi` over WebSocket instead. See [architecture](architecture.md#remote-protocol-and-transports). |
+| Electron main | `apps/desktop/src/main/` | App lifecycle, the window, request validation at the privileged boundary, relaying commands to the host, broadcasting host events, native dialogs (the folder picker), and stop-on-exit. Holds no application state. |
+| Preload | `apps/desktop/src/preload/` | Exposes the typed `window.harness` bridge, including host commands and narrow desktop operations. Raw `ipcRenderer` is never exposed. |
+| Renderer | `packages/ui/src/` | Presentation. A view cache of host data that can be rebuilt from host queries at any time. |
 
 The host runs outside main so provider processes and JSON persistence never block the window event loop, and so the future background mode can decouple the host's lifetime from windows without moving application code. This follows the architecture's recommendation of an execution host independent of renderer windows. The host is not yet supervised: if it exits, main reports `host.status: exited`, pending requests fail with `host_unavailable`, and the renderer shows a banner. Restarting a crashed host and recovering runs it left in `running` need a recovery policy first.
 
@@ -55,7 +56,7 @@ cursor. Arrow keys and double-click reset remain supported.
 
 ## Contracts
 
-`src/contracts/desktop/` holds the serializable transport schemas shared by all four processes:
+`packages/contracts/src/` holds the serializable transport schemas shared by all four processes:
 
 - `commands.ts`: `HostCommandMap` (command name to params and result) plus a runtime validator per command. Main validates every renderer request and the host validates again. Unknown keys are rejected.
 - `events.ts`: `HostEvent`, facts the host broadcasts (`run.started`, `run.updated`, indexed `run.event`, `run.approval_resolved`, `run.cancel_requested`, `run.finished`, and `*.changed` refresh signals, including the optional `timeline.changed`). Main adds `host.status`.
@@ -151,11 +152,14 @@ Provider mappings follow [Codex app-server user-input requests](https://learn.ch
 ## Build and run
 
 ```bash
-npm run start          # bundle to dist-desktop/ and launch Electron
-npm run build:desktop  # bundle only (scripts/build-desktop.ts, esbuild)
-npm run typecheck      # Node and renderer tsconfig projects
-npm run check          # typecheck, headless build, tests, desktop bundle
+npm run start          # bundle to apps/desktop/dist/ and launch Electron
+npm run build:desktop  # bundle only (apps/desktop/scripts/build-desktop.ts, esbuild); same as npm run build
+npm run typecheck      # tsc in every workspace (Node packages, plus browser settings for ui and client)
+npm run check          # typecheck, package boundaries, tests, desktop bundle
+npm run package:desktop  # packaged app in apps/desktop/release/
 ```
+
+Commands run from the repository root; see [architecture](architecture.md#repository-layout-and-package-boundaries) for the workspace layout.
 
 `THINKING_AND_CODE_DATA_DIR=/path` makes the host use a separate data directory instead of `~/.thinking-and-code`. The Electron binary is downloaded by its package install script. If npm's install-script policy skipped it, run `node node_modules/electron/install.js`.
 
@@ -165,7 +169,7 @@ npm run check          # typecheck, headless build, tests, desktop bundle
 - A reconnect leaves the account's previous runtime-context directory, and the login inside it, on disk, because an active run may still use it. Cleaning up superseded contexts needs a policy.
 - Accounts registered by reference (headless `accounts.register`) are `unknown` until an adapter reports availability. Connected accounts are marked `available` on a successful sign-in.
 - Tool results carry no call ID, so the transcript pairs each result with the most recent unanswered tool request.
-- There is no packaging or code signing. Node packages stay external to the main and host bundles.
+- Packaging (`npm run package:desktop`) targets only the current platform and applies an ad-hoc macOS signature; there is no distribution signing or notarization. Third-party Node packages stay external to the main and host bundles; `@rack/*` workspace packages are compiled in.
 
 ### Collapsed tool activity
 
@@ -308,3 +312,15 @@ description settings. Answer designer focuses the existing question form; after
 completion or cancellation focus returns to Generate. Controls wrap within the
 980×600 layout. The conversation's recovery notice explains how to answer or
 cancel after reload; pending input remains owned by the shared question broker.
+
+## Provider installation (2026-10-22)
+
+Codex ships as a pinned native runtime. Users can connect through the app without
+installing Node, npm or a global Codex CLI. Claude still requires Claude Code.
+Accounts offers existing CLI login reuse alongside isolated sign-in; see
+[provider setup](accounts.md#provider-setup-and-existing-logins-2026-10-22).
+Existing-login accounts share the CLI account and settings. Private accounts keep
+their current directories. Package with `npm run package:desktop` on the target
+platform; install optional dependencies there rather than copying node_modules.
+Packaging requires Node 22.12 or later for Electron Packager.
+The macOS packaging script uses ad hoc signing, not distribution notarization.

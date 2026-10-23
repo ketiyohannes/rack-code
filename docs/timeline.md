@@ -126,14 +126,14 @@ Rack never writes to `refs/relay-timeline/` or `refs/codex-timeline/`.
 
 | Piece | Location | Responsibility |
 | --- | --- | --- |
-| Feature module | `src/features/timeline/` | Rules: read-only project history, opt-in, import eligibility, structural baselines, visibility application, per-session serialization, run capture scheduling (`recorder.ts`). Public interface: `index.ts`. |
-| Ports | `src/features/timeline/ports.ts` | `TimelineStore`, `SnapshotRepository`, `ProjectWatcher`, `TimelineCoreAccess` (narrow reads of sessions and project lock state). |
-| Git adapter | `src/adapters/timeline/git-snapshots.ts` | Temporary-index capture, ref reads, history parsing, changed paths, ignore checks, per-file patches. |
-| Watcher adapter | `src/adapters/timeline/fs-watcher.ts` | Recursive `fs.watch`, dropping `.git` events so Timeline's own writes never trigger observations. |
-| Store | `src/adapters/storage/json-timeline-store.ts` | `timeline.json` (schema 1) in the data directory: per-session `enabled`, `importTruncated`, and the checkpoint index. |
-| Composition | `src/composition/application.ts` | Assembles Timeline (default on; `timeline: false` omits it) and adapts Sessions/Projects to `TimelineCoreAccess`. |
-| Host | `src/desktop/host/host-api.ts`, `active-runs.ts` | `timeline.*` commands; `runs.start` captures the run-start state before `execution.start`; `ActiveRuns` feeds events to the observer and finishes it after `run.finished`. |
-| Renderer | `src/desktop/renderer/features/timeline-panel.ts`, `timeline-tree.ts` | Current branch and All branches views, shared file trees and previews. |
+| Feature module | `packages/features/src/timeline/` | Rules: read-only project history, opt-in, import eligibility, structural baselines, visibility application, per-session serialization, run capture scheduling (`recorder.ts`). Public interface: `index.ts`. |
+| Ports | `packages/features/src/timeline/ports.ts` | `TimelineStore`, `SnapshotRepository`, `ProjectWatcher`, `TimelineCoreAccess` (narrow reads of sessions and project lock state). |
+| Git adapter | `packages/node-adapters/src/timeline/git-snapshots.ts` | Temporary-index capture, ref reads, history parsing, changed paths, ignore checks, per-file patches. |
+| Watcher adapter | `packages/node-adapters/src/timeline/fs-watcher.ts` | Recursive `fs.watch`, dropping `.git` events so Timeline's own writes never trigger observations. |
+| Store | `packages/node-adapters/src/storage/json-timeline-store.ts` | `timeline.json` (schema 1) in the data directory: per-session `enabled`, `importTruncated`, and the checkpoint index. |
+| Composition | `packages/host/src/composition/application.ts` | Assembles Timeline (default on; `timeline: false` omits it) and adapts Sessions/Projects to `TimelineCoreAccess`. |
+| Host | `packages/host/src/host-api.ts`, `active-runs.ts` | `timeline.*` commands; `runs.start` captures the run-start state before `execution.start`; `ActiveRuns` feeds events to the observer and finishes it after `run.finished`. |
+| Renderer | `packages/ui/src/features/timeline-panel.ts`, `timeline-tree.ts` | Current branch and All branches views, shared file trees and previews. |
 
 Core sessions, execution, and projects do not import Timeline. Timeline consumes them only through `TimelineCoreAccess`, built in composition from public service calls. Timeline's data lives in its own document, so disabling or omitting the feature leaves core records untouched.
 
@@ -187,7 +187,7 @@ These specification areas are not available. Several depend on capabilities Rack
 
 ## Acceptance coverage
 
-Automated tests (`src/features/timeline/service.test.ts`, `src/desktop/host/timeline.test.ts`) use real Git repositories in temporary folders and cover:
+Automated tests (`packages/host/src/integration/timeline-service.test.ts`, `packages/host/src/timeline.test.ts`) use real Git repositories in temporary folders and cover:
 
 - T01 (disabled by default) and T03 (persisted enablement and exact-session import).
 - T04 (no duplicates on repeat import) and T05 (similar ref prefixes ignored).

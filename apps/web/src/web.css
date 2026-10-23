@@ -1,0 +1,150 @@
+/*
+ * Styles for the two surfaces that exist only in the browser controller:
+ * the pairing screen and the connection banner.
+ *
+ * Everything else comes from `@rack/ui`'s stylesheet, which is loaded
+ * first. These rules reuse its theme tokens (--canvas, --card, --text and
+ * so on) rather than introducing a second palette, so the pairing screen
+ * follows light and dark mode without knowing which is active.
+ */
+
+.pairing {
+  box-sizing: border-box;
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 100vh;
+  justify-content: center;
+  font-family: var(--font-sans);
+  color: var(--text);
+}
+
+.pairing h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.pairing-explanation,
+.pairing-hint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.pairing-hint {
+  color: var(--text-3);
+}
+
+/* Reserves no space when empty, so the form does not shift on an error. */
+.pairing-error:empty {
+  display: none;
+}
+
+.pairing-error {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.375rem;
+  background: var(--inset);
+  color: var(--text);
+  font-size: 0.8125rem;
+}
+
+.pairing-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pairing-field label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.pairing-field input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.375rem;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.pairing-field input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+}
+
+.pairing-remember {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-2);
+}
+
+.pairing-submit {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  background: var(--primary);
+  color: var(--on-primary);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pairing-progress h1 {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+/*
+ * Pinned to the bottom so it never covers the chrome at the top of the
+ * workspace, and above every panel so a disconnection cannot be hidden
+ * behind an open overlay.
+ */
+.connection-banner {
+  position: fixed;
+  inset: auto 1rem 1rem auto;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  background: var(--card);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+}
+
+.connection-banner[hidden] {
+  display: none;
+}
+
+.connection-banner button {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.3125rem;
+  background: var(--inset);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}

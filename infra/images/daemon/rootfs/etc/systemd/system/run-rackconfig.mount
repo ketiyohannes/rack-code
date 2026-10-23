@@ -1,0 +1,27 @@
+# Per-VM configuration disk, supplied by apps/vm-manager.
+#
+# It is a separate read-only block device rather than a baked-in file so that
+# one rootfs image serves every project VM: the image holds software only, and
+# everything specific to a VM (its pairing token, its tailnet identity) arrives
+# at boot and never ends up in a snapshot of the image.
+#
+# The unit file name must match the escaped mount point, which is why the
+# directory is /run/rackconfig and not /run/rack-config: the latter would
+# require a backslash escape in the file name.
+
+[Unit]
+Description=Rack per-VM configuration disk
+Before=rack-preflight.service
+# systemd derives the dependency on the underlying device unit from What=
+# below, so no explicit udev ordering is needed here.
+
+[Mount]
+# Matched by filesystem label so the guest does not depend on the order in
+# which the hypervisor attached its block devices.
+What=/dev/disk/by-label/rack-config
+Where=/run/rackconfig
+Type=ext4
+# Read-only, and nothing on this disk may be executed or confer privileges:
+# it is data written by the control plane, not code.
+Options=ro,nosuid,nodev,noexec
+TimeoutSec=30s
