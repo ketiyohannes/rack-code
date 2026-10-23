@@ -15,7 +15,7 @@ startup deadline; long-running work is unaffected.
 
 ### Windows executable discovery (2026-10-16)
 
-Sign-in and runtime operations share `adapters/runtimes/codex-command.ts` to
+Sign-in and runtime operations share `packages/runtimes/src/codex/codex-command.ts` to
 resolve a native `codex.exe`. Electron's direct process spawning cannot run
 npm's PowerShell or command-file launchers as a bare `codex` command. The
 resolver checks absolute PATH entries in order for native executables and

@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# Validates the contract between apps/vm-manager and this image before the
+# daemon starts.
+#
+# Every check here guards against a failure mode that would otherwise be
+# silent or misattributed: a daemon writing its sessions to a tmpfs because the
+# data disk never mounted, a pairing token readable by agent code, or a rootfs
+# built without a daemon bundle. The script exits non-zero with a specific
+# message, which systemd shows on the serial console and in the journal.
+
+set -euo pipefail
+
+readonly CONFIG_DIR=/run/rackconfig
+readonly DATA_DIR=/var/lib/rack
+
+problems=0
+
+fail() {
+	printf 'rack-preflight: FAIL: %s\n' "$1" >&2
+	problems=$((problems + 1))
+}
+
+note() {
+	printf 'rack-preflight: %s\n' "$1"
+}
+
+# is_mounted reports whether a path is a mount point, read straight from the
+# kernel so the check does not depend on an optional userspace tool.
+is_mounted() {
+	awk -v target="$1" '$2 == target { found = 1 } END { exit !found }' /proc/self/mounts
+}
+
+require_file() {
+	local path="$1" purpose="$2"
+	if [[ ! -f "$path" ]]; then
+		fail "$path is missing; $purpose"
+		return 1
+	fi
+	if [[ ! -s "$path" ]]; then
+		fail "$path is empty; $purpose"
+		return 1
+	fi
+	return 0
+}
+
+# require_secret_mode refuses a credential that any user on the system could
+# read. The daemon executes agent-authored commands, so "readable by everyone"
+# means "readable by the agent".
+require_secret_mode() {
+	local path="$1" mode
+	mode="$(stat -c '%a' "$path")"
+	if [[ "${mode: -1}" != "0" ]]; then
+		fail "$path is mode $mode; credentials on the config disk must not be world-readable"
+	fi
+}
+
+if ! is_mounted "$CONFIG_DIR"; then
+	fail "$CONFIG_DIR is not a mount point; the per-VM configuration disk (filesystem label rack-config) was not attached"
+fi
+
+if ! is_mounted "$DATA_DIR"; then
+	fail "$DATA_DIR is not a mount point; the project data disk (filesystem label rack-data) was not attached, and starting here would store sessions on the disposable rootfs"
+fi
+
+if require_file "$CONFIG_DIR/daemon.env" "apps/vm-manager must write the daemon's per-VM environment there"; then
+	note "daemon environment present"
+fi
+
+if require_file "$CONFIG_DIR/pairing.token" "the daemon has no way to authenticate its first controller without a pairing token"; then
+	require_secret_mode "$CONFIG_DIR/pairing.token"
+fi
+
+# The tailnet path is optional: a VM reached through the relay has no tsnet.env
+# and the sidecar unit stays inactive. If the file is present, the sidecar will
+# start, and it needs its auth key.
+if [[ -f "$CONFIG_DIR/tsnet.env" ]]; then
+	if require_file "$CONFIG_DIR/tsnet.authkey" "tsnet.env is present, so the sidecar will start and needs an auth key on first boot"; then
+		require_secret_mode "$CONFIG_DIR/tsnet.authkey"
+	fi
+	note "tailnet sidecar configured"
+else
+	note "no tsnet.env on the config disk; the tailnet sidecar will stay inactive"
+fi
+
+# The daemon bundle is copied in at build time, so a missing entry point means
+# the image itself is wrong rather than the VM's configuration.
+entry_env=/etc/rack/daemon-entry.env
+if [[ -f "$entry_env" ]]; then
+	# shellcheck source=/dev/null
+	source "$entry_env"
+	if [[ ! -f "/opt/rack/daemon/${RACK_DAEMON_ENTRY:-}" ]]; then
+		fail "/opt/rack/daemon/${RACK_DAEMON_ENTRY:-<unset>} is missing; this image was built without a usable daemon bundle"
+	fi
+else
+	fail "$entry_env is missing; this image was not built by infra/images/daemon/Dockerfile"
+fi
+
+if ((problems > 0)); then
+	printf 'rack-preflight: %d problem(s) found; refusing to start the Rack daemon\n' "$problems" >&2
+	exit 1
+fi
+
+note "all checks passed"

@@ -1,0 +1,23 @@
+{
+  "name": "@rack/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Headless host: runs the composed application without Electron and serves it to remote controllers over WebSocket.",
+  "type": "module",
+  "bin": {
+    "rack-daemon": "./src/entry.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "start": "tsx src/entry.ts",
+    "print-token": "tsx src/entry.ts --print-token"
+  },
+  "dependencies": {
+    "@rack/contracts": "*",
+    "@rack/host": "*",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@rack/client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Typed client for host commands and events, used by user interfaces.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@rack/contracts": "*",
+    "@rack/features": "*"
+  }
+}

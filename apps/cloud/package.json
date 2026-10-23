@@ -1,0 +1,12 @@
+{
+  "name": "@rack/cloud",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Control plane: accounts, billing, machine provisioning through vm-manager, and the daemon relay registry. Runs no agents.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {}
+}

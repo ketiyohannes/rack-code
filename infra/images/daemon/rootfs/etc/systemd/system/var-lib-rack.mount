@@ -1,0 +1,17 @@
+# Per-project persistent data disk, supplied by apps/vm-manager.
+#
+# It holds everything that must survive a VM being destroyed and recreated:
+# the project checkout, the daemon's sessions and execution journal, and the
+# tailnet node identity. Keeping it off the rootfs is what makes the rootfs
+# image disposable and replaceable on upgrade.
+
+[Unit]
+Description=Rack project data volume
+Before=rack-preflight.service
+
+[Mount]
+What=/dev/disk/by-label/rack-data
+Where=/var/lib/rack
+Type=ext4
+Options=rw,nosuid,nodev,noatime
+TimeoutSec=30s

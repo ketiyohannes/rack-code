@@ -1,0 +1,22 @@
+{
+  "name": "@rack/host",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Application composition (createApplication) and the transport-independent HostApi command surface.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@rack/contracts": "*",
+    "@rack/core": "*",
+    "@rack/features": "*",
+    "@rack/node-adapters": "*",
+    "@rack/runtimes": "*"
+  }
+}

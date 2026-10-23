@@ -1,0 +1,33 @@
+{
+  "name": "@rack/desktop",
+  "productName": "Thinking and Code",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Electron desktop app: windows, native integrations, and a local host utility process.",
+  "type": "module",
+  "main": "dist/main.mjs",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "build": "tsx scripts/build-desktop.ts",
+    "start": "npm run build && electron .",
+    "package": "npm run build && tsx scripts/package-desktop.ts",
+    "test:desktop-features": "tsx scripts/bundle-fixture.ts verify-desktop-features && electron dist/verify-desktop-features.mjs",
+    "test:orchestra": "tsx scripts/bundle-fixture.ts verify-orchestra && electron dist/verify-orchestra.mjs",
+    "test:run-changes": "tsx scripts/bundle-fixture.ts verify-run-changes && electron dist/verify-run-changes.mjs"
+  },
+  "dependencies": {
+    "@rack/contracts": "*",
+    "@rack/features": "*",
+    "@rack/host": "*",
+    "@rack/ui": "*"
+  },
+  "devDependencies": {
+    "@rack/core": "*",
+    "@rack/node-adapters": "*",
+    "@rack/runtimes": "*",
+    "@electron/packager": "20.3.0",
+    "@electron/rebuild": "^4.2.1",
+    "electron": "^44.7.0",
+    "esbuild": "^0.28.2"
+  }
+}
