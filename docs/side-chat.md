@@ -24,7 +24,7 @@ A side chat is a second, read-only conversation that sits beside the work it is 
 
 ## Implementation
 
-- `src/desktop/renderer/features/side-chat.ts`: the reusable panel (`createSideChat`). Owns its session ID, runs, messages and model picker. Watches `state.live` for its own runs and re-reads runs and messages from the host when one finishes, because the store keeps finished transcripts only for the selected main session.
+- `packages/ui/src/features/side-chat.ts`: the reusable panel (`createSideChat`). Owns its session ID, runs, messages and model picker. Watches `state.live` for its own runs and re-reads runs and messages from the host when one finishes, because the store keeps finished transcripts only for the selected main session.
 - `components/context-menu.ts`: delegated reading-region actions, scoped selection capture, copy actions and keyboard controls, using the shared popover for cursor placement and dismissal.
 - `side-chat-contexts.ts`: context builders for sessions and PRs, plus the Explain prompt.
 - `side-chat-state.ts`: per-device session mappings and history-based PR dock visibility; stale replies and explicit user choices are guarded per visit.

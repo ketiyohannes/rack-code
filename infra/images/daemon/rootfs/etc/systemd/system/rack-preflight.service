@@ -1,0 +1,20 @@
+# Validates the per-VM contract before anything else starts.
+#
+# Without this check, a missing pairing token or an unmounted data disk would
+# surface as a confusing daemon crash loop, or worse, as a daemon that runs
+# with ephemeral storage and silently loses a project's history. The check
+# fails the boot loudly instead, and its message is the first thing visible in
+# the journal and on the serial console.
+
+[Unit]
+Description=Rack image preflight checks
+Requires=run-rackconfig.mount var-lib-rack.mount
+After=run-rackconfig.mount var-lib-rack.mount
+Before=rack-daemon.service rack-tsnet-sidecar.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rack-preflight
+StandardOutput=journal+console
+StandardError=journal+console

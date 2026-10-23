@@ -1,0 +1,59 @@
+# Joins the tailnet and forwards inbound tailnet traffic to the daemon.
+# See native/tsnet-sidecar for the program itself.
+#
+# The unit starts only when the config disk carries tsnet.env. A VM that uses
+# the relay path instead of a tailnet simply omits that file, and this service
+# stays inactive rather than failing.
+
+[Unit]
+Description=Rack tailnet sidecar
+ConditionPathExists=/run/rackconfig/tsnet.env
+Requires=run-rackconfig.mount var-lib-rack.mount rack-preflight.service
+After=run-rackconfig.mount var-lib-rack.mount rack-preflight.service network-online.target rack-daemon.service
+# The daemon is wanted, not required: if it is restarting, the sidecar answers
+# 502 and recovers on its own once the daemon is back.
+Wants=network-online.target rack-daemon.service
+
+[Service]
+Type=simple
+User=rack-tsnet
+Group=rack-tsnet
+
+# Default forwarding target: the daemon's loopback listener on its default
+# port. Set *before* the config disk so a VM that moves the daemon with
+# RACK_DAEMON_PORT can point the sidecar at it; later assignments win.
+Environment=TSNET_SIDECAR_TARGET=http://127.0.0.1:7420
+
+# Per-VM: TSNET_SIDECAR_HOSTNAME at minimum, plus TSNET_SIDECAR_TARGET when
+# the daemon does not use the default port.
+EnvironmentFile=/run/rackconfig/tsnet.env
+
+# Image-owned values, set last so the config disk cannot redirect them.
+# The state directory lives on the data disk because losing it would make the
+# node re-register on every boot.
+Environment=TSNET_SIDECAR_STATE_DIR=/var/lib/rack/tsnet
+Environment=TSNET_SIDECAR_AUTHKEY_FILE=/run/rackconfig/tsnet.authkey
+Environment=TSNET_SIDECAR_LOG_FORMAT=json
+
+# The "+" prefix runs this step as root: the state directory sits inside the
+# daemon's data volume but must be owned by, and readable only by, the sidecar
+# user, so that agent code running as "rack" cannot steal the node key.
+ExecStartPre=+/usr/bin/install -d -o rack-tsnet -g rack-tsnet -m 0700 /var/lib/rack/tsnet
+ExecStart=/usr/local/bin/tsnet-sidecar
+
+Restart=on-failure
+RestartSec=5s
+
+# The sidecar needs no privileges: tsnet runs a userspace network stack, so
+# there is no TUN device and no routing table change.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/rack/tsnet
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

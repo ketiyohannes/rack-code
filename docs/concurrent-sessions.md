@@ -57,11 +57,11 @@ The rule is to use provider behavior where it exists. Verified 2026-10-15 agains
 
 ## Architecture
 
-- **Projects** (`src/core/projects/`) owns execution directories:
+- **Projects** (`packages/core/src/projects/`) owns execution directories:
   - `IsolatedWorkspace` records persist on `ProjectRecord.isolatedWorkspaces` (an additive field in schema 4).
   - `prepareExecutionDirectory(projectId, sessionId, mode)` returns the folder or worktree, creating or restoring the worktree on demand and serializing per session.
   - `workspaceState` and `removeIsolatedWorkspace` serve presentation and cleanup.
-  - The `IsolatedWorkspaceProvider` port is implemented by `GitWorktreeProvider` (`src/adapters/projects/git-worktrees.ts`).
+  - The `IsolatedWorkspaceProvider` port is implemented by `GitWorktreeProvider` (`packages/node-adapters/src/worktrees/git-worktrees.ts`).
 - **Writer ownership is in memory.** `acquireWriter(projectId, attemptId, { sessionId, mode })` rejects only a second run of the same session (`SessionBusyError`). The execution host owns every run and no run survives it, so the old persisted `activeWriterAttemptId` lock could only survive a crash as a stale lock. It is now ignored.
 - **Sessions** own `workspaceMode` (absent means shared). `setWorkspaceMode` is refused once the session has messages.
 - **Execution** acquires the writer, prepares the directory (the run stays `queued`), and passes it to the runtime as `projectPath`, plus `checkoutRoot` for isolated sessions.

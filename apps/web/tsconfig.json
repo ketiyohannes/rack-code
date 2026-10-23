@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.browser.json",
+  "include": [
+    "src/**/*.ts",
+    "../../packages/ui/src/svg.d.ts"
+  ],
+  "exclude": ["src/**/*.test.ts"]
+}

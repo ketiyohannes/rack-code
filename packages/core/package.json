@@ -1,0 +1,23 @@
+{
+  "name": "@rack/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Domain rules and adapter interfaces: accounts, sessions, execution, projects. No platform or provider code.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./accounts": "./src/accounts/index.ts",
+    "./authentication": "./src/authentication/index.ts",
+    "./connections": "./src/connections/index.ts",
+    "./execution": "./src/execution/index.ts",
+    "./projects": "./src/projects/index.ts",
+    "./session-imports": "./src/session-imports/index.ts",
+    "./sessions": "./src/sessions/index.ts",
+    "./*": "./src/*.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {}
+}

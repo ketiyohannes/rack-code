@@ -148,7 +148,7 @@ explicit compatible choices; permissions never change automatically.
 
 ## Ownership and persistence
 
-`src/features/orchestration/` owns definitions, validation, bindings, scheduling,
+`packages/features/src/orchestration/` owns definitions, validation, bindings, scheduling,
 run snapshots and worker attribution. `types.ts` is the portable public contract;
 `index.ts` is the server entry point. `activity.ts` exposes the pure
 `projectWorkerActivity(worker, execution?)` projection and its `WorkerActivity`
@@ -205,7 +205,7 @@ with execution history; automatic retention/garbage collection is not implemente
 Run the scheduler suite with:
 
 ```sh
-node --import tsx --test src/features/orchestration/service.test.ts src/features/orchestration/activity.test.ts
+node --import tsx --test packages/features/src/orchestration/service.test.ts packages/features/src/orchestration/activity.test.ts
 ```
 
 The native smoke test uses only a fixture runtime and a temporary application data
@@ -213,9 +213,9 @@ directory. It exercises the real renderer, preload, HostApi and execution servic
 it never logs into a provider, calls a live model, or modifies project files:
 
 ```sh
-node --import tsx scripts/build-desktop.ts
-node_modules/.bin/esbuild scripts/verify-orchestra.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-desktop/verify-orchestra.mjs
-node_modules/.bin/electron dist-desktop/verify-orchestra.mjs --user-data-dir=/tmp/rack-orchestra-smoke-profile
+node --import tsx apps/desktop/scripts/build-desktop.ts
+(cd apps/desktop && npx tsx scripts/bundle-fixture.ts verify-orchestra)
+node_modules/.bin/electron apps/desktop/dist/verify-orchestra.mjs --user-data-dir=/tmp/rack-orchestra-smoke-profile
 ```
 
 The smoke check also holds fixture activity at approval, consecutive tool

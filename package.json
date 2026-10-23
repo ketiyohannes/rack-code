@@ -1,44 +1,38 @@
 {
-  "name": "thinking-and-code",
+  "name": "rack",
   "version": "1.0.0",
   "private": true,
-  "description": "Desktop coding agent harness",
+  "description": "Rack: a coding agent harness. Monorepo root for the shared packages and the applications that run them.",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
+    "typecheck": "tsc --project tsconfig.json && npm run typecheck --workspaces --if-present",
+    "check:boundaries": "tsx scripts/check-boundaries.ts",
+    "test": "tsx --test \"packages/*/src/**/*.test.ts\" \"apps/*/src/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run check:boundaries && npm test && npm run build:desktop && npm run build:web",
+    "start": "npm run start --workspace @rack/desktop",
+    "start:daemon": "npm run start --workspace @rack/daemon",
+    "start:web": "npm run start --workspace @rack/web",
+    "build": "npm run build:desktop && npm run build:web",
+    "build:desktop": "npm run build --workspace @rack/desktop",
+    "build:web": "npm run build --workspace @rack/web",
+    "build:mobile": "npm run build --workspace @rack/mobile",
+    "package:desktop": "npm run package --workspace @rack/desktop",
+    "daemon:token": "npm run print-token --workspace @rack/daemon",
     "rebuild:native": "electron-rebuild -f -w node-pty",
-    "build": "tsc --project tsconfig.json",
-    "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project tsconfig.renderer.json",
-    "build:desktop": "tsx scripts/build-desktop.ts",
-    "start": "npm run build:desktop && electron .",
-    "test": "tsx --test \"src/**/*.test.ts\"",
-    "test:desktop-features": "esbuild scripts/verify-desktop-features.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-desktop/verify-features.mjs && electron dist-desktop/verify-features.mjs",
-    "check": "npm run typecheck && npm run build && npm test && npm run build:desktop",
-    "test:orchestra": "esbuild scripts/verify-orchestra.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-desktop/verify-orchestra.mjs && electron dist-desktop/verify-orchestra.mjs",
-    "test:run-changes": "esbuild scripts/verify-run-changes.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-desktop/verify-run-changes.mjs && electron dist-desktop/verify-run-changes.mjs",
-    "package:desktop": "npm run build:desktop && tsx scripts/package-desktop.ts"
+    "test:desktop-features": "npm run test:desktop-features --workspace @rack/desktop",
+    "test:orchestra": "npm run test:orchestra --workspace @rack/desktop",
+    "test:run-changes": "npm run test:run-changes --workspace @rack/desktop"
   },
   "engines": {
     "node": ">=20"
   },
-  "type": "module",
   "devDependencies": {
-    "@electron/packager": "20.3.0",
-    "@electron/rebuild": "^4.2.1",
     "@types/node": "^26.6.5",
-    "electron": "^44.7.0",
-    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
-    "@fontsource-variable/geist-mono": "5.3.0",
-    "@fontsource-variable/inter": "^5.3.0",
-    "@fontsource/ibm-plex-mono": "^5.3.0",
-    "@openai/codex": "0.163.0",
-    "@phosphor-icons/core": "^2.1.1",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "node-pty": "^1.1.0"
-  },
-  "main": "dist-desktop/main.mjs"
+  }
 }

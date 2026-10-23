@@ -111,7 +111,7 @@ After upgrading Electron, run `npm run rebuild:native` for `node-pty`.
 
 ## Ownership and verification
 
-`src/features/{terminal,browser,files}/` own services and contracts. Explicit
+`packages/features/src/{terminal,browser,files}/` own services and contracts. Explicit
 composition supplies project/session lookups and adapters. Filesystem and
 PTY work run in the host, Chromium views in Electron main, and presentation
 in the sandboxed renderer. Core execution imports only its own optional tool

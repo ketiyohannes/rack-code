@@ -31,7 +31,7 @@ Import does not restore project files. Native resume across external account sto
 
 ## Ownership and persistence
 
-`SessionImportsService` coordinates Projects and Sessions through public interfaces. Native parsing lives in `adapters/session-imports/`; startup composition supplies the sources. `CreateApplicationOptions.sessionSources` allows tests and alternate hosts to replace them explicitly.
+`SessionImportsService` coordinates Projects and Sessions through public interfaces. Native parsing lives in `packages/runtimes/src/session-imports/`; startup composition supplies the sources. `CreateApplicationOptions.sessionSources` allows tests and alternate hosts to replace them explicitly.
 
 The host exposes `sessions.discover`, `sessions.previewImport`, and `sessions.import`, scoped by `projectId`. Import saves a complete snapshot in one store mutation and serializes concurrent requests so `(projectId, sourceId, nativeSessionId)` identifies one imported session. `SessionRecord.importSource` and message provenance are additive fields in the existing schema.
 

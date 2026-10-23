@@ -1,0 +1,20 @@
+{
+  "name": "@rack/runtimes",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Provider runtime adapters (Codex, Claude), provider connectors, session importers and the app tool server.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@rack/core": "*",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
+    "@openai/codex": "0.163.0"
+  }
+}
