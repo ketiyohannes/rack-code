@@ -1,3 +1,11 @@
+## 2026-10-25 — A Git fixture that depended on the machine's identity (branch `build/github-release`)
+
+The first CI run failed one test on Linux that passes on a developer's Mac, which is the kind of thing CI exists to find.
+
+- **`packages/node-adapters/src/git/git-changes.test.ts`.** `git merge` resolves the committer identity *before* it attempts the merge, so on a machine with none it exits 128 with a clean tree rather than conflicting. The fixture's commits supplied an identity inline but the merge did not, and `assert.rejects(git("merge", ...))` accepted that failure as the expected one. The snapshot then described a clean repository and the row assertion failed with no indication why. GitHub's Linux runners have no configured identity and a host name that yields an empty one, which is why only they saw it.
+- **Fix.** The repository is configured with an identity right after `git init`, the way the other fixtures that merge already do (`git-source-control.test.ts`, `timeline-service.test.ts`), and the rejection now has to be a conflict: any other Git error fails the test where it happens instead of being reported three assertions later.
+- **Validation.** Reproduced locally by denying git any ambient identity (`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null` plus `user.useConfigOnly=true`), which failed exactly that one test and no other, matching CI. Both environments pass after the fix, and the workspace typechecks. No production code changed: the reader was never at fault.
+
 ## 2026-10-25 — Tagged releases (branch `build/github-release`)
 
 The repository had no CI and no way to produce a downloadable build. It has both now.

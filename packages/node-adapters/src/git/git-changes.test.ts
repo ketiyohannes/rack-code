@@ -101,16 +101,26 @@ test("merge conflicts have one conflict row and a normal ours-to-working-tree pa
   const git = async (...args: string[]) => (await execute("git", ["-C", path, ...args])).stdout;
   const commit = async (message: string) => {
     await git("add", ".");
-    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-qm", message);
+    await git("-c", "commit.gpgsign=false", "commit", "-qm", message);
   };
   try {
     await git("init", "-q", "-b", "feat/base");
+    // `git merge` resolves the committer identity before it attempts the
+    // merge, so on a machine without one it exits with a clean tree instead
+    // of conflicting, and this test would assert against nothing. Configure
+    // the repository, as the other Git fixtures that merge do.
+    await git("config", "user.name", "Fixture");
+    await git("config", "user.email", "fixture@example.test");
     await writeFile(join(path, "conflict.txt"), "original\n"); await commit("Initial");
     await git("checkout", "-qb", "feat/other");
     await writeFile(join(path, "conflict.txt"), "theirs\n"); await commit("Other branch");
     await git("checkout", "-q", "feat/base");
     await writeFile(join(path, "conflict.txt"), "ours\n"); await commit("Base branch");
-    await assert.rejects(git("merge", "feat/other"));
+    // Require the failure to be the conflict this test is about: any other
+    // Git error would otherwise satisfy the rejection and leave the
+    // assertions below reporting an empty snapshot.
+    await assert.rejects(git("merge", "feat/other"), (error: unknown) =>
+      /^CONFLICT|\nCONFLICT/m.test(String((error as { stdout?: string }).stdout ?? "")));
     const index = await readFile(join(path, ".git/index"));
     const snapshot = await new GitProjectChangesReader().read(path);
     const rows = snapshot.files?.filter((file) => file.path === "conflict.txt");
