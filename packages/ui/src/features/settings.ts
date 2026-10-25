@@ -248,7 +248,7 @@ function renderAbout(store: Store, controller: Controller): HTMLElement {
     h("header", { class: "settings-pane-header" }, h("h3", {}, "About"), h("p", {}, "A focused workspace for thinking and code.")),
     h("section", { class: "settings-group about-card" },
       h("span", { class: "about-mark" }, icon("stack")),
-      h("h4", {}, "thinking & code"),
+      h("h4", {}, "Rack"),
       h("p", { class: "note" }, `Desktop coding workspace · Version ${__APP_VERSION__}`),
       h("p", {}, "Bring your provider accounts, work with local projects, and keep conversations, tools and project history together.")),
     h("section", { class: "settings-group" },

@@ -11,7 +11,9 @@
  * that happens because a default looked convenient.
  */
 import { join } from "node:path";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
+
+import { defaultDataDirectory } from "@rack/host";
 
 export interface DaemonConfig {
   /** Interface to bind. Loopback unless explicitly widened. */
@@ -34,8 +36,13 @@ export interface DaemonConfig {
 }
 
 export const DEFAULT_PORT = 7420;
-/** Matches `createApplication`'s own default so both hosts share records. */
-export const DEFAULT_DATA_DIRECTORY = join(homedir(), ".thinking-and-code");
+/**
+ * Matches `createApplication`'s own default so both hosts share records.
+ * Pure, so importing this module touches no file system: adopting a
+ * directory written under the product's former name is the entry point's
+ * job, and its result is passed to `parseConfig`.
+ */
+export const DEFAULT_DATA_DIRECTORY = defaultDataDirectory();
 
 export class ConfigurationError extends Error {
   constructor(message: string) {
@@ -48,7 +55,7 @@ export const USAGE = `Usage: rack-daemon [options]
 
   --host <address>          Interface to bind (default 127.0.0.1; loopback only)
   --port <number>           Port to listen on (default ${String(DEFAULT_PORT)})
-  --data-directory <path>   Application records (default ~/.thinking-and-code)
+  --data-directory <path>   Application records (default ~/.rack)
   --machine-id <id>         Identifier shown to controllers (default: hostname)
   --token-file <path>       Pairing token file (default <data-directory>/daemon/token)
   --replay-buffer <n>       Events retained for reconnecting clients (default 1024)
@@ -65,14 +72,18 @@ Environment:
  * Parses arguments without a dependency. Unknown flags are an error rather
  * than being ignored: a mistyped `--data-dir` that silently fell back to the
  * default would point a VM at the wrong records.
+ *
+ * `defaultDirectory` exists so the entry point can supply the directory it
+ * adopted; `--data-directory` still wins over it.
  */
 export function parseConfig(
   argv: readonly string[],
   environment: Readonly<Record<string, string | undefined>> = {},
+  defaultDirectory: string = DEFAULT_DATA_DIRECTORY,
 ): DaemonConfig {
   let host = "127.0.0.1";
   let port = DEFAULT_PORT;
-  let dataDirectory = DEFAULT_DATA_DIRECTORY;
+  let dataDirectory = defaultDirectory;
   let machineId = hostname();
   let tokenFile: string | undefined;
   let replayBuffer = 1024;

@@ -114,7 +114,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
 
   private async readModels(child: ReturnType<CodexProcessFactory>): Promise<readonly RuntimeModel[]> {
     await child.request("initialize", {
-      clientInfo: { name: "thinking-and-code", title: "Thinking and Code", version: "0.1.0" },
+      clientInfo: { name: "rack", title: "Rack", version: "0.1.0" },
       capabilities: {},
     }, 10_000);
     child.notify("initialized", {});
@@ -206,7 +206,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     let closed = false;
     const decoder = new StringDecoder("utf8");
     try {
-      await child.request("initialize", { clientInfo: { name: "thinking-and-code", title: "Rack Terminal", version: "0.1.0" }, capabilities: { experimentalApi: true } }, 10_000);
+      await child.request("initialize", { clientInfo: { name: "rack", title: "Rack Terminal", version: "0.1.0" }, capabilities: { experimentalApi: true } }, 10_000);
       child.notify("initialized", {});
       const processId = "rack-terminal";
       let ready!: () => void;
@@ -285,8 +285,8 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     try {
       await childProcess.request("initialize", {
         clientInfo: {
-          name: "thinking-and-code",
-          title: "Thinking and Code",
+          name: "rack",
+          title: "Rack",
           version: "0.1.0",
         },
         capabilities: { experimentalApi: true },

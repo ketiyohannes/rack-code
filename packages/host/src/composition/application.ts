@@ -9,7 +9,6 @@ import { RestCodeHosts } from "@rack/node-adapters/code-hosts/rest";
 import { UsageService } from "@rack/features/usage";
 import { mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { InMemoryCredentialResolver } from "@rack/runtimes/authentication/in-memory-credential-resolver";
@@ -19,6 +18,7 @@ import { CodexConnector } from "@rack/runtimes/authentication/codex-connector";
 import { NativeLoginCredentialResolver } from "@rack/runtimes/authentication/native-login-credential-resolver";
 import { ClaudeRuntimeAdapter } from "@rack/runtimes/claude/claude";
 import { CodexRuntimeAdapter } from "@rack/runtimes/codex/codex";
+import { defaultDataDirectory } from "@rack/node-adapters/storage/data-directory";
 import { JsonAccountStore } from "@rack/node-adapters/storage/json-account-store";
 import { JsonExecutionStore } from "@rack/node-adapters/storage/json-execution-store";
 import { JsonProjectStore } from "@rack/node-adapters/storage/json-project-store";
@@ -101,7 +101,10 @@ export interface CreateApplicationOptions {
  * future adapter can be added by registering it here without changing core.
  */
 export function createApplication(options: CreateApplicationOptions = {}): Application {
-  const dataDirectory = options.dataDirectory ?? join(homedir(), ".thinking-and-code");
+  // Pure default: adopting a directory written under the former product
+  // name is `startHost`'s job, so composing an application performs no
+  // file system work of its own.
+  const dataDirectory = options.dataDirectory ?? defaultDataDirectory();
   // Accounts connected through a provider sign-in use the provider's own
   // login in their runtime context; other references fall back to the
   // supplied (or in-memory) resolver.

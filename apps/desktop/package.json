@@ -1,6 +1,6 @@
 {
   "name": "@rack/desktop",
-  "productName": "Thinking and Code",
+  "productName": "Rack",
   "version": "1.0.0",
   "private": true,
   "description": "Electron desktop app: windows, native integrations, and a local host utility process.",

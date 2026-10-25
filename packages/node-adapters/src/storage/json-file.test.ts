@@ -9,7 +9,7 @@ import { JsonAccountStore } from "./json-account-store.js";
 import { JsonFileDocument } from "./json-file.js";
 
 test("persists account metadata atomically without credential material", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "thinking-and-code-"));
+  const directory = await mkdtemp(join(tmpdir(), "rack-"));
   try {
     const path = join(directory, "accounts.json");
     const store = new JsonAccountStore(path);
@@ -36,7 +36,7 @@ test("persists account metadata atomically without credential material", async (
 });
 
 test("creates a private runtime directory for each context", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "thinking-and-code-contexts-"));
+  const directory = await mkdtemp(join(tmpdir(), "rack-contexts-"));
   try {
     const resolver = new DirectoryRuntimeContextResolver(directory);
     const first = await resolver.resolve("account-one");

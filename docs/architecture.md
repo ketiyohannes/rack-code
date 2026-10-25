@@ -315,7 +315,7 @@ Tests and a workspace's `scripts/` may additionally use `devDependencies` (node-
 - **Tests.** `npm test` runs `tsx --test` over `packages/*/src/**/*.test.ts` and `apps/*/src/**/*.test.ts`. tsx compiles workspace sources because npm links workspaces by symlink and Node resolves the real path outside `node_modules`.
 - **Bundling.** Because packages ship sources, esbuild's `packages: "external"` is no longer usable for main and the host. `apps/desktop/scripts/esbuild-workspace.ts` marks every bare import external except `@rack/*`, so workspace code is compiled in while third-party packages that locate files at runtime (Claude Agent SDK, Codex binaries, node-pty) stay external as before. The desktop build writes to `apps/desktop/dist/`.
 - **Web and mobile bundling.** `apps/web/scripts/build-web.ts` mirrors the renderer half of the desktop build (same fonts, same inlined SVG icons, same `__APP_VERSION__` define) and emits only browser output; the web controller never loads the host. `apps/mobile` stages that bundle into `www/` for Capacitor, dropping source maps. Build output lives under each app (`apps/desktop/dist`, `apps/desktop/release`, `apps/web/dist`, `apps/mobile/www`) and is ignored by git, so no output outlives the package it came from.
-- **Packaging.** npm hoists all third-party packages to the root `node_modules`, so `apps/desktop` has none of its own. `package-desktop.ts` stages a generated manifest (the runtime dependencies of every workspace the app depends on), the build output and a symlink to the root `node_modules`; the packager dereferences and prunes it. The staged manifest keeps the app name `thinking-and-code`, and `apps/desktop/package.json` sets the same `productName`, because Electron derives the user-data directory and single-instance lock from it.
+- **Packaging.** npm hoists all third-party packages to the root `node_modules`, so `apps/desktop` has none of its own. `package-desktop.ts` stages a generated manifest (the runtime dependencies of every workspace the app depends on), the build output and a symlink to the root `node_modules`; the packager dereferences and prunes it. The staged manifest names the app `rack`, and `apps/desktop/package.json` sets the `productName` `Rack`; Electron derives the user-data directory and single-instance lock from that name, so see "Product name and record locations" for how an installation under the former name is adopted.
 
 The three new apps that run no agents — `mobile`, `vm-manager` and `cloud` — declare no workspace dependencies at all. `mobile` wraps the *built* web bundle rather than importing it; `vm-manager` and `cloud` are infrastructure and must never reach into the domain. The rule table makes that structural instead of a matter of review.
 
@@ -709,3 +709,66 @@ private accounts retain the established isolation. Linking does not migrate old
 sessions or sign out the CLI. This is an explicit extension to the earlier
 private-context-only policy. The provider-native store remains responsible for
 credential persistence.
+
+## Product name and record locations (2026-10-25)
+
+The product is named **Rack**, which it was already called everywhere inside
+the repository: the npm scope is `@rack/*`, the window and page titles, the
+daemon's usage text and the worktree comments all say Rack. What still said
+"Thinking and Code" was the part the user sees and the part that owns their
+data. Both now say Rack.
+
+| Identifier | Before | Now |
+| --- | --- | --- |
+| Packaged app name (Electron user data, instance lock) | `thinking-and-code` | `rack` |
+| macOS product name and bundle | `Thinking and Code`, `local.thinking-and-code` | `Rack`, `local.rack` |
+| Host record directory | `~/.thinking-and-code` | `~/.rack` |
+| Development data override | `THINKING_AND_CODE_DATA_DIR` | `RACK_DATA_DIR` |
+| Client identity sent to the Codex app server | `thinking-and-code` | `rack` |
+| Sidebar wordmark, welcome eyebrow, About card | `thinking & code` | `rack` |
+
+`local.rack` is a placeholder bundle identifier in the style of the one it
+replaces. Developer ID signing needs a reverse-DNS identifier under a domain
+the publisher owns, and changing it then changes the application's identity
+again; that is a deliberate choice to make before the first signed release,
+not after.
+
+### Adopting records written under the former name
+
+Renaming the directories that hold a user's work would present an empty
+application to anyone upgrading, which is indistinguishable from losing it.
+Two directories are therefore adopted once, by the same rule: **if the
+current directory does not exist and one written under a former name does,
+move it.** An existing current directory is never overwritten, so leftovers
+from an old installation cannot merge into live records.
+
+- **Host records** (`@rack/node-adapters/storage/data-directory`). Projects,
+  sessions, accounts and per-account runtime contexts. `defaultDataDirectory()`
+  is a pure path, so composition and argument parsing touch no file system and
+  tests never reach a real home directory; `adoptLegacyDataDirectory()`
+  performs the move and is called by the processes that start a host. In
+  `startHost` it runs before composition, because stores open files as they
+  are constructed. The daemon calls it in `entry.ts` before reading its
+  configuration, because the pairing token file is derived from the data
+  directory and is written before the host starts; the adopted path is then
+  passed to `parseConfig` as its default. An explicit `--data-directory` is
+  the caller's choice and is never relocated.
+- **Renderer preferences** (`apps/desktop/src/main/user-data.ts`). Theme,
+  favourite models, sidebar order and the model chosen per session live in
+  Electron's user-data directory. Two former names are checked, because
+  packaged and development builds disagreed on casing: a packaged build took
+  its name from the generated manifest (`thinking-and-code`) while
+  `electron .` took it from `productName` ("Thinking and Code"). This runs
+  before `app.requestSingleInstanceLock()`, which writes a lock file inside
+  that directory.
+
+The two differ in how they fail, because what they hold differs. A failed
+host-record move returns the legacy path and keeps serving from it: working
+from the old location beats starting empty. A failed preferences move is
+swallowed, because the interface recreates its defaults and refusing to
+start would cost more than the preferences are worth.
+
+`@rack/host` re-exports both `defaultDataDirectory` and
+`adoptLegacyDataDirectory`, so the daemon reaches them through the host
+rather than depending on the adapter layer, which the boundary rules forbid
+it.

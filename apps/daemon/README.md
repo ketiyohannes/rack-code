@@ -21,7 +21,7 @@ rack-daemon [options]
 
   --host <address>          Interface to bind (default 127.0.0.1)
   --port <number>           Port to listen on (default 7420)
-  --data-directory <path>   Application records (default ~/.thinking-and-code)
+  --data-directory <path>   Application records (default ~/.rack)
   --machine-id <id>         Identifier shown to controllers (default: hostname)
   --token-file <path>       Pairing token file (default <data-directory>/daemon/token)
   --replay-buffer <n>       Events retained for reconnecting clients (default 1024)

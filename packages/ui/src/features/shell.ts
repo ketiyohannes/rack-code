@@ -85,7 +85,7 @@ export function mountShell(root: HTMLElement, store: Store, controller: Controll
   const hoverZone = h("div", { class: "peek-zone", aria: { hidden: "true" } });
 
   sidebar.append(
-    h("div", { class: "sidebar-top" }, h("span", { class: "wordmark" }, "thinking & code")),
+    h("div", { class: "sidebar-top" }, h("span", { class: "wordmark" }, "rack")),
     regions.navigator,
   );
   const chatLayout = h("div", { class: "chat-layout" }, regions.session, regions.composer);

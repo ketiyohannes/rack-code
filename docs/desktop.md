@@ -36,8 +36,8 @@ receive the resolved palette colors. macOS retains its native menu and title-bar
 behavior. Menus support arrows, Escape, F10 and Alt+F/E/V/H; existing edit actions
 return focus to the editor before invoking the native operation.
 
-The sidebar retains the `thinking & code` wordmark below the menu strip to
-identify the app; only the duplicate native window title is hidden.
+The sidebar retains the `rack` wordmark below the menu strip to identify the
+app; only the duplicate native window title is hidden.
 
 The preload exposes only allowlisted `windowAction` operations and validated hex
 colors through `windowTheme`. Main verifies the bundled-page sender and owns all

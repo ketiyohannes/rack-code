@@ -20,9 +20,10 @@
  *   the production dependency tree of the generated package.json, so only
  *   runtime modules ship. Workspace packages are bundled into `dist/` and
  *   are never copied as modules.
- * - The generated manifest keeps the app name `thinking-and-code`. Electron
- *   derives the user-data directory (renderer storage, single-instance
- *   lock) from it, so changing it would orphan existing installations' data.
+ * - The generated manifest names the app `rack`. Electron derives the
+ *   user-data directory (renderer storage, single-instance lock) from it;
+ *   installations that still hold a directory under the product's former
+ *   name adopt it on first start (`src/main/user-data.ts`).
  * - On macOS the bundle is ad-hoc signed (`codesign -s -`) so the modified
  *   Electron bundle has a consistent local signature. This is not a
  *   distribution signature or notarization.
@@ -40,8 +41,8 @@ import { packager } from "@electron/packager";
 import { bundledCodexCommand } from "@rack/runtimes/codex/managed-codex-command";
 
 /** Name Electron uses for the user-data directory; see the module comment. */
-const APP_NAME = "thinking-and-code";
-const PRODUCT_NAME = "Thinking and Code";
+const APP_NAME = "rack";
+const PRODUCT_NAME = "Rack";
 const WORKSPACE_SCOPE = "@rack/";
 
 interface Manifest {
@@ -113,7 +114,7 @@ try {
     electronVersion,
     out: releaseDirectory,
     name: PRODUCT_NAME,
-    appBundleId: "local.thinking-and-code",
+    appBundleId: "local.rack",
     appCategoryType: "public.app-category.developer-tools",
     platform: process.platform,
     arch: process.arch,

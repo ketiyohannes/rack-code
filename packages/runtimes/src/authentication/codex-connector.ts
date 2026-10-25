@@ -103,7 +103,7 @@ export class CodexConnector implements AccountConnector {
     const run = async () => {
       try {
         await child.request("initialize", {
-          clientInfo: { name: "thinking-and-code", title: "Thinking and Code", version: "0.1.0" },
+          clientInfo: { name: "rack", title: "Rack", version: "0.1.0" },
           capabilities: {},
         }, 10_000);
         child.notify("initialized", {});

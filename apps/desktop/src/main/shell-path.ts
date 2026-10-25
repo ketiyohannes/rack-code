@@ -16,7 +16,7 @@
 import { execFileSync } from "node:child_process";
 import { delimiter } from "node:path";
 
-const MARKER = "__THINKING_AND_CODE_PATH__";
+const MARKER = "__RACK_PATH__";
 
 export function resolveShellPath(inherited: string | undefined = process.env["PATH"]): string | undefined {
   if (process.platform === "win32") return inherited;

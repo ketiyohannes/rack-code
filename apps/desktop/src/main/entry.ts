@@ -33,10 +33,14 @@ import { createMainWindow } from "./window.js";
 import { SharedBrowser } from "./shared-browser.js";
 import { WINDOW_ACTIONS } from "@rack/contracts/transport";
 import { performWindowAction } from "./window-actions.js";
+import { adoptLegacyUserData } from "./user-data.js";
 
 /** How long quitting waits for cancelled runs to record a terminal state. */
 const editors = new DesktopEditors();
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+// Before the lock below, which writes into the user-data directory: renderer
+// preferences stored under the product's former name move across first.
+adoptLegacyUserData(app.getPath("userData"));
 // Recovery assumes one live owner of persisted execution. A second launch of
 // the same desktop profile focuses its owner rather than recovering its runs.
 const ownsInstance = app.requestSingleInstanceLock();
@@ -319,9 +323,9 @@ void app.whenReady().then(() => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     if (owner !== null) sharedBrowser.present(owner, validateBrowserPresentation(request, ""));
   });
-  // THINKING_AND_CODE_DATA_DIR isolates development or test data from the
-  // default `~/.thinking-and-code` directory used by the host.
-  const dataDirectory = process.env["THINKING_AND_CODE_DATA_DIR"];
+  // RACK_DATA_DIR isolates development or test data from the default
+  // `~/.rack` directory used by the host.
+  const dataDirectory = process.env["RACK_DATA_DIR"];
   host = new HostProcess({
     modulePath: paths.host,
     args: dataDirectory === undefined || dataDirectory === "" ? [] : [`--data-directory=${dataDirectory}`],

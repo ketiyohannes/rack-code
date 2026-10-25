@@ -215,7 +215,7 @@ function renderTranscript(
       if (path) await controller.createProject({ path });
     };
     return [h("div", { class: "placeholder welcome" },
-      h("span", { class: "welcome-eyebrow" }, "THINKING & CODE"),
+      h("span", { class: "welcome-eyebrow" }, "RACK"),
       h("span", { class: "welcome-mark", aria: { hidden: "true" } }, icon("stack")),
       h("h1", { class: "welcome-title" }, project ? "Ready when you are." : "A little space. A big idea."),
       h("p", { class: "placeholder-text" }, project

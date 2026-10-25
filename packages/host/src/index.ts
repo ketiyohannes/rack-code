@@ -6,6 +6,9 @@
  * `./transport`, which carries the two links Rack serves today: the Electron
  * utility port and a remote, resumable, token-authorized connection.
  */
+// Re-exported so processes that start a host agree on the record location
+// without depending on the adapter layer directly.
+export { adoptLegacyDataDirectory, defaultDataDirectory } from "@rack/node-adapters/storage/data-directory";
 export { createApplication } from "./composition/application.js";
 export type { Application, CreateApplicationOptions } from "./composition/application.js";
 export { HostApi } from "./host-api.js";

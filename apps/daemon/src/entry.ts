@@ -24,7 +24,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { EventStream, startHost } from "@rack/host";
+import { EventStream, adoptLegacyDataDirectory, startHost } from "@rack/host";
 
 import { ConfigurationError, USAGE, isPubliclyBound, parseConfig } from "./config.js";
 import { DaemonServer, WEBSOCKET_PATH } from "./server.js";
@@ -36,9 +36,13 @@ if (argv.includes("--help") || argv.includes("-h")) {
   process.exit(0);
 }
 
+// Before the configuration is read, because the pairing token file below
+// is derived from the data directory and is written before the host starts.
+const dataDirectory = adoptLegacyDataDirectory();
+
 let config;
 try {
-  config = parseConfig(argv, process.env);
+  config = parseConfig(argv, process.env, dataDirectory);
 } catch (error) {
   console.error(error instanceof ConfigurationError ? error.message : String(error));
   process.exit(2);
