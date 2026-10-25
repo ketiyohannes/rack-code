@@ -772,3 +772,74 @@ start would cost more than the preferences are worth.
 `adoptLegacyDataDirectory`, so the daemon reaches them through the host
 rather than depending on the adapter layer, which the boundary rules forbid
 it.
+
+## Release and distribution (2026-10-25)
+
+A tagged release builds Rack once per platform and attaches the archives to
+a GitHub release. The pipeline is `.github/workflows/release.yml`; the
+everyday gate is `.github/workflows/ci.yml`, which runs typecheck,
+boundaries, tests and both builds on one Linux runner.
+
+### Why a matrix, not one build machine
+
+Nothing in the packaged application cross-compiles:
+
+- The **Codex runtime** and the **Claude Agent SDK** ship as optional
+  per-platform npm packages. `npm ci` installs only the ones matching the
+  runner, and `bundledCodexCommand()` resolves the executable from that
+  install tree.
+- **`node-pty`** compiles on install. It is an N-API addon, so one binary
+  serves both Node and Electron and `electron-rebuild` is not part of
+  packaging; the Electron PTY fixture exercises exactly that.
+- **`@electron/packager`** is given `process.platform` and `process.arch`,
+  so it packages the machine it runs on.
+
+Four targets are built: macOS on Apple silicon (`macos-latest`) and Intel
+(`macos-13`), Windows x64 and Linux x64. Adding `windows-11-arm` or
+`ubuntu-24.04-arm` is a matrix entry and nothing else, because every
+platform-specific decision is already made by the install.
+
+### Stages
+
+1. **verify** (Linux). Refuses a tag that disagrees with the version in
+   `apps/desktop/package.json`, because the archive file names are built
+   from that version and would otherwise contradict the release they hang
+   under. Then the full check suite.
+2. **package** (matrix, `fail-fast: false`). `npm ci`, `package:desktop`,
+   `archive:desktop`, upload. One platform failing must not hide whether the
+   others succeeded. Artifacts upload at compression level 0: the archives
+   are already compressed.
+3. **publish** (Linux). Downloads every artifact and creates a **draft**
+   release from `.github/release-notes.md` plus generated notes.
+
+The draft is deliberate. The builds are unsigned, so opening one takes
+steps that the user has to read first; publishing is a decision, not a
+side effect of pushing a tag.
+
+### Archiving
+
+`archive-release.ts` wraps the packaged directory in one file per platform
+using the system archiver, so the release pipeline adds no dependency for a
+step every platform's shell already performs. macOS uses `ditto -c -k
+--sequesterRsrc --keepParent` rather than `zip`, which does not preserve the
+symlinks inside an Electron framework or the bundle's signature — an app
+zipped with it can fail to launch after being downloaded, and it is also the
+form `notarytool` expects. Linux uses `tar.gz` to keep the executable bit.
+Published names say `macos`/`windows`/`linux` rather than the kernel names
+the packager uses, because a file name is read by someone choosing a
+download.
+
+### What a release does not yet carry
+
+- **No installers.** The archives contain an application directory, not a
+  `.dmg`, `.msi` or `.deb`. `@electron/packager` does not make installers;
+  adding them means either per-platform makers beside the current script or
+  moving to Forge or electron-builder, and the latter would have to absorb
+  the generated-manifest staging that workspace hoisting forces on us.
+- **No signing or notarization.** macOS is ad-hoc signed (`codesign -s -`),
+  which is a consistent local signature and not a distribution one; Windows
+  is unsigned. Signing needs a Developer ID certificate, entitlements that
+  permit launching the bundled provider executables, and a reverse-DNS
+  bundle identifier replacing the placeholder `local.rack`.
+- **No auto-update.** Every release is a fresh download, and an update feed
+  would have to be signed before it could be trusted.

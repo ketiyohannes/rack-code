@@ -11,6 +11,7 @@
     "build": "tsx scripts/build-desktop.ts",
     "start": "npm run build && electron .",
     "package": "npm run build && tsx scripts/package-desktop.ts",
+    "archive": "tsx scripts/archive-release.ts",
     "test:desktop-features": "tsx scripts/bundle-fixture.ts verify-desktop-features && electron dist/verify-desktop-features.mjs",
     "test:orchestra": "tsx scripts/bundle-fixture.ts verify-orchestra && electron dist/verify-orchestra.mjs",
     "test:run-changes": "tsx scripts/bundle-fixture.ts verify-run-changes && electron dist/verify-run-changes.mjs"

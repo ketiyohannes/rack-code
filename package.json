@@ -21,6 +21,7 @@
     "build:web": "npm run build --workspace @rack/web",
     "build:mobile": "npm run build --workspace @rack/mobile",
     "package:desktop": "npm run package --workspace @rack/desktop",
+    "archive:desktop": "npm run archive --workspace @rack/desktop",
     "daemon:token": "npm run print-token --workspace @rack/daemon",
     "rebuild:native": "electron-rebuild -f -w node-pty",
     "test:desktop-features": "npm run test:desktop-features --workspace @rack/desktop",

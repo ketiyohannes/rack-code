@@ -1,0 +1,143 @@
+# Builds a downloadable Rack for every supported platform and attaches the
+# archives to a GitHub release.
+#
+# Why a matrix rather than one job: the application bundles native runtimes.
+# The Codex runtime and the Claude Agent SDK ship as optional per-platform
+# npm packages, `node-pty` is compiled on install, and @electron/packager
+# packages whatever platform and architecture it is running on. None of that
+# cross-compiles, so each target is installed and packaged on its own runner.
+#
+# The release is created as a draft. macOS and Windows builds are unsigned
+# (see docs/architecture.md), so the notes carry the steps a user needs to
+# open them, and those are worth reading before anyone can download them.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release (for example v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  verify:
+    name: Verify the tag and the tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # A tag that disagrees with the manifest would publish archives whose
+      # file names contradict the release they hang under. The version in
+      # apps/desktop/package.json is the one the application reports and the
+      # one the archive names use, so it is the one that has to match.
+      - name: The tag must match the packaged version
+        run: |
+          manifest="v$(node -p "require('./apps/desktop/package.json').version")"
+          if [ "$TAG" != "$manifest" ]; then
+            echo "Tag $TAG does not match apps/desktop/package.json ($manifest)." >&2
+            echo "Bump the manifest or retag before releasing." >&2
+            exit 1
+          fi
+          echo "$TAG matches the packaged version."
+
+      - run: npm run typecheck
+      - run: npm run check:boundaries
+      - run: npm test
+      - run: npm run build:web
+
+  package:
+    name: Package ${{ matrix.label }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One platform failing should not hide whether the others are fine.
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS (Apple silicon)
+            runner: macos-latest
+          - label: macOS (Intel)
+            runner: macos-13
+          - label: Windows (x64)
+            runner: windows-latest
+          - label: Linux (x64)
+            runner: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Installs this runner's optional platform packages and compiles
+      # node-pty for it. node-pty is an N-API addon, so the binary it builds
+      # loads in both Node and Electron and needs no separate rebuild.
+      - run: npm ci
+
+      # Fails before packaging if the platform's Codex runtime is missing,
+      # and again afterwards against the pruned application tree.
+      - run: npm run package:desktop
+
+      - run: npm run archive:desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rack-${{ runner.os }}-${{ runner.arch }}
+          # Only the archive: the unpacked application beside it is the same
+          # bytes again, and it is hundreds of megabytes.
+          path: |
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.tar.gz
+          if-no-files-found: error
+          # Already compressed; re-compressing costs minutes and saves nothing.
+          compression-level: 0
+
+  publish:
+    name: Publish the draft release
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List what will be attached
+        run: ls -lh artifacts
+
+      # Created as a draft so the notes can be read before anyone downloads
+      # an unsigned build. Publishing is a deliberate click.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --draft \
+            --title "Rack $TAG" \
+            --notes-file .github/release-notes.md \
+            --generate-notes \
+            artifacts/*

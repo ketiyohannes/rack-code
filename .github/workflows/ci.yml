@@ -1,0 +1,38 @@
+# Gate for everything that is cheap to check on one machine. Packaging is
+# deliberately absent: it needs one runner per platform and belongs to the
+# release workflow, which runs these same checks first.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, boundaries, tests, builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Reproduces the lockfile exactly. Optional platform packages (the
+      # Codex and Claude runtimes) install for this runner only, which is
+      # why packaging cannot happen here.
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm run check:boundaries
+      - run: npm test
+      - run: npm run build:desktop
+      - run: npm run build:web
