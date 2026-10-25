@@ -795,7 +795,11 @@ Nothing in the packaged application cross-compiles:
   so it packages the machine it runs on.
 
 Four targets are built: macOS on Apple silicon (`macos-latest`) and Intel
-(`macos-13`), Windows x64 and Linux x64. Adding `windows-11-arm` or
+(`macos-15-intel`), Windows x64 and Linux x64. The Intel label matters:
+`macos-13` was retired in December 2025, and a workflow asking for a label
+that no longer exists does not fail - the job queues until somebody cancels
+the run. GitHub drops Intel macOS altogether when the macOS 15 image
+retires in autumn 2027. Adding `windows-11-arm` or
 `ubuntu-24.04-arm` is a matrix entry and nothing else, because every
 platform-specific decision is already made by the install.
 

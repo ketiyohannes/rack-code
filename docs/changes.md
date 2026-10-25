@@ -1,3 +1,11 @@
+## 2026-10-25 — The first release run, and a retired runner (branch `build/github-release`)
+
+Tagging `v1.0.0` ran the pipeline for the first time. Three of the four platforms packaged; the fourth exposed a workflow bug.
+
+- **Verified on real runners.** Verify passed (tag matched the manifest, full suite green). Linux x64 packaged in 1m33s, Windows x64 in 2m13s, macOS Apple silicon in 1m27s. Windows was the unverified risk and it worked: the staging symlink `package-desktop.ts` creates needs elevation, and GitHub's Windows runners have it.
+- **`macos-13` no longer exists.** It was retired in December 2025. A workflow that asks for a label GitHub does not have **does not fail** — the job sits queued until somebody cancels the run, which is what happened here while every other job finished in under three minutes. The replacement Intel label is `macos-15-intel`, now used. Intel macOS goes away entirely when the macOS 15 image retires in autumn 2027.
+- **Validation.** The three successful platforms are evidence from real runners, not local reasoning. The Intel job has still never run. No release was published: the publish stage never started, so the tag was moved to the corrected workflow rather than leaving a half-built draft.
+
 ## 2026-10-25 — A Timeline capture could miss an edit (branch `build/github-release`)
 
 The flaky CI test reported in the previous entry was a real defect in Timeline's capture, not a slow machine.

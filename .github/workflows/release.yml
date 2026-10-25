@@ -73,8 +73,12 @@ jobs:
         include:
           - label: macOS (Apple silicon)
             runner: macos-latest
+          # macos-13 was retired in December 2025; macos-15-intel is the
+          # replacement, and GitHub drops Intel macOS entirely when the
+          # macOS 15 image retires in autumn 2027. A label that no longer
+          # exists does not fail: the job queues until the run is cancelled.
           - label: macOS (Intel)
-            runner: macos-13
+            runner: macos-15-intel
           - label: Windows (x64)
             runner: windows-latest
           - label: Linux (x64)
