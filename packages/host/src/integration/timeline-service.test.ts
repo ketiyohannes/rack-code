@@ -72,7 +72,7 @@ test("container projects discover their single repository for history, live reco
     assert.deepEqual(recorded[0]?.files, [{ path: "README.md", status: "modified" }]);
     await writeFile(join(f.path, "README.md"), "edited during development\n");
     changed!();
-    await waitFor(async () => (await service.projectHistory("project-1")).checkpoints.filter((entry) => entry.source !== "git").length === 2, 10_000);
+    await waitFor(async () => (await service.projectHistory("project-1")).checkpoints.filter((entry) => entry.source !== "git").length === 2);
     recorded = (await service.projectHistory("project-1")).checkpoints.filter((entry) => entry.source !== "git");
     const target = { scope: "project" as const, contextId: "project-1", checkpointId: recorded.at(-1)!.id };
     const contents = await service.snapshotFile(target, "README.md");
@@ -118,7 +118,7 @@ test("automatic tracking observes edits in repositories with no HEAD and falls b
     assert.ok(changed);
     await writeFile(join(f.path, "observed.ts"), "first\n");
     changed!();
-    await waitFor(async () => (await service.projectHistory("project-1")).checkpoints.some((entry) => entry.files.some((file) => file.path === "observed.ts")), 10_000);
+    await waitFor(async () => (await service.projectHistory("project-1")).checkpoints.some((entry) => entry.files.some((file) => file.path === "observed.ts")));
     // An unexpectedly closed native watcher switches to periodic capture.
     closed = true;
     await writeFile(join(f.path, "fallback.ts"), "fallback\n");
@@ -731,7 +731,18 @@ test("filesystem observations are debounced and coalesced", async () => {
   assert.equal(notify, undefined, "finish closes the watcher");
 });
 
-async function waitFor(condition: () => Promise<boolean>, timeoutMs = 5000): Promise<void> {
+/**
+ * Waits for a condition the filesystem watcher and a Git subprocess have to
+ * reach together.
+ *
+ * The deadline is wall-clock patience on whatever machine runs the suite,
+ * not an assertion about how fast recording is. Test files run in parallel,
+ * so on a shared two-core CI runner these waits compete with every other
+ * file for CPU and disk; a deadline tuned to a developer's laptop turns
+ * that contention into a failure that says nothing about the code. A
+ * condition that is genuinely never satisfied still fails, only later.
+ */
+async function waitFor(condition: () => Promise<boolean>, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!(await condition())) {
     if (Date.now() > deadline) throw new Error("Timed out waiting for condition.");
