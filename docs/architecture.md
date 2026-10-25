@@ -843,3 +843,30 @@ download.
   bundle identifier replacing the placeholder `local.rack`.
 - **No auto-update.** Every release is a fresh download, and an update feed
   would have to be signed before it could be trusted.
+
+## Timeline capture and the reused index (2026-10-25)
+
+`GitSnapshotRepository.capture` keeps the private index it builds for a
+repository and restores it for that repository's next capture, so a capture
+costs the files that changed rather than the whole working tree. The cache
+holds the index bytes **and the modification time the index file carried
+when those bytes were written**.
+
+The time is load-bearing. Git decides whether a file must be re-read by
+comparing its stat data against the index entry, and it only distrusts an
+entry whose timestamp is not older than the index's own - the rule that
+protects against a file changed in the same moment the index was written.
+Restoring the bytes into a fresh temporary file dates the index to *now*,
+so every entry looks safely older and that protection is switched off. A
+file that changed within the same second as the previous capture, and kept
+its size, was then read from stale stat data: the tree came out identical,
+`capture` answered `unchanged`, and the edit was never recorded. Restoring
+the original time restores the comparison the bytes were written for.
+
+The window is a whole second on Git builds without nanosecond stat support,
+which is most Linux distributions; Apple's Git has it, so macOS never saw
+this. It surfaced as an intermittent CI failure in the project-tracking
+integration test, where a watcher notification produced a capture that
+recorded nothing. `performance.test.ts` covers it by pinning a file's
+modification time, which makes the race deterministic on either kind of
+build.

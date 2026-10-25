@@ -23,7 +23,7 @@
  * the inherited environment.
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -70,7 +70,22 @@ export interface GitSnapshotRepositoryOptions {
 }
 
 export class GitSnapshotRepository implements SnapshotRepository {
-  private readonly indexes = new Map<string, Buffer>();
+  /**
+   * Index bytes reused by the next capture of the same repository, with the
+   * modification time the index file carried when those bytes were written.
+   *
+   * The time is not bookkeeping. Git decides whether a file needs re-reading
+   * by comparing the file's stat data with the entry in the index, and it
+   * only distrusts an entry whose timestamp is not older than the index's
+   * own. Restoring these bytes into a fresh temporary file would date the
+   * index to now, so every entry would look safely older and a file changed
+   * in the same second as the previous capture would be trusted as
+   * unchanged. Git builds without nanosecond stat support - most Linux
+   * distributions - compare whole seconds, which makes that window a real
+   * one. Restoring the original time restores the comparison the bytes were
+   * written for.
+   */
+  private readonly indexes = new Map<string, { readonly bytes: Buffer; readonly writtenAt: Date }>();
   private readonly roots = new Map<string, { readonly root: string; readonly expires: number }>();
   private readonly discovery = new GitRepositoryDiscovery();
   private readonly captureTimeoutMs: number;
@@ -130,7 +145,11 @@ export class GitSnapshotRepository implements SnapshotRepository {
     try {
       const cached = this.indexes.get(root);
       if (cached !== undefined) {
-        await writeFile(env.GIT_INDEX_FILE, cached, { mode: 0o600 });
+        await writeFile(env.GIT_INDEX_FILE, cached.bytes, { mode: 0o600 });
+        // See the note on `indexes`: the restored index must keep claiming
+        // the moment it was written, or Git trusts stat data it should
+        // re-check and a same-second change is captured as no change.
+        await utimes(env.GIT_INDEX_FILE, cached.writtenAt, cached.writtenAt);
         // A previously captured file can become ignored. A normal persistent
         // Git index would keep it tracked, violating Timeline's ignore policy.
         const ignored = await git(root, ["ls-files", "--cached", "--ignored", "--exclude-standard", "-z"], options);
@@ -144,11 +163,12 @@ export class GitSnapshotRepository implements SnapshotRepository {
       await git(root, ["add", "-A", "--", ":/"], options);
       const tree = (await git(root, ["write-tree"], options)).trim();
       const index = await readFile(env.GIT_INDEX_FILE);
+      const writtenAt = (await stat(env.GIT_INDEX_FILE)).mtime;
       this.indexes.delete(root);
       // At most 16 MiB of private stat data; temporary indexes are still
       // removed in finally and no user index is ever opened for writing.
-      if (index.length <= 4 * 1024 * 1024) this.indexes.set(root, index);
-      while ([...this.indexes.values()].reduce((total, value) => total + value.length, 0) > 16 * 1024 * 1024) this.indexes.delete(this.indexes.keys().next().value!);
+      if (index.length <= 4 * 1024 * 1024) this.indexes.set(root, { bytes: index, writtenAt });
+      while ([...this.indexes.values()].reduce((total, value) => total + value.bytes.length, 0) > 16 * 1024 * 1024) this.indexes.delete(this.indexes.keys().next().value!);
       if (baseline !== undefined && baseline.tree === tree) return { kind: "unchanged", snapshot: baseline.commit };
       const snapshot = (await git(root, ["commit-tree", tree, ...(previous === undefined ? [] : ["-p", previous]), "-m", commitMessage(input.label, input.trailers)], options)).trim();
       if (!OBJECT_ID.test(snapshot)) throw new Error("Git returned an invalid snapshot ID.");

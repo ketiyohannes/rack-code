@@ -1,3 +1,13 @@
+## 2026-10-25 — A Timeline capture could miss an edit (branch `build/github-release`)
+
+The flaky CI test reported in the previous entry was a real defect in Timeline's capture, not a slow machine.
+
+- **The bug.** `GitSnapshotRepository.capture` reuses the private index it built for a repository, restoring the bytes into a fresh temporary file. Git only distrusts an index entry whose timestamp is not older than the index's own, so dating the restored index to *now* switched off the protection against a file that changed in the same moment the index was written. A file edited within the same second as the previous capture that also kept its size was read from stale stat data: identical tree, `capture` answered `unchanged`, and the edit was never recorded. On Git builds without nanosecond stat support — most Linux distributions — that window is a whole second. Apple's Git has nanosecond stat, which is why macOS never reproduced it.
+- **The fix.** The cache keeps the index file's modification time alongside the bytes and restores it with `utimes`, so the comparison the bytes were written for still applies. The steady-state cost is unchanged: the claimed time advances with every capture, so only files touched since the last one are re-read.
+- **How it was found.** Three hypotheses were tested and discarded on evidence, not argument: CPU contention (it failed at a 30s deadline), a missing Git identity (the Timeline writer sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*` itself), and Git's stat cache missing a same-size rewrite in general (a Linux runner detects that). Instrumenting the capture path on a Linux runner showed both captures running to completion while the ref never moved, and the snapshot in the history carried a `createdAt` of `.000Z` — second granularity — which pointed at the index's stat comparison.
+- **Regression test.** `performance.test.ts` pins a file's modification time so the race is deterministic on either kind of Git build. Verified in both directions: it fails against the unfixed code and passes against the fixed code.
+- **Validation.** Full suite green at 508 tests. Not done: the Electron fixtures and packaging were not re-run for this change, and the fix has not yet been observed over repeated runs on a Linux runner.
+
 ## 2026-10-25 — A Git fixture that depended on the machine's identity (branch `build/github-release`)
 
 The first CI run failed one test on Linux that passes on a developer's Mac, which is the kind of thing CI exists to find.
