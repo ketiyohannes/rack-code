@@ -31,9 +31,28 @@ export interface ApprovalRequest {
   readonly tool: string;
   readonly input: Readonly<Record<string, unknown>>;
   readonly reason?: string;
+  /**
+   * The `toolCallId` of the `tool_request` this approval gates, when the
+   * provider identifies it (Claude's `canUseTool` `toolUseID`, Codex's
+   * approval `itemId`). Clients use it to show the approval on the same
+   * activity row as the call. Absent for approvals that are not tied to one
+   * call (for example a Codex permissions escalation); clients must then
+   * present the approval on its own.
+   */
+  readonly toolCallId?: string;
 }
 
 export type ApprovalDecision = "allow" | "deny";
+
+/** Provider-neutral identity of a Model Context Protocol tool call. */
+export interface McpToolIdentity {
+  /** MCP server name as configured for the runtime (for example "github"). */
+  readonly server: string;
+  /** Tool name as advertised by that server (for example "search_issues"). */
+  readonly tool: string;
+  /** Arguments sent to the tool, when the adapter can separate them from the native payload. */
+  readonly arguments?: unknown;
+}
 
 export interface RuntimeAccountContext {
   readonly accountId: string;
@@ -157,10 +176,27 @@ export interface RuntimeModelInput {
 export type RuntimeEvent =
   | { readonly type: "message_delta"; readonly text: string }
   | { readonly type: "thinking_delta"; readonly text: string; readonly format?: "trace" | "summary"; readonly traceId?: string }
-  | { readonly type: "tool_request"; readonly tool: string; readonly input: unknown; readonly toolCallId?: string }
+  /**
+   * A tool call started. `tool` and `input` keep the provider's native name
+   * and payload for audit and detail views. `mcp` is the provider-neutral
+   * identity of a Model Context Protocol tool call, set by adapters that
+   * recognize one, so clients can describe `github/search_issues` the same
+   * way whichever runtime made the call. Adapters never put provider-specific
+   * semantics in `mcp`; it carries only the server name, tool name and the
+   * arguments sent to that tool.
+   */
+  | { readonly type: "tool_request"; readonly tool: string; readonly input: unknown; readonly toolCallId?: string; readonly mcp?: McpToolIdentity }
   | { readonly type: "tool_output_delta"; readonly text: string; readonly toolCallId?: string }
   | { readonly type: "tool_result"; readonly output: unknown; readonly toolCallId?: string; readonly isError?: boolean }
   | { readonly type: "approval_request"; readonly request: ApprovalRequest }
+  /**
+   * The user answered `approval_request` `approvalId`. Emitted and journaled
+   * by ExecutionService (never by adapters) before the decision is handed to
+   * the runtime, so a replayed journal shows the decision ahead of the call's
+   * outcome. Approvals released by cancellation produce no event: the run's
+   * terminal event already says they were never answered.
+   */
+  | { readonly type: "approval_resolved"; readonly approvalId: string; readonly decision: ApprovalDecision }
   | { readonly type: "question_request"; readonly request: UserQuestionRequest }
   | { readonly type: "question_resolved"; readonly requestId: string; readonly response: UserQuestionResponse | null }
   | { readonly type: "native_session"; readonly nativeSessionId: string }

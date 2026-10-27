@@ -16,7 +16,7 @@ import { accountLabel, PERMISSION_LABELS, RUN_GUIDANCE, runtimeOf } from "./run-
 
 /** Journal entry types that carry a `RuntimeEvent` payload. */
 const RUNTIME_EVENT_TYPES = new Set<string>([
-  "message_delta", "thinking_delta", "tool_request", "tool_result", "approval_request", "native_session",
+  "message_delta", "thinking_delta", "tool_request", "tool_output_delta", "tool_result", "approval_request", "approval_resolved", "native_session",
   "question_request", "question_resolved",
   "usage", "availability", "completed", "failed", "interrupted",
 ]);

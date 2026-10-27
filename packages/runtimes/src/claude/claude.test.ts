@@ -275,3 +275,36 @@ test("Claude keeps native Plan mode read-only and cannot exit it through a tool"
     assert.equal(result?.behavior, "deny");
   }
 });
+
+test("Claude ties approvals to their tool call and exposes MCP tool identity", async () => {
+  let options!: import("@anthropic-ai/claude-agent-sdk").Options;
+  const requests: unknown[] = [];
+  const raw = [
+    { type: "stream_event", event: { type: "message_start", message: { id: "message" } } },
+    { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call-post", name: "mcp__slack__post_message", input: {} } } },
+    { type: "assistant", message: { id: "message", content: [{ type: "tool_use", id: "call-post", name: "mcp__slack__post_message", input: { channel: "release", text: "Summary" } }] } },
+    { type: "assistant", message: { id: "message-2", content: [{ type: "tool_use", id: "call-shell", name: "Bash", input: { command: "pwd" } }] } },
+    { type: "result", subtype: "success", result: "Done" },
+  ];
+  const adapter = new ClaudeRuntimeAdapter({ resolve: async () => ({ environment: {} }) },
+    { resolve: async () => ({ directory: "/context" }) }, ((value: { options: typeof options }) => {
+      options = value.options;
+      return { async *[Symbol.asyncIterator]() { yield* raw; }, close: () => {} };
+    }) as unknown as typeof import("@anthropic-ai/claude-agent-sdk").query);
+  const events: import("@rack/core/execution/types").RuntimeEvent[] = [];
+  for await (const event of adapter.startRun({ runId: "run", attemptId: "attempt", sessionId: "session", projectPath: "/project", prompt: "test", permissionMode: "ask",
+    account: { accountId: "account", providerId: "claude", credential: { id: "credential", providerId: "claude", method: "native_login" }, runtimeContextId: "context" },
+    signal: new AbortController().signal, requestApproval: async (request) => { requests.push(request); return "allow"; } })) events.push(event);
+
+  const requestsFor = (id: string) => events.filter((event) => event.type === "tool_request" && event.toolCallId === id);
+  // Every report of the MCP call carries the same neutral identity; built-ins carry none.
+  assert.ok(requestsFor("call-post").length >= 2);
+  for (const event of requestsFor("call-post")) assert.equal(event.type === "tool_request" && event.mcp?.server, "slack");
+  const complete = requestsFor("call-post").at(-1);
+  assert.deepEqual(complete?.type === "tool_request" && complete.mcp, { server: "slack", tool: "post_message", arguments: { channel: "release", text: "Summary" } });
+  const shell = requestsFor("call-shell")[0];
+  assert.equal(shell?.type === "tool_request" && shell.mcp, undefined);
+
+  await options.canUseTool!("mcp__slack__post_message", { channel: "release" }, { signal: new AbortController().signal, toolUseID: "call-post", requestId: "request" });
+  assert.deepEqual(requests, [{ tool: "mcp__slack__post_message", input: { channel: "release" }, toolCallId: "call-post" }]);
+});

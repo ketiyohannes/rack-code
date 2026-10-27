@@ -7,7 +7,9 @@
  * never hold handles; this class does. It:
  *
  * - drains each handle's events in the background and broadcasts them as
- *   indexed `run.event`s;
+ *   indexed `run.event`s, each stamped with the time the execution service
+ *   journaled it (clients derive tool durations from these stamps, and a
+ *   journal replay reads the same values);
  * - keeps an in-memory copy of every event and every unanswered approval so
  *   a client that (re)connects mid-run can render an exact snapshot;
  * - forwards approval decisions and cancellation to the handle;
@@ -34,6 +36,8 @@ interface ActiveRun {
   readonly sessionId: string;
   run: RunView;
   readonly events: RuntimeEvent[];
+  /** Host observation time of each event, parallel to `events`. */
+  readonly observedAt: string[];
   readonly pendingApprovals: Map<string, ApprovalRequest>;
   readonly pendingQuestions: Map<string, UserQuestionRequest>;
   cancelRequested: boolean;
@@ -49,6 +53,8 @@ export interface ActiveRunsDependencies {
   readonly emit: (event: HostEvent) => void;
   /** Loads the persisted run with attempts; used after status transitions. */
   readonly loadRun: (runId: string) => Promise<RunView>;
+  /** Clock used to stamp observed events; defaults to the system clock. */
+  readonly now?: () => Date;
 }
 
 export class ActiveRuns {
@@ -67,6 +73,7 @@ export class ActiveRuns {
       sessionId: run.sessionId,
       run,
       events: [],
+      observedAt: [],
       pendingApprovals: new Map(),
       pendingQuestions: new Map(),
       cancelRequested: false,
@@ -85,6 +92,7 @@ export class ActiveRuns {
     return [...this.runs.values()].map((active) => ({
       run: active.run,
       events: [...active.events],
+      observedAt: [...active.observedAt],
       pendingApprovals: [...active.pendingApprovals.values()],
       pendingQuestions: [...active.pendingQuestions.values()],
       cancelRequested: active.cancelRequested,
@@ -186,13 +194,20 @@ export class ActiveRuns {
     try {
       for await (const event of active.handle.events) {
         const index = active.events.length;
+        // Prefer the time the execution service journaled, so this live
+        // stamp equals the one a later journal replay reads.
+        const observedAt = active.handle.observedAt?.(event) ?? (this.dependencies.now?.() ?? new Date()).toISOString();
         active.events.push(event);
+        active.observedAt.push(observedAt);
         if (event.type === "approval_request") {
           active.pendingApprovals.set(event.request.id, event.request);
         }
+        // `respondToApproval` already removed answered approvals; this keeps
+        // the pending set right if a decision reaches the stream another way.
+        if (event.type === "approval_resolved") active.pendingApprovals.delete(event.approvalId);
         if (event.type === "question_request") active.pendingQuestions.set(event.request.id, event.request);
         if (event.type === "question_resolved") active.pendingQuestions.delete(event.requestId);
-        emit({ type: "run.event", runId, index, event });
+        emit({ type: "run.event", runId, index, event, observedAt });
         if (active.observer !== undefined) {
           try { active.observer.observe(event); } catch { /* Optional observers never affect the run. */ }
         }

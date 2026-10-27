@@ -262,9 +262,12 @@ export class ClaudeRuntimeAdapter implements RuntimeAdapter {
         if (callbackOptions.signal.aborted || input.signal.aborted) {
           return { behavior: "deny", message: "Execution was interrupted." };
         }
+        // `toolUseID` matches the `tool_use` block already reported as a
+        // `tool_request`, so clients can show the approval on that call.
         const decision = await input.requestApproval({
           tool: toolName,
           input: toolInput,
+          toolCallId: callbackOptions.toolUseID,
         });
         return decision === "allow"
           ? { behavior: "allow", updatedInput: toolInput }
@@ -347,6 +350,25 @@ function streamedBlockKey(streamed: ReadonlyMap<string, string>, messageId: stri
   return match ?? positional;
 }
 
+/**
+ * One normalized tool call. Claude names MCP tools `mcp__<server>__<tool>`
+ * and passes the tool's arguments as the whole input, so both halves of the
+ * provider-neutral identity come from the name. Built-in tools (Bash, Read,
+ * Edit...) keep only their native name and input.
+ *
+ * Claude reports a tool call while the model is still writing its input
+ * (`content_block_start` with empty input), again when the input is
+ * complete, and once more in the final assistant message. All three carry
+ * the same `toolCallId`; clients merge them. Claude reports no separate
+ * "execution started" signal.
+ */
+function claudeToolRequest(name: string, input: unknown, toolCallId: string | undefined): RuntimeEvent {
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
+  return { type: "tool_request", tool: name, input,
+    ...(toolCallId === undefined ? {} : { toolCallId }),
+    ...(mcp === null ? {} : { mcp: { server: mcp[1]!, tool: mcp[2]!, arguments: input } }) };
+}
+
 /** SDK streaming blocks and final messages describe the same content once. */
 function mapClaudeMessage(message: unknown, state: ClaudeEventState): RuntimeEvent[] {
   const type = stringField(message, "type");
@@ -368,8 +390,7 @@ function mapClaudeMessage(message: unknown, state: ClaudeEventState): RuntimeEve
       }
       if (blockType === "tool_use") {
         const id = stringField(block, "id");
-        return [{ type: "tool_request", tool: stringField(block, "name") ?? "tool", input: field(block, "input"),
-          ...(id === undefined ? {} : { toolCallId: id }) }];
+        return [claudeToolRequest(stringField(block, "name") ?? "tool", field(block, "input"), id)];
       }
       // redacted_thinking/signature blocks expose no readable trace text.
       return [];
@@ -396,7 +417,7 @@ function mapClaudeMessage(message: unknown, state: ClaudeEventState): RuntimeEve
       }
       if (block.type === "tool_use" && typeof block.id === "string") {
         state.tools.set(index, { id: block.id, name: stringField(block, "name") ?? "tool", json: "" });
-        return [{ type: "tool_request", tool: stringField(block, "name") ?? "tool", input: block.input ?? {}, toolCallId: block.id }];
+        return [claudeToolRequest(stringField(block, "name") ?? "tool", block.input ?? {}, block.id)];
       }
     }
     const delta = recordField(event, "delta");
@@ -413,7 +434,7 @@ function mapClaudeMessage(message: unknown, state: ClaudeEventState): RuntimeEve
     if (deltaType === "input_json_delta" && tool !== undefined && typeof delta.partial_json === "string") tool.json += delta.partial_json;
     if (eventType === "content_block_stop" && tool !== undefined && tool.json !== "") {
       try {
-        return [{ type: "tool_request", tool: tool.name, input: JSON.parse(tool.json) as unknown, toolCallId: tool.id }];
+        return [claudeToolRequest(tool.name, JSON.parse(tool.json) as unknown, tool.id)];
       } catch { /* The final assistant tool block supplies authoritative input. */ }
     }
   }

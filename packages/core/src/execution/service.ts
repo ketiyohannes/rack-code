@@ -60,6 +60,12 @@ export interface ExecutionHandle {
   respondToApproval(approvalId: string, decision: ApprovalDecision): void;
   respondToQuestions?(requestId: string, response: UserQuestionResponse | null): Promise<void>;
   cancel(): Promise<void>;
+  /**
+   * The `observedAt` journaled for an event this handle delivered (ISO 8601).
+   * Hosts forward it with live events so a live view and a later journal
+   * replay show identical timing. Optional for handles that keep no journal.
+   */
+  observedAt?(event: RuntimeEvent): string | undefined;
 }
 
 /** Host integration point after execution-directory preparation and before
@@ -211,21 +217,24 @@ export class ExecutionService {
 
     const controller = new AbortController();
     const queue = new AsyncQueue<RuntimeEvent>();
+    // One timestamp per delivered event, taken before it is queued and used
+    // for its journal row, so live clients and replays agree exactly.
+    const observed = new WeakMap<RuntimeEvent, string>();
+    const stamp = (event: RuntimeEvent): string => {
+      const at = this.now().toISOString();
+      observed.set(event, at);
+      return at;
+    };
     const approvals = new ApprovalBroker(
       queue,
       this.createId,
-      async (request) => {
-        await this.store.appendJournal({
-          runId,
-          attemptId,
-          type: "approval_request",
-          payload: { type: "approval_request", request },
-          observedAt: this.now().toISOString(),
-        });
+      stamp,
+      async (event, observedAt) => {
+        await this.store.appendJournal({ runId, attemptId, type: event.type, payload: event, observedAt });
       },
     );
     const questions = new QuestionBroker(this.createId, async (event) => {
-      await this.store.appendJournal({ runId, attemptId, type: event.type, payload: event, observedAt: this.now().toISOString() });
+      await this.store.appendJournal({ runId, attemptId, type: event.type, payload: event, observedAt: stamp(event) });
       queue.push(event);
     });
     let currentRun = run;
@@ -263,6 +272,7 @@ export class ExecutionService {
       attempt: currentAttempt,
       controller,
       queue,
+      stamp,
       approvals,
       questions,
       onRun: (next) => {
@@ -291,6 +301,7 @@ export class ExecutionService {
       respondToApproval: (approvalId, decision) => approvals.respond(approvalId, decision),
       respondToQuestions: (requestId, response) => questions.respond(requestId, response),
       cancel: stopRuntime,
+      observedAt: (event) => observed.get(event),
     };
   }
 
@@ -371,6 +382,7 @@ export class ExecutionService {
       attempt,
       controller,
       queue,
+      stamp,
       approvals,
       questions,
       onRun,
@@ -547,7 +559,7 @@ export class ExecutionService {
           attemptId: currentAttempt.id,
           type: event.type,
           payload: event,
-          observedAt: this.now().toISOString(),
+          observedAt: stamp(event),
         });
         queue.push(event);
         if (event.type === "message_delta") {
@@ -612,13 +624,14 @@ export class ExecutionService {
       const failure: RuntimeEvent = isCancelled()
         ? { type: "interrupted" }
         : { type: "failed", error: terminalError };
+      const failureObservedAt = stamp(failure);
       queue.push(failure);
       await this.store.appendJournal({
         runId: currentRun.id,
         attemptId: currentAttempt.id,
         type: failure.type,
         payload: failure,
-        observedAt: this.now().toISOString(),
+        observedAt: failureObservedAt,
       });
     } finally {
       try {
@@ -746,6 +759,8 @@ interface ConsumeContext {
   readonly attempt: AttemptRecord;
   readonly controller: AbortController;
   readonly queue: AsyncQueue<RuntimeEvent>;
+  /** Records and returns an event's journal time before it is queued (see `ExecutionHandle.observedAt`). */
+  readonly stamp: (event: RuntimeEvent) => string;
   readonly approvals: ApprovalBroker;
   readonly questions: QuestionBroker;
   readonly onRun: (run: RunRecord) => void;
@@ -756,17 +771,37 @@ interface ConsumeContext {
   readonly stopRuntime: () => Promise<void>;
 }
 
+/**
+ * Owns the pending approvals of one attempt.
+ *
+ * Both halves of an approval are run events: `approval_request` when the
+ * adapter asks, and `approval_resolved` when a client answers. Each is
+ * pushed to the client stream and journaled, so a client replaying the
+ * journal (a reconnecting phone, a reload) sees the same decision a live
+ * client saw. The resolution is published before the decision is released
+ * to the adapter, which keeps it ahead of the call's eventual `tool_result`
+ * in both the live stream and the journal.
+ *
+ * `close()` (cancellation or settlement) denies whatever is still pending
+ * without publishing a resolution, because no person decided it; clients
+ * read the run's terminal event to show those approvals as unanswered.
+ */
 class ApprovalBroker {
   private closed = false;
   private readonly pending = new Map<
     string,
     { resolve: (decision: ApprovalDecision) => void }
   >();
+  /** Serializes resolution journaling so concurrent answers keep their order. */
+  private resolutions: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly queue: AsyncQueue<RuntimeEvent>,
     private readonly createId: () => string,
-    private readonly onRequest: (request: ApprovalRequest) => Promise<void>,
+    /** Records the event's observation time; called before the event is queued. */
+    private readonly stamp: (event: RuntimeEvent) => string,
+    /** Journals a request or resolution with the time `stamp` returned. */
+    private readonly journal: (event: Extract<RuntimeEvent, { type: "approval_request" | "approval_resolved" }>, observedAt: string) => Promise<void>,
   ) {}
 
   async request(request: Omit<ApprovalRequest, "id">): Promise<ApprovalDecision> {
@@ -775,8 +810,10 @@ class ApprovalBroker {
     const decision = new Promise<ApprovalDecision>((resolve) => {
       this.pending.set(full.id, { resolve });
     });
-    this.queue.push({ type: "approval_request", request: full });
-    await this.onRequest(full);
+    const event = { type: "approval_request", request: full } as const;
+    const observedAt = this.stamp(event);
+    this.queue.push(event);
+    await this.journal(event, observedAt);
     return decision;
   }
 
@@ -786,6 +823,13 @@ class ApprovalBroker {
       throw new ApprovalNotFoundError(approvalId);
     }
     this.pending.delete(approvalId);
+    const event = { type: "approval_resolved", approvalId, decision } as const;
+    const observedAt = this.stamp(event);
+    this.queue.push(event);
+    // The journal write is chained rather than awaited: `respond` stays
+    // synchronous for the host, and the native callback must not wait on
+    // storage. A failed write loses only this audit row, never the decision.
+    this.resolutions = this.resolutions.then(() => this.journal(event, observedAt)).catch(() => undefined);
     pending.resolve(decision);
   }
 

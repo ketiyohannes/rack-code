@@ -336,8 +336,15 @@ test("a run streams indexed events, parks approvals for any client, and finishes
   assert.deepEqual(await call("runs.active"), []);
   const runs = await call<Array<{ id: string; attempts: Array<{ runtimeId: string }> }>>("runs.list", { sessionId: session.id });
   assert.equal(runs[0]?.attempts[0]?.runtimeId, "approval-runtime");
-  const journal = await call<Array<{ type: string }>>("runs.journal", { runId });
+  const journal = await call<Array<{ type: string; observedAt: string }>>("runs.journal", { runId });
   assert.equal(journal.at(-1)?.type, "run_status");
+
+  // The decision is part of the run's own event stream, so a reconnecting or
+  // replaying client sees it too, and live stamps equal the journal's.
+  const live = events.flatMap((event) => event.type === "run.event" ? [event] : []);
+  assert.ok(live.some((event) => event.event.type === "approval_resolved"));
+  const replayed = journal.filter((entry) => !["run_started", "attempt_started", "run_status"].includes(entry.type));
+  assert.deepEqual(live.map((event) => [event.event.type, event.observedAt]), replayed.map((entry) => [entry.type, entry.observedAt]));
 });
 
 test("a session runs one turn at a time while other sessions of the project run concurrently", async () => {

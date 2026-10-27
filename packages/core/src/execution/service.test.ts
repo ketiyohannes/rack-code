@@ -181,11 +181,17 @@ test("executes a run end to end, persists transcript and journal, and releases t
 
   assert.equal(run.status, "completed");
   assert.equal(run.result, "done");
-  assert.deepEqual(events.map((event) => event.type), ["tool_result", "message_delta", "completed"]);
+  // The decision is a run event, delivered before the call's outcome.
+  assert.deepEqual(events.map((event) => event.type), ["approval_resolved", "tool_result", "message_delta", "completed"]);
+  assert.deepEqual(events[0], { type: "approval_resolved", approvalId: approval.value.request.id, decision: "allow" });
   assert.equal((await fixture.sessions.get(fixture.session.id)).messages.length, 2);
   assert.deepEqual(fixture.projects.activeWriters(fixture.project.id), []);
   const journal = await fixture.executions.listJournal(run.id);
   assert.ok(journal.some((entry) => entry.type === "approval_request"));
+  // Replay sees the same decision, journaled ahead of the result.
+  const types = journal.map((entry) => entry.type);
+  assert.ok(types.indexOf("approval_resolved") !== -1 && types.indexOf("approval_resolved") < types.indexOf("tool_result"));
+  assert.deepEqual(journal.find((entry) => entry.type === "approval_resolved")?.payload, events[0]);
   assert.equal(fixture.runtime.started.length, 1);
 });
 

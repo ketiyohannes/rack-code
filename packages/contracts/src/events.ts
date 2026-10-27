@@ -16,9 +16,11 @@ export type HostEvent =
   | { readonly type: "run.updated"; readonly run: RunView }
   /**
    * One normalized runtime event. `index` is the zero-based position of the
-   * event within the run, matching `ActiveRunView.events`.
+   * event within the run, matching `ActiveRunView.events`. `observedAt` is
+   * the host time the event was received (ISO 8601); it is optional so that
+   * older hosts remain compatible, and clients omit durations without it.
    */
-  | { readonly type: "run.event"; readonly runId: string; readonly index: number; readonly event: RuntimeEvent }
+  | { readonly type: "run.event"; readonly runId: string; readonly index: number; readonly event: RuntimeEvent; readonly observedAt?: string }
   /** An approval was answered by some client and is no longer pending. */
   | {
       readonly type: "run.approval_resolved";

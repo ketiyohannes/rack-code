@@ -17,6 +17,7 @@ import type {
   ApprovalRequest,
   AttemptRecord,
   JournalEntry,
+  McpToolIdentity,
   PermissionMode,
   RunRecord,
   RuntimeCapabilities,
@@ -52,6 +53,7 @@ export type {
   AccountAvailability,
   ConnectView,
   ApprovalRequest,
+  McpToolIdentity,
   PermissionMode,
   RuntimeCapabilities,
   RuntimeEvent,
@@ -151,6 +153,11 @@ export interface ModelCatalogView {
 export interface ActiveRunView {
   readonly run: RunView;
   readonly events: readonly RuntimeEvent[];
+  /**
+   * Host observation time (ISO 8601) of each entry in `events`, by index.
+   * Optional so older hosts remain compatible.
+   */
+  readonly observedAt?: readonly string[];
   readonly pendingApprovals: readonly ApprovalRequest[];
   readonly pendingQuestions?: readonly UserQuestionRequest[];
   readonly cancelRequested: boolean;
