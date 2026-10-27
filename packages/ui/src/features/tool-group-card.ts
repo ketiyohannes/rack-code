@@ -1,12 +1,14 @@
 /**
  * Tool group card: one collapsible block per group of consecutive tool calls.
  *
- * Header: stacked brand icons of the tools involved, a title ("Using 3
- * tools", "Waiting for approval", "Used 4 tools") and, once done, a detail
- * on the right: the tool time ("3.0s") or the problems ("1 failed", in the
- * problem color). One row per call, appended as calls start: icon, label in
- * the right tense (shimmering while it runs), result summary and duration,
- * and a status mark (ring spinner, green check, red warning). A failed call
+ * Layout and motion follow the Orchestration waterfall: no box around the
+ * group, a plain header line (stacked tool icons, a title such as "Using 3
+ * tools" or "Used 4 tools", and once done the tool time or "1 failed" on the
+ * right), then rows joined by a thin rail. Rows drop in, staggered when
+ * several arrive together. Each row: tool icon on the rail, label in the
+ * right tense (shimmering while it runs), result summary and duration, and a
+ * status mark (arc spinner, check, warning). While the group is active and no
+ * call is in flight, a shimmering "Working..." row closes the rail. A failed call
  * reads "Could not ...", shows its error on a second line and, once the turn
  * has finished, offers Retry. Each row expands to its raw arguments, output
  * and error. A call that needs permission shows its action, consequence and
@@ -86,6 +88,16 @@ export interface RetryRequest {
   readonly error?: string;
 }
 
+/**
+ * The Orchestration panel's arc spinner. Its rotation is phase-locked to the
+ * clock, so a spinner rebuilt by an update continues instead of restarting.
+ */
+function spinner(): HTMLElement {
+  const node = h("span", { class: "tool-spinner", aria: { hidden: "true" } });
+  node.style.animationDelay = `-${Math.round(performance.now() % 900)}ms`;
+  return node;
+}
+
 let nextElementId = 0;
 const elementId = (prefix: string) => `${prefix}-${++nextElementId}`;
 
@@ -98,6 +110,8 @@ export class ToolGroupCard {
   private readonly body: HTMLElement;
   private readonly rows: HTMLElement;
   private readonly announcer: HTMLElement;
+  /** The "Working..." row; always the last child of `rows`, shown only when idle and active. */
+  private readonly working: HTMLElement;
   private readonly rowViews = new Map<string, ToolRow>();
   private readonly thoughts = new Map<number, { signature: string; node: HTMLElement }>();
   /** The viewer's explicit expand/collapse choice, if any. */
@@ -114,7 +128,12 @@ export class ToolGroupCard {
     this.header = h("button", { class: "tool-group-header", type: "button", aria: { expanded: "false", controls: bodyId },
       onClick: () => { this.userExpanded = !this.isExpanded(); this.applyExpansion(this.currentPhase, this.hasFailures); } },
     this.icons, this.status, this.detail, icon("caret-down", { className: "tool-group-caret" }));
-    this.rows = h("div", { class: "tool-group-rows" });
+    this.working = h("div", { class: "tool-row tool-row-working", aria: { hidden: "true" } },
+      h("div", { class: "tool-row-head" },
+        h("span", { class: "tool-row-icon" }, spinner()),
+        h("span", { class: "tool-row-text" }, h("span", { class: "tool-row-label tool-shimmer" }, "Working…"))));
+    this.working.hidden = true;
+    this.rows = h("div", { class: "tool-group-rows" }, this.working);
     this.body = h("div", { class: "tool-group-body", id: bodyId }, h("div", { class: "tool-group-clip" }, this.rows));
     this.announcer = h("div", { class: "sr-only", aria: { live: "polite" } });
     this.element = h("section", { class: "tool-group-card", aria: { label: "Tool activity" } }, this.header, this.body, this.announcer);
@@ -143,7 +162,9 @@ export class ToolGroupCard {
       this.icons.replaceChildren(...iconNames.slice(0, MAX_HEADER_ICONS).map((name) => h("span", { class: "tool-group-icon", data: { icon: name } }, icon(name))));
     }
 
-    // Entries only ever append, in order: new rows and thoughts go to the end.
+    // Entries only ever append, in order: new rows and thoughts go before the
+    // "Working..." row. Rows arriving in the same update drop in staggered.
+    let entering = 0;
     for (const entry of model.group.entries) {
       if (entry.kind === "call") {
         const view = views.get(entry.id);
@@ -152,11 +173,13 @@ export class ToolGroupCard {
         if (row === undefined) {
           // Rows of a live group fade in, including its first one; a group
           // first seen finished (a replay or reload) appears without motion.
-          row = new ToolRow(this.actions, this.rendered || summary.phase !== "done", model.runId);
+          const animate = this.rendered || summary.phase !== "done";
+          row = new ToolRow(this.actions, animate, model.runId);
+          if (animate) row.element.style.setProperty("--enter-delay", `${Math.min(entering++, 8) * 55}ms`);
           this.rowViews.set(entry.id, row);
         }
         row.update(view);
-        if (row.element.parentNode !== this.rows) this.rows.append(row.element);
+        if (row.element.parentNode !== this.rows) this.rows.insertBefore(row.element, this.working);
         if (view.approval?.actionable === true && !this.announced.has(view.approval.id)) {
           this.announced.add(view.approval.id);
           this.announcer.textContent = `Approval needed: ${view.approval.action}`;
@@ -168,11 +191,13 @@ export class ToolGroupCard {
         if (previous?.signature === thought.signature && previous.node.parentNode === this.rows) continue;
         const node = h("div", { class: "tool-group-thought" }, thought.render());
         if (previous !== undefined && previous.node.parentNode === this.rows) previous.node.replaceWith(node);
-        else this.rows.append(node);
+        else this.rows.insertBefore(node, this.working);
         this.thoughts.set(entry.index, { signature: thought.signature, node });
       }
     }
 
+    // Between calls the agent is still working; say so at the end of the rail.
+    this.working.hidden = !(summary.phase === "active" && calls.every((call) => call.status !== "running" && call.status !== "awaiting_approval"));
     this.applyExpansion(summary.phase, this.hasFailures);
     if (!this.rendered) {
       this.rendered = true;
@@ -237,12 +262,12 @@ export class ToolGroupCard {
 
 /** Icon and text for each status. `visible` statuses also show their text, so color is never the only signal. */
 const STATUS_TEXT: Readonly<Record<ToolCallStatus, { readonly icon: IconName; readonly label: string; readonly visible: boolean }>> = {
-  // Running uses a CSS ring spinner rather than this icon (see renderSummary).
+  // Running uses the arc spinner rather than this icon (see renderSummary).
   running: { icon: "circle-notch", label: "Running", visible: false },
   awaiting_approval: { icon: "hand", label: "Waiting for approval", visible: false },
-  success: { icon: "check-bold", label: "Completed", visible: false },
+  success: { icon: "check-circle", label: "Completed", visible: false },
   // The "Could not ..." label already says it in words.
-  error: { icon: "warning-circle-bold", label: "Failed", visible: false },
+  error: { icon: "warning-circle", label: "Failed", visible: false },
   denied: { icon: "prohibit", label: "Denied", visible: true },
   interrupted: { icon: "stop-circle", label: "Stopped", visible: true },
   incomplete: { icon: "question", label: "No result", visible: true },
@@ -328,7 +353,7 @@ class ToolRow {
       ...(retry === undefined ? [] : [h("button", { class: "tool-row-retry", type: "button", aria: { label: `Retry: ${retry.action}` },
         onClick: () => this.actions.retry?.(retry) }, icon("arrow-counter-clockwise"), "Retry")]),
       h("span", { class: `tool-row-status status-${view.status}`, aria: { hidden: "true" } },
-        view.status === "running" ? h("span", { class: "tool-spinner" }) : icon(outcome.icon)),
+        view.status === "running" ? spinner() : icon(outcome.icon)),
       icon("caret-down", { className: "tool-row-caret" }),
     );
     this.toggle.setAttribute("aria-label", [view.label, view.subtitle, view.summary, view.note, outcome.label, view.duration].filter(Boolean).join(", "));

@@ -63,6 +63,17 @@ import Stack from "@phosphor-icons/core/assets/regular/stack.svg";
 import SlackLogo from "@phosphor-icons/core/assets/regular/slack-logo.svg";
 import Kanban from "@phosphor-icons/core/assets/regular/kanban.svg";
 import CheckBold from "@phosphor-icons/core/assets/bold/check-bold.svg";
+import TerminalWindowFill from "@phosphor-icons/core/assets/fill/terminal-window-fill.svg";
+import FileTextFill from "@phosphor-icons/core/assets/fill/file-text-fill.svg";
+import PencilSimpleFill from "@phosphor-icons/core/assets/fill/pencil-simple-fill.svg";
+import MagnifyingGlassFill from "@phosphor-icons/core/assets/fill/magnifying-glass-fill.svg";
+import GlobeFill from "@phosphor-icons/core/assets/fill/globe-fill.svg";
+import WrenchFill from "@phosphor-icons/core/assets/fill/wrench-fill.svg";
+import ListChecksFill from "@phosphor-icons/core/assets/fill/list-checks-fill.svg";
+import RobotFill from "@phosphor-icons/core/assets/fill/robot-fill.svg";
+import PlugsFill from "@phosphor-icons/core/assets/fill/plugs-fill.svg";
+import LockSimpleFill from "@phosphor-icons/core/assets/fill/lock-simple-fill.svg";
+import DatabaseFill from "@phosphor-icons/core/assets/fill/database-fill.svg";
 import WarningCircleBold from "@phosphor-icons/core/assets/bold/warning-circle-bold.svg";
 import ArrowRight from "@phosphor-icons/core/assets/regular/arrow-right.svg";
 import Lightning from "@phosphor-icons/core/assets/regular/lightning.svg";
@@ -228,6 +239,18 @@ const ICONS = {
   "slack-logo": SlackLogo,
   // Phosphor has no Linear logo; a board stands in for issue trackers.
   "kanban": Kanban,
+  // Filled tool icons for tool group rows; they match the weight of the brand marks.
+  "terminal-window-fill": TerminalWindowFill,
+  "file-text-fill": FileTextFill,
+  "pencil-simple-fill": PencilSimpleFill,
+  "magnifying-glass-fill": MagnifyingGlassFill,
+  "globe-fill": GlobeFill,
+  "wrench-fill": WrenchFill,
+  "list-checks-fill": ListChecksFill,
+  "robot-fill": RobotFill,
+  "plugs-fill": PlugsFill,
+  "lock-simple-fill": LockSimpleFill,
+  "database-fill": DatabaseFill,
   "brand-github": BRAND_GITHUB,
   "check-bold": CheckBold,
   "warning-circle-bold": WarningCircleBold,

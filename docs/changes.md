@@ -1,3 +1,14 @@
+## 2026-10-27 — Tool groups take the Orchestration waterfall's look (branch `feat/tool-group-cards`)
+
+The tool group card loses its box and borders and adopts the motion of the Orchestration panel's waterfall from `main`. See [Tool groups](tool-groups.md).
+
+- **Layout.** No card background, border or radius; a plain header line; rows joined by a rail drawn per row (from below one icon to just above the next visible entry), so it works on any background and stops at the last row.
+- **Motion and marks.** The waterfall's 0.36 s drop-in with 55 ms stagger, its phase-locked arc spinner, check-circle and warning-circle marks, 1.8 s shimmer, and a "Working..." row while the group waits between calls.
+- **Icons.** Built-in tools now use filled icons; unknown MCP servers a filled plug and unknown tools a filled wrench.
+- **Kept.** Tenses, summaries, durations, "Could not ..." failures with Retry, inline approvals (now without a highlight box), expandable details.
+- **Validation performed.** Typecheck, boundaries, `npm run test:tool-groups` (row selectors exclude the "Working..." row; animation name and timing updated), `npm run test:orchestra`, `npm run test:run-changes` and `npm run test:desktop-features`, with screenshots reviewed in the dark and light themes. Full test suite: 531 of 532 passed; `packages/host/src/timeline.test.ts` "an opted-in session records the run's file changes through the host" timed out once waiting on file-system observation during the full run and passed in 3 of 3 isolated reruns. This change touches no host or Timeline code; the timing sensitivity predates it.
+- **Not performed.** Windows/Linux rendering.
+
 ## 2026-10-27 — Workflow turns read like ordinary turns (working tree on `main`, not committed)
 
 Orchestration in the main view now looks and behaves like normal work. See [Agent orchestra](orchestration.md).

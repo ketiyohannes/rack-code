@@ -129,7 +129,7 @@ export class ToolFormatterRegistry {
     const summary = call.isError ? errorSummary(call) : first((formatter) => nonEmpty(formatter.summary?.(call)));
     const approval = first((formatter) => formatter.approval?.(call)) ?? { action: label("imperative") };
     return {
-      icon: first((formatter) => formatter.icon) ?? "wrench",
+      icon: first((formatter) => formatter.icon) ?? "wrench-fill",
       label,
       ...(summary === undefined ? {} : { summary }),
       // A reason the provider gives explains this specific request, so it
@@ -242,7 +242,7 @@ function locationOf(args: Readonly<Record<string, unknown>>): string | undefined
 
 /** Reads an MCP tool name as verb + object, with the location if one is given. */
 const GENERIC_MCP: ToolFormatter = {
-  icon: "plugs",
+  icon: "plugs-fill",
   label(call, tense) {
     const words = splitWords(call.name);
     const verb = VERBS[words[0] ?? ""];
@@ -261,7 +261,7 @@ const GENERIC_MCP: ToolFormatter = {
 
 /** Any tool nothing else recognizes: "Ran <tool>: <first argument>". */
 const GENERIC_TOOL: ToolFormatter = {
-  icon: "wrench",
+  icon: "wrench-fill",
   label(call, tense) {
     const first = firstArgument(call.args);
     const verb = tense === "imperative" ? "Run" : tense === "present" ? "Running" : "Ran";
@@ -310,7 +310,7 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
 
   // Built-in kinds, recognized by shape on any runtime.
   registry.registerBuiltin("command", {
-    icon: "terminal-window",
+    icon: "terminal-window-fill",
     label: (call, tense) => `${pick(tense, "Run", "Running", "Ran")} ${truncate(commandOf(call) ?? "a command", 60)}`,
     summary(call) {
       const lines = call.text === undefined ? 0 : call.text.trimEnd().split("\n").filter((line) => line !== "").length;
@@ -322,12 +322,12 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
     },
   });
   registry.registerBuiltin("read", {
-    icon: "file-text",
+    icon: "file-text-fill",
     label: (call, tense) => `${pick(tense, "Read", "Reading", "Read")} ${basename(pathOf(call.args)!)}`,
     summary: (call) => call.text === undefined ? undefined : plural(call.text.split("\n").length, "line"),
   });
   registry.registerBuiltin("edit", {
-    icon: "pencil-simple",
+    icon: "pencil-simple-fill",
     label(call, tense) {
       const changes = record(call.input).changes;
       const target = Array.isArray(changes) ? changes.length === 1 ? basename(stringOf(record(changes[0]).path) ?? "file") : `${changes.length} files` : basename(pathOf(call.args)!);
@@ -340,7 +340,7 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
     },
   });
   registry.registerBuiltin("search", {
-    icon: "magnifying-glass",
+    icon: "magnifying-glass-fill",
     label: (call, tense) => `${pick(tense, "Search for", "Searching for", "Searched for")} "${truncate(stringOf(call.args.pattern) ?? stringOf(call.args.query) ?? "", 40)}"`,
     summary(call) {
       if (call.text === undefined) return undefined;
@@ -349,22 +349,22 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
     },
   });
   registry.registerBuiltin("web", {
-    icon: "globe",
+    icon: "globe-fill",
     label: (call, tense) => `${pick(tense, "Fetch", "Fetching", "Fetched")} ${hostOf(stringOf(call.args.url)!)}`,
   });
   registry.registerBuiltin("plan", {
-    icon: "list-checks",
+    icon: "list-checks-fill",
     label: (_call, tense) => pick(tense, "Update the plan", "Updating the plan", "Updated the plan"),
   });
   registry.registerBuiltin("subagent", {
-    icon: "robot",
+    icon: "robot-fill",
     label: (call, tense) => {
       const description = stringOf(call.args.description);
       return `${pick(tense, "Start", "Running", "Ran")} a subagent${description === undefined ? "" : `: ${truncate(description, 48)}`}`;
     },
   });
   registry.registerBuiltin("permissions", {
-    icon: "lock-simple",
+    icon: "lock-simple-fill",
     label: (_call, tense) => pick(tense, "Grant additional permissions", "Requesting additional permissions", "Requested additional permissions"),
   });
 
@@ -373,7 +373,7 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
   registry.registerServer(["slack"], { icon: "brand-slack" });
   registry.registerServer(["linear"], { icon: "brand-linear" });
   const database: ToolFormatter = {
-    icon: "database",
+    icon: "database-fill",
     label(call, tense) {
       const sql = stringOf(call.args.sql) ?? stringOf(call.args.query) ?? stringOf(call.args.statement);
       const table = sql === undefined ? undefined : /\b(?:from|into|update)\s+["`]?([\w.]+)/i.exec(sql)?.[1];
@@ -383,7 +383,7 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
   };
   registry.registerServer(["mysql", "sqlite", "supabase", "database", "db"], database);
   registry.registerServer(["postgres", "postgresql"], { ...database, icon: "brand-postgres" });
-  registry.registerServer(["rack"], { icon: "globe" });
+  registry.registerServer(["rack"], { icon: "globe-fill" });
 
   registry.registerTool("github", ["search_issues", "search_pull_requests"], {
     summary(call) {

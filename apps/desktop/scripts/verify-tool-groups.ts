@@ -167,12 +167,12 @@ async function run(): Promise<void> {
         if (log.answerAt === undefined && card.nextElementSibling?.classList.contains('md')) log.answerAt = performance.now();
       };
       new MutationObserver(read).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
-      document.addEventListener('animationstart', (event) => { if (event.animationName === 'tool-row-in') log.rowAnimations += 1; }, true);
+      document.addEventListener('animationstart', (event) => { if (event.animationName === 'tool-row-drop') log.rowAnimations += 1; }, true);
     })()`);
     await until("!document.querySelector('button[aria-label=Run]')?.disabled");
     await js("document.querySelector('button[aria-label=Run]').click()");
 
-    await until("document.querySelectorAll('.tool-row').length === 3 && !!document.querySelector('.tool-row[data-status=running]')");
+    await until("document.querySelectorAll('.tool-row:not(.tool-row-working)').length === 3 && !!document.querySelector('.tool-row[data-status=running]')");
     // Let the new row finish fading in so the capture shows the running state.
     await new Promise((done) => setTimeout(done, 250));
     assert.equal(await js<boolean>("!!document.querySelector('.tool-row[data-status=running] .tool-spinner')"), true, "a running row shows the ring spinner");
@@ -218,7 +218,7 @@ async function run(): Promise<void> {
     assert.equal(log.rowAnimations, 4, "each row animated exactly once");
     assert.equal(await js<string>("document.querySelector('.tool-group-card').dataset.observed"), "first", "the card was patched in place, never rebuilt");
     assert.equal(await js<number>("document.querySelectorAll('.tool-row.entering').length"), 0);
-    assert.deepEqual(await js<string[]>("[getComputedStyle(document.querySelector('.tool-group-body')).transitionDuration, getComputedStyle(document.querySelector('.tool-group-body')).transitionProperty]"), ["0.22s", "grid-template-rows"]);
+    assert.deepEqual(await js<string[]>("[getComputedStyle(document.querySelector('.tool-group-body')).transitionDuration, getComputedStyle(document.querySelector('.tool-group-body')).transitionProperty]"), ["0.28s", "grid-template-rows"]);
     assert.equal(await js<boolean>("document.querySelector('.tool-group-body').inert"), true, "collapsed rows are not focusable");
     // Reply order: preamble, tool group, final answer, then the turn footer.
     assert.deepEqual(await js<string[]>("[...document.querySelector('.reply').children].map(node => node.className.split(' ')[0])"), ["md", "tool-group-card", "md", "turn-meta"]);
@@ -226,7 +226,7 @@ async function run(): Promise<void> {
     assert.equal(await js<boolean>("[...document.querySelectorAll('.turn-action')].some(b => b.textContent === 'Run again' && !b.disabled)"), true);
     await shot("3-collapsed");
 
-    const readRows = () => js<{ label: string; summary: string; duration: string; status: string }[]>(`[...document.querySelectorAll('.tool-row')].map(row => ({
+    const readRows = () => js<{ label: string; summary: string; duration: string; status: string }[]>(`[...document.querySelectorAll('.tool-row:not(.tool-row-working)')].map(row => ({
       label: row.querySelector('.tool-row-label').textContent,
       summary: row.querySelector('.tool-row-summary')?.textContent ?? '',
       duration: row.querySelector('.tool-row-duration')?.textContent ?? '',

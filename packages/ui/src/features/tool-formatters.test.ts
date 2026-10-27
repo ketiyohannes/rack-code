@@ -44,7 +44,7 @@ test("unknown tools fall back to 'Ran <tool>' with their first argument", () => 
   const format = resolve({ tool: "lookupUser", input: { login: "alice", verbose: true }, isError: false });
   assert.equal(format.label("past"), "Ran Lookup user: alice");
   assert.equal(format.label("present"), "Running Lookup user: alice");
-  assert.equal(format.icon, "wrench");
+  assert.equal(format.icon, "wrench-fill");
   const unknownMcp = resolve({ tool: "mcp__acme__frobnicate", input: {}, mcp: { server: "acme", tool: "frobnicate" }, isError: false });
   assert.equal(unknownMcp.label("past"), "Ran Frobnicate");
   assert.equal(unknownMcp.approval.consequence, "Calls frobnicate on the acme server");
