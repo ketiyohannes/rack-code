@@ -93,3 +93,37 @@ test("registered formatters override fallbacks without touching other tools", ()
   assert.equal(format.label("past"), "Deployed staging");
   assert.equal(format.icon, "cloud-arrow-up");
 });
+
+test("shell commands get the icon of the program they run, past setup and wrappers", () => {
+  // The command this branch was pushed with, as the agent's shell tool sent it.
+  const push = "cd /Users/me/rack-code && git -c credential.helper= push -u origin feat/tool-group-cards 2>&1 | tail -3";
+  assert.equal(resolve({ tool: "Bash", input: { command: push }, isError: false }).icon, "brand-git");
+  assert.equal(resolve({ tool: "Bash", input: { command: push }, isError: false }).label("past"), "Ran git -c credential.helper= push -u origin feat/tool-group-ca...");
+  // Codex wraps commands in a login shell; the wrapped program decides.
+  assert.equal(resolve({ tool: "commandExecution", input: { command: "/bin/zsh -lc 'npm test'" }, isError: false }).icon, "brand-npm");
+  assert.equal(resolve({ tool: "Bash", input: { command: "FOO=1 sudo docker compose up" }, isError: false }).icon, "brand-docker");
+  assert.equal(resolve({ tool: "Bash", input: { command: "gh pr view 12" }, isError: false }).icon, "brand-github");
+  assert.equal(resolve({ tool: "Bash", input: { command: "cd src" }, isError: false }).icon, "terminal-window-fill");
+  assert.equal(resolve({ tool: "Bash", input: { command: "make build" }, isError: false }).icon, "terminal-window-fill");
+});
+
+test("a command's own description is its label", () => {
+  const format = resolve({ tool: "Bash", input: { command: "git push", description: "Push the feature branch" }, isError: false });
+  assert.equal(format.label("present"), "Push the feature branch");
+  assert.equal(format.label("failed"), "Could not push the feature branch");
+  assert.deepEqual(format.approval, { action: "Push the feature branch", consequence: "git push" });
+});
+
+test("file reads and edits get the icon of the file type", () => {
+  assert.equal(resolve({ tool: "Read", input: { file_path: "/repo/src/app.ts" }, isError: false }).icon, "brand-typescript");
+  assert.equal(resolve({ tool: "Edit", input: { file_path: "/repo/docs/README.md", old_string: "a", new_string: "b" }, isError: false }).icon, "brand-markdown");
+  assert.equal(resolve({ tool: "Read", input: { file_path: "/repo/Dockerfile" }, isError: false }).icon, "brand-docker");
+  assert.equal(resolve({ tool: "fileChange", input: { changes: [{ path: "main.py" }] }, isError: false }).icon, "brand-python");
+  assert.equal(resolve({ tool: "fileChange", input: { changes: [{ path: "a.py" }, { path: "b.ts" }] }, isError: false }).icon, "pencil-simple-fill");
+  assert.equal(resolve({ tool: "Read", input: { file_path: "/repo/notes.unknownext" }, isError: false }).icon, "file-text-fill");
+});
+
+test("well-known MCP servers show their brand mark", () => {
+  const icon = (server: string) => resolve({ tool: `mcp__${server}__search`, input: {}, mcp: { server, tool: "search" }, isError: false }).icon;
+  assert.deepEqual(["notion", "figma", "sentry", "google-drive", "unknown-thing"].map(icon), ["brand-notion", "brand-figma", "brand-sentry", "brand-google-drive", "plugs-fill"]);
+});

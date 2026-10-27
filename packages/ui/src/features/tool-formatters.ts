@@ -6,6 +6,11 @@
  * running, "Searched issues" when done), a short result summary ("4 results")
  * and, for approvals, the action and its consequence.
  *
+ * Icons are as specific as the call allows: an MCP server's brand mark, the
+ * program a shell command runs (git, npm, docker...), or the type of the
+ * file a read or edit touches (TypeScript, Python, Markdown...); generic
+ * filled icons otherwise.
+ *
  * Resolution order, first defined answer wins for each aspect:
  * 1. a formatter registered for the exact MCP tool (`github/search_issues`);
  * 2. the formatter registered for its MCP server (icon, defaults);
@@ -62,7 +67,8 @@ export interface ApprovalCopy {
 }
 
 export interface ToolFormatter {
-  readonly icon?: IconName;
+  /** A fixed icon, or one chosen from the call (for example by program or file type). */
+  readonly icon?: IconName | ((call: ToolCallContext) => IconName | undefined);
   label?(call: ToolCallContext, tense: Tense): string | undefined;
   summary?(call: ToolCallContext): string | undefined;
   approval?(call: ToolCallContext): ApprovalCopy | undefined;
@@ -129,7 +135,7 @@ export class ToolFormatterRegistry {
     const summary = call.isError ? errorSummary(call) : first((formatter) => nonEmpty(formatter.summary?.(call)));
     const approval = first((formatter) => formatter.approval?.(call)) ?? { action: label("imperative") };
     return {
-      icon: first((formatter) => formatter.icon) ?? "wrench-fill",
+      icon: first((formatter) => typeof formatter.icon === "function" ? formatter.icon(call) : formatter.icon) ?? "wrench-fill",
       label,
       ...(summary === undefined ? {} : { summary }),
       // A reason the provider gives explains this specific request, so it
@@ -310,24 +316,34 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
 
   // Built-in kinds, recognized by shape on any runtime.
   registry.registerBuiltin("command", {
-    icon: "terminal-window-fill",
-    label: (call, tense) => `${pick(tense, "Run", "Running", "Ran")} ${truncate(commandOf(call) ?? "a command", 60)}`,
+    icon: (call) => PROGRAM_ICONS[shellCommand(commandOf(call) ?? "").program] ?? "terminal-window-fill",
+    // The agent's own description of a command ("Push the branch") reads
+    // better than the command line; otherwise show the meaningful command,
+    // without `cd ... &&` or environment prefixes.
+    label: (call, tense) => stringOf(call.args.description)
+      ?? `${pick(tense, "Run", "Running", "Ran")} ${truncate(shellCommand(commandOf(call) ?? "").text || "a command", 60)}`,
     summary(call) {
       const lines = call.text === undefined ? 0 : call.text.trimEnd().split("\n").filter((line) => line !== "").length;
       return lines === 0 ? undefined : plural(lines, "line");
     },
     approval(call) {
       const cwd = stringOf(call.args.cwd);
-      return { action: `Run ${truncate(commandOf(call) ?? "a command", 80)}`, ...(cwd === undefined ? {} : { consequence: `Runs in ${cwd}` }) };
+      const description = stringOf(call.args.description);
+      return { action: description ?? `Run ${truncate(shellCommand(commandOf(call) ?? "").text || "a command", 80)}`,
+        ...(cwd === undefined ? description === undefined ? {} : { consequence: truncate(commandOf(call) ?? "", 120) } : { consequence: `Runs in ${cwd}` }) };
     },
   });
   registry.registerBuiltin("read", {
-    icon: "file-text-fill",
+    icon: (call) => fileIcon(pathOf(call.args)) ?? "file-text-fill",
     label: (call, tense) => `${pick(tense, "Read", "Reading", "Read")} ${basename(pathOf(call.args)!)}`,
     summary: (call) => call.text === undefined ? undefined : plural(call.text.split("\n").length, "line"),
   });
   registry.registerBuiltin("edit", {
-    icon: "pencil-simple-fill",
+    icon: (call) => {
+      const changes = record(call.input).changes;
+      const paths = Array.isArray(changes) ? changes.map((change) => stringOf(record(change).path)) : [pathOf(call.args)];
+      return paths.length === 1 ? fileIcon(paths[0]) ?? "pencil-simple-fill" : "pencil-simple-fill";
+    },
     label(call, tense) {
       const changes = record(call.input).changes;
       const target = Array.isArray(changes) ? changes.length === 1 ? basename(stringOf(record(changes[0]).path) ?? "file") : `${changes.length} files` : basename(pathOf(call.args)!);
@@ -381,8 +397,13 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
       return `${pick(tense, "Query", "Querying", "Queried")} ${table.split(".").at(-1)!.replace(/_/g, " ")}`;
     },
   };
-  registry.registerServer(["mysql", "sqlite", "supabase", "database", "db"], database);
+  registry.registerServer(["database", "db"], database);
   registry.registerServer(["postgres", "postgresql"], { ...database, icon: "brand-postgres" });
+  registry.registerServer(["mysql"], { ...database, icon: "brand-mysql" });
+  registry.registerServer(["sqlite"], { ...database, icon: "brand-sqlite" });
+  registry.registerServer(["supabase"], { ...database, icon: "brand-supabase" });
+  // Brand marks for common MCP integrations; their tools read through the generic verb + object labels.
+  for (const [servers, icon] of MCP_SERVER_ICONS) registry.registerServer(servers, { icon });
   registry.registerServer(["rack"], { icon: "globe-fill" });
 
   registry.registerTool("github", ["search_issues", "search_pull_requests"], {
@@ -433,8 +454,102 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
   return registry;
 }
 
-/** Shared default registry used by the session view. */
-export const defaultToolFormatters = createDefaultRegistry();
+
+
+// ---------------------------------------------------------------------------
+// Program, file-type and integration icons
+// ---------------------------------------------------------------------------
+
+/** Icon for the program a shell command runs. */
+const PROGRAM_ICONS: Readonly<Record<string, IconName>> = {
+  git: "brand-git", gh: "brand-github", glab: "brand-gitlab",
+  npm: "brand-npm", npx: "brand-npm", pnpm: "brand-pnpm", pnpx: "brand-pnpm", yarn: "brand-yarn", bun: "brand-bun", bunx: "brand-bun",
+  node: "brand-nodejs", tsx: "brand-nodejs", "ts-node": "brand-nodejs", deno: "brand-deno", tsc: "brand-typescript",
+  python: "brand-python", python3: "brand-python", pip: "brand-python", pip3: "brand-python", uv: "brand-python", poetry: "brand-python", pytest: "brand-python",
+  cargo: "brand-rust", rustc: "brand-rust", rustup: "brand-rust", go: "brand-go", gofmt: "brand-go",
+  docker: "brand-docker", "docker-compose": "brand-docker", kubectl: "brand-kubernetes", helm: "brand-kubernetes", terraform: "brand-terraform",
+  brew: "brand-homebrew", swift: "brand-swift", xcodebuild: "brand-swift", ruby: "brand-ruby", gem: "brand-ruby", bundle: "brand-ruby", rails: "brand-ruby",
+  php: "brand-php", composer: "brand-php", dotnet: "brand-dotnet", gradle: "brand-gradle", gradlew: "brand-gradle", mvn: "brand-maven",
+  dart: "brand-dart", flutter: "brand-flutter", lua: "brand-lua", psql: "brand-postgres", mysql: "brand-mysql", sqlite3: "brand-sqlite",
+  "redis-cli": "brand-redis", mongosh: "brand-mongodb", supabase: "brand-supabase", prisma: "brand-prisma", vercel: "brand-vercel",
+  firebase: "brand-firebase", gcloud: "brand-google-cloud", wrangler: "brand-cloudflare", electron: "brand-electron",
+  vitest: "brand-vitest", eslint: "brand-eslint", prettier: "brand-prettier", vite: "brand-vite", webpack: "brand-webpack", sass: "brand-sass",
+  bash: "brand-bash", sh: "brand-bash", zsh: "brand-bash",
+  curl: "globe-fill", wget: "globe-fill", http: "globe-fill",
+  ls: "folder-simple-fill", find: "folder-simple-fill", tree: "folder-simple-fill", mkdir: "folder-simple-fill", cp: "folder-simple-fill", mv: "folder-simple-fill",
+  cat: "file-text-fill", head: "file-text-fill", tail: "file-text-fill", less: "file-text-fill", wc: "file-text-fill", sed: "file-text-fill",
+  grep: "magnifying-glass-fill", rg: "magnifying-glass-fill", ag: "magnifying-glass-fill", rm: "trash-fill",
+};
+
+/** Commands that only set up the shell; the next command in a chain says what the call does. */
+const SETUP_COMMANDS = new Set(["cd", "pushd", "popd", "export", "set", "source", ".", "echo", "printf", "true", ":", "unset", "alias"]);
+/** Wrappers that run the program named after them. */
+const WRAPPERS = new Set(["sudo", "time", "env", "nohup", "exec", "command", "nice"]);
+
+/**
+ * The meaningful program of a shell command line and the segment it heads:
+ * `cd repo && FOO=1 git push -u origin x` is `git` / "git push -u origin x".
+ * A shell invoked with `-c`/`-lc` (as Codex runs commands) is unwrapped.
+ * Display only: this never decides what runs.
+ */
+export function shellCommand(line: string): { readonly program: string; readonly text: string } {
+  const inner = /^\s*(?:\S*\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1\s*$/.exec(line);
+  const source = inner === null ? line : inner[2]!;
+  const segments = source.split(/&&|\|\||;|\|/).map((segment) => segment.trim()).filter((segment) => segment !== "");
+  let fallback: { program: string; text: string } | undefined;
+  for (const segment of segments) {
+    const words = segment.split(/\s+/);
+    let index = 0;
+    while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]!) || WRAPPERS.has(words[index]!))) index += 1;
+    const word = words[index];
+    if (word === undefined) continue;
+    const program = word.replace(/^.*\//, "").replace(/^\.\//, "");
+    const text = words.slice(index).join(" ");
+    if (!SETUP_COMMANDS.has(program)) return { program, text };
+    fallback ??= { program, text };
+  }
+  return fallback ?? { program: "", text: line.trim() };
+}
+
+/** Icons for well-known file names, then extensions. */
+const FILE_NAME_ICONS: Readonly<Record<string, IconName>> = {
+  "dockerfile": "brand-docker", "docker-compose.yml": "brand-docker", "docker-compose.yaml": "brand-docker", "compose.yaml": "brand-docker",
+  "package.json": "brand-npm", "package-lock.json": "brand-npm", "pnpm-lock.yaml": "brand-pnpm", "yarn.lock": "brand-yarn", "bun.lockb": "brand-bun",
+  "cargo.toml": "brand-rust", "cargo.lock": "brand-rust", "go.mod": "brand-go", "go.sum": "brand-go", "gemfile": "brand-ruby",
+  "tsconfig.json": "brand-typescript", ".eslintrc": "brand-eslint", ".prettierrc": "brand-prettier", "schema.prisma": "brand-prisma",
+};
+const EXTENSION_ICONS: Readonly<Record<string, IconName>> = {
+  ts: "brand-typescript", mts: "brand-typescript", cts: "brand-typescript", tsx: "brand-react", jsx: "brand-react",
+  js: "brand-javascript", mjs: "brand-javascript", cjs: "brand-javascript", py: "brand-python", rs: "brand-rust", go: "brand-go",
+  md: "brand-markdown", mdx: "brand-markdown", json: "brand-json", jsonc: "brand-json", css: "brand-css", scss: "brand-sass", sass: "brand-sass",
+  html: "brand-html", htm: "brand-html", vue: "brand-vue", svelte: "brand-svelte", swift: "brand-swift", kt: "brand-kotlin", kts: "brand-kotlin",
+  rb: "brand-ruby", php: "brand-php", yml: "brand-yaml", yaml: "brand-yaml", toml: "brand-toml", sh: "brand-bash", bash: "brand-bash", zsh: "brand-bash",
+  lua: "brand-lua", dart: "brand-dart", c: "brand-c", h: "brand-c", cpp: "brand-cpp", cc: "brand-cpp", hpp: "brand-cpp", cs: "brand-dotnet",
+  graphql: "brand-graphql", gql: "brand-graphql", prisma: "brand-prisma", sql: "database-fill", tf: "brand-terraform",
+};
+
+/** Icon for a file path by name, then extension; undefined when unknown. */
+export function fileIcon(path: string | undefined): IconName | undefined {
+  if (path === undefined) return undefined;
+  const name = basename(path).toLowerCase();
+  if (FILE_NAME_ICONS[name] !== undefined) return FILE_NAME_ICONS[name];
+  if (/^(vite|vitest)\.config\./.test(name)) return "brand-vite";
+  if (/^tailwind\.config\./.test(name)) return "brand-tailwind";
+  const extension = name.includes(".") ? name.split(".").at(-1)! : "";
+  return EXTENSION_ICONS[extension];
+}
+
+/** MCP servers shown with their brand mark (names are normalized when registered). */
+const MCP_SERVER_ICONS: readonly (readonly [readonly string[], IconName])[] = [
+  [["git"], "brand-git"], [["gitlab"], "brand-gitlab"], [["notion"], "brand-notion"], [["figma"], "brand-figma"],
+  [["jira"], "brand-jira"], [["atlassian"], "brand-atlassian"], [["confluence"], "brand-confluence"], [["sentry"], "brand-sentry"],
+  [["vercel"], "brand-vercel"], [["stripe"], "brand-stripe"], [["googledrive", "gdrive", "drive"], "brand-google-drive"],
+  [["gmail"], "brand-gmail"], [["googlecalendar", "gcal", "calendar"], "brand-google-calendar"], [["discord"], "brand-discord"],
+  [["asana"], "brand-asana"], [["hubspot"], "brand-hubspot"], [["cloudflare"], "brand-cloudflare"], [["puppeteer"], "brand-puppeteer"],
+  [["playwright", "browser", "fetch"], "globe-fill"], [["redis"], "brand-redis"], [["mongodb", "mongo"], "brand-mongodb"],
+  [["prisma"], "brand-prisma"], [["firebase"], "brand-firebase"], [["docker"], "brand-docker"], [["kubernetes", "k8s"], "brand-kubernetes"],
+  [["terraform"], "brand-terraform"], [["filesystem", "files"], "folder-simple-fill"],
+];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -542,3 +657,9 @@ export function callDetails(call: ToolCallContext, rawInput: unknown): readonly 
   else if (call.output !== undefined) sections.push({ label: "Output", text: formatValue(call.output), kind: "json" });
   return sections;
 }
+
+/**
+ * Shared default registry used by the session view. Built last: the default
+ * formatters read the icon tables declared above when they are registered.
+ */
+export const defaultToolFormatters = createDefaultRegistry();

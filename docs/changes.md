@@ -1,3 +1,16 @@
+## 2026-10-27 — Specific icons for everyday tool calls (branch `feat/tool-group-cards`)
+
+Shell commands, file reads and edits no longer share one generic icon each. See [Tool groups](tool-groups.md).
+
+- **Why.** The brand icons only applied to MCP tools, so ordinary agent work (for example `git push` through the shell tool) still showed a terminal icon.
+- **Programs.** `shellCommand` finds the meaningful program of a command line (past `cd ... &&`, `FOO=1`, `sudo`, and Codex's `zsh -lc` wrapper) and maps it to an icon: git, gh, npm/npx, pnpm, yarn, bun, node/tsx, deno, tsc, python/pip/uv, cargo, go, docker, kubectl, terraform, brew, psql and others; file and search utilities use folder, file, search and trash icons.
+- **Files.** `fileIcon` maps names (`Dockerfile`, `package.json`, `Cargo.toml`, `go.mod`, config files) and extensions to language and format marks for reads and single-file edits.
+- **Integrations.** About thirty MCP servers show their brand mark; database servers keep the SQL-table labels with their own marks.
+- **Labels.** A shell command's agent-written description becomes its label, and approvals use it as the action with the command as the consequence.
+- **Assets.** `packages/ui/src/brand-icons.ts`: 69 Simple Icons 16.36.0 paths with their brand colors (CC0-1.0), copied verbatim; very dark or light colors follow the text color. Formatter icons may now be computed per call.
+- **Validation performed.** Typecheck, boundaries, full test suite (536 tests), new formatter tests (program detection on the exact `git push` command used for this branch, Codex shell wrapping, file types, MCP brands, descriptions), and `npm run test:tool-groups`, which now also plays everyday Read/Edit/command calls and asserts each row's icon and label; screenshot reviewed in the dark theme.
+- **Not performed.** Light-theme review of every brand color; Windows/Linux rendering.
+
 ## 2026-10-27 — Tool groups take the Orchestration waterfall's look (branch `feat/tool-group-cards`)
 
 The tool group card loses its box and borders and adopts the motion of the Orchestration panel's waterfall from `main`. See [Tool groups](tool-groups.md).

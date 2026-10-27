@@ -81,7 +81,8 @@ const runtime: RuntimeAdapter = {
     yield { type: "native_session", nativeSessionId: `fixture-${input.runId}` };
     // The prompt picks the script: the release question, the same question
     // with the database down, or the follow-up a failed row's Retry sends.
-    const script: readonly ScenarioStep[] = input.prompt.includes(FAILURE_PROMPT) ? RELEASE_FAILURE_SCENARIO
+    const script: readonly ScenarioStep[] = input.prompt.includes(ICONS_PROMPT) ? ICONS_SCENARIO
+      : input.prompt.includes(FAILURE_PROMPT) ? RELEASE_FAILURE_SCENARIO
       : input.prompt.includes("Retry the step that failed") ? RETRY_SCENARIO : RELEASE_SCENARIO;
     for (const step of script) {
       await sleep(step.delayMs, input.signal);
@@ -101,6 +102,23 @@ const runtime: RuntimeAdapter = {
 };
 
 const FAILURE_PROMPT = "Check the release again";
+const ICONS_PROMPT = "Ship the branch";
+/** Everyday built-in calls, shaped like Claude's Bash/Read/Edit and Codex's command items. */
+const builtin = (id: string, tool: string, input: Record<string, unknown>): ScenarioStep[] => [
+  { delayMs: 40, event: { type: "tool_request", tool, toolCallId: id, input } },
+  { delayMs: 120, event: { type: "tool_result", toolCallId: id, output: "ok" } },
+];
+const ICONS_SCENARIO: readonly ScenarioStep[] = [
+  { delayMs: 0, event: { type: "message_delta", text: "Checking and shipping the branch." } },
+  ...builtin("i-read", "Read", { file_path: "/repo/packages/ui/src/app.ts" }),
+  ...builtin("i-edit", "Edit", { file_path: "/repo/docs/tool-groups.md", old_string: "a", new_string: "b" }),
+  ...builtin("i-docker", "Read", { file_path: "/repo/infra/Dockerfile" }),
+  ...builtin("i-test", "commandExecution", { type: "commandExecution", command: "/bin/zsh -lc 'npm test'" }),
+  ...builtin("i-push", "Bash", { command: "cd /repo && git -c credential.helper= push -u origin feat/tool-group-cards 2>&1 | tail -3", description: "Push the feature branch" }),
+  ...builtin("i-pr", "Bash", { command: "gh pr view --web" }),
+  { delayMs: 40, event: { type: "message_delta", text: "Pushed." } },
+  { delayMs: 0, event: { type: "completed", result: "Pushed." } },
+];
 const RETRY_SCENARIO: readonly ScenarioStep[] = [
   { delayMs: 0, event: { type: "message_delta", text: "Retrying the migrations query." } },
   { delayMs: 50, event: { type: "tool_request", tool: "mcp__postgres__query", toolCallId: "call-retry", input: { sql: "select name from pending_migrations" },
@@ -291,6 +309,23 @@ async function run(): Promise<void> {
     assert.equal(await js<string>("document.querySelector('.turn:last-child .bubble-text').textContent"),
       `Retry the step that failed: query pending migrations. It failed with: ${MIGRATION_ERROR}`);
     assert.equal(await js<string>("document.querySelector('.turn:last-child .tool-row-label').textContent"), "Queried pending migrations");
+
+    // Everyday calls get their own icons: the program a command runs and the
+    // type of file a read or edit touches.
+    await js(`(() => { const p = document.querySelector('textarea[aria-label=Prompt]'); p.value=${JSON.stringify(ICONS_PROMPT)}; p.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+    await until("!document.querySelector('button[aria-label=Run]')?.disabled");
+    await js("document.querySelector('button[aria-label=Run]').click()");
+    await until("document.querySelectorAll('.turn').length === 4 && !!document.querySelector('.turn:last-child .turn-action')");
+    await js("(() => { const header = document.querySelector('.turn:last-child .tool-group-header'); if (header.getAttribute('aria-expanded') !== 'true') header.click(); })()");
+    await until("!document.querySelector('.turn:last-child .tool-group-body').inert");
+    assert.deepEqual(await js<string[][]>("[...document.querySelectorAll('.turn:last-child .tool-row:not(.tool-row-working)')].map(row => [row.querySelector('.tool-row-icon').dataset.icon, row.querySelector('.tool-row-label').textContent])"), [
+      ["brand-typescript", "Read app.ts"], ["brand-markdown", "Edited tool-groups.md"], ["brand-docker", "Read Dockerfile"],
+      ["brand-npm", "Ran npm test"], ["brand-git", "Push the feature branch"], ["brand-github", "Ran gh pr view --web"],
+    ]);
+    await new Promise((done) => setTimeout(done, 400));
+    await js("document.querySelector('.turn:last-child .tool-group-card').scrollIntoView({ block: 'center', behavior: 'instant' })");
+    await new Promise((done) => setTimeout(done, 200));
+    await shot("6-icons");
     assert.deepEqual(errors, []);
     console.log(`PASS: ${texts.join(" > ")} [${liveDetail}]; rows ${rows.map((row) => `${row.label} (${row.summary} · ${row.duration})`).join(", ")}; replay identical; failed row with Retry`);
   } finally {

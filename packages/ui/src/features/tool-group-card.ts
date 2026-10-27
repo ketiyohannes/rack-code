@@ -345,7 +345,7 @@ class ToolRow {
     const retry = view.retry;
     this.toggle.replaceChildren(h("span", { class: "tool-row-label", title: view.label }, view.label));
     this.head.replaceChildren(
-      h("span", { class: "tool-row-icon", aria: { hidden: "true" } }, icon(view.icon)),
+      h("span", { class: "tool-row-icon", aria: { hidden: "true" }, data: { icon: view.icon } }, icon(view.icon)),
       h("span", { class: "tool-row-text" }, this.toggle,
         view.subtitle === undefined ? null : h("span", { class: "tool-row-subtitle", title: view.subtitle }, view.subtitle)),
       // The toggle's accessible name carries the same facts as these marks.

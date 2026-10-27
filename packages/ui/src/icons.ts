@@ -62,6 +62,9 @@ import Cpu from "@phosphor-icons/core/assets/regular/cpu.svg";
 import Stack from "@phosphor-icons/core/assets/regular/stack.svg";
 import SlackLogo from "@phosphor-icons/core/assets/regular/slack-logo.svg";
 import Kanban from "@phosphor-icons/core/assets/regular/kanban.svg";
+import { BRAND_ICONS } from "./brand-icons.js";
+import FolderSimpleFill from "@phosphor-icons/core/assets/fill/folder-simple-fill.svg";
+import TrashFill from "@phosphor-icons/core/assets/fill/trash-fill.svg";
 import CheckBold from "@phosphor-icons/core/assets/bold/check-bold.svg";
 import TerminalWindowFill from "@phosphor-icons/core/assets/fill/terminal-window-fill.svg";
 import FileTextFill from "@phosphor-icons/core/assets/fill/file-text-fill.svg";
@@ -140,6 +143,8 @@ const BRAND_SLACK = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"
   + `</svg>`;
 
 const ICONS = {
+  // Programs, file types and integrations shown on tool rows (see brand-icons.ts).
+  ...BRAND_ICONS,
   "floppy-disk": FloppyDisk,
   "pause": Pause,
   "play": Play,
@@ -251,6 +256,8 @@ const ICONS = {
   "plugs-fill": PlugsFill,
   "lock-simple-fill": LockSimpleFill,
   "database-fill": DatabaseFill,
+  "folder-simple-fill": FolderSimpleFill,
+  "trash-fill": TrashFill,
   "brand-github": BRAND_GITHUB,
   "check-bold": CheckBold,
   "warning-circle-bold": WarningCircleBold,
