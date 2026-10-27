@@ -34,11 +34,12 @@ import type { HostClient } from "@rack/client/host-client";
 import { loadEnabledPlugins, saveEnabledPlugins } from "./surfaces.js";
 import type { AppState, LiveRun, Notice, SettingsSection, Store } from "./store.js";
 import { eventsFromJournal } from "./transcript.js";
+import { recordObservedAt } from "./event-times.js";
 import { MAX_ATTACHMENTS, type SessionAttachment } from "@rack/core/sessions/attachments";
 import { loadModelFavorites, saveModelFavorites } from "./model-favorites.js";
 import { modelKey } from "./components/model-settings.js";
 import type { BrowserPresentation, BrowserRequest } from "@rack/features/browser";
-import type { OrchestraTarget } from "./features/orchestra-state.js";
+import { sessionWorkerRunIds, type OrchestraTarget } from "./features/orchestra-state.js";
 
 interface CachedSession {
   readonly session: SessionView;
@@ -672,6 +673,40 @@ export class Controller {
     });
   }
 
+  /**
+   * "Run again": sends a finished turn's prompt as a new turn in the same
+   * session, with the same model, reasoning effort, speed, permission and
+   * interaction mode, skills and attachments. The account is chosen by the
+   * usual selection policy, so an account that has since become unavailable
+   * does not block the retry. The model must still be in the discovered
+   * catalog; otherwise this explains why and starts nothing.
+   *
+   * `prompt` replaces the original prompt for a follow-up with the same
+   * settings (a tool row's Retry); the original attachments are not resent.
+   */
+  async runAgain(run: RunView, options: { readonly prompt?: string } = {}): Promise<boolean> {
+    const models = this.store.get().models;
+    const model = models.find((candidate) => candidate.providerId === run.providerId && (run.model === undefined || candidate.id === run.model));
+    if (model === undefined) {
+      this.notify({ kind: "error", message: "The model used for this turn is no longer available. Choose a model and send the prompt again." });
+      return false;
+    }
+    return this.startRun({
+      sessionId: run.sessionId,
+      ...(run.projectId === undefined ? {} : { projectId: run.projectId }),
+      providerId: run.providerId,
+      runtimeId: model.runtimeId,
+      prompt: options.prompt ?? run.prompt,
+      ...(run.model === undefined ? {} : { model: run.model }),
+      ...(run.reasoningEffort === undefined ? {} : { reasoningEffort: run.reasoningEffort }),
+      ...(run.speed === undefined ? {} : { speed: run.speed }),
+      permissionMode: run.permissionMode,
+      ...(run.interactionMode === undefined ? {} : { interactionMode: run.interactionMode }),
+      ...(run.skills === undefined || run.skills.length === 0 ? {} : { skillIds: run.skills.map((skill) => skill.id) }),
+      ...(options.prompt !== undefined || run.attachments === undefined || run.attachments.length === 0 ? {} : { attachmentIds: run.attachments.map((file) => file.id) }),
+    });
+  }
+
   private orchestraLoading: Promise<void> | undefined;
   private orchestraReloadPending = false;
   async reloadOrchestra(): Promise<void> {
@@ -816,6 +851,7 @@ export class Controller {
         this.patchLive(event.run.id, (live) => ({ ...live, run: event.run }));
         return;
       case "run.event":
+        recordObservedAt(event.event, event.observedAt);
         this.applyRunEvent(event.runId, event.index, event.event);
         return;
       case "run.approval_resolved":
@@ -889,7 +925,9 @@ export class Controller {
       events: [...current.events, event],
       pendingApprovals: event.type === "approval_request"
         ? [...current.pendingApprovals, event.request]
-        : current.pendingApprovals,
+        : event.type === "approval_resolved"
+          ? current.pendingApprovals.filter((request) => request.id !== event.approvalId)
+          : current.pendingApprovals,
       pendingQuestions: event.type === "question_request" ? [...(current.pendingQuestions ?? []), event.request]
         : event.type === "question_resolved" ? (current.pendingQuestions ?? []).filter((request) => request.id !== event.requestId) : current.pendingQuestions ?? [],
     }));
@@ -902,7 +940,10 @@ export class Controller {
         ? upsertRun(state.runs, run)
         : state.runs;
       const events = state.live[run.id]?.events;
-      const transcripts = state.selection.sessionId === run.sessionId && events !== undefined
+      // Keep the finished activity of this conversation's runs and of its
+      // workflow workers (child sessions shown in the workflow turn).
+      const shown = state.selection.sessionId === run.sessionId || sessionWorkerRunIds(state).has(run.id);
+      const transcripts = shown && events !== undefined
         ? { ...state.transcripts, [run.id]: events } : state.transcripts;
       return { ...state, live, runs, transcripts };
     });
@@ -976,7 +1017,9 @@ export class Controller {
     const initial = this.store.get();
     const sessionId = initial.selection.sessionId;
     const revision = sessionId === undefined ? undefined : this.sessionRevisions.get(sessionId);
-    const allowed = new Set(initial.runs.map((run) => run.id));
+    // Workflow workers run in child sessions; their activity is shown in the
+    // parent conversation's workflow turn, so their journals load here too.
+    const allowed = new Set([...initial.runs.map((run) => run.id), ...sessionWorkerRunIds(initial)]);
     const ids = runIds.filter((id) => allowed.has(id) && initial.transcripts[id] === undefined && initial.live[id] === undefined);
     const results = await settleInBatches(ids, async (id) => [id, eventsFromJournal(await this.host.call("runs.journal", { runId: id }))] as const);
     this.store.update((state) => {
@@ -1028,6 +1071,12 @@ export class Controller {
             run.status !== "queued" && run.status !== "running" && previousEvents[run.id] !== undefined) {
             transcripts[run.id] = previousEvents[run.id]!;
           }
+        }
+        // Settled workflow-worker activity is not in `runs.list` (workers run
+        // in child sessions); carry it over instead of reloading it.
+        if (current.session?.id === sessionId) {
+          const workers = sessionWorkerRunIds(current);
+          for (const id of workers) if (previousEvents[id] !== undefined && current.live[id] === undefined) transcripts[id] = previousEvents[id]!;
         }
         // Publish prompts/final replies as soon as metadata arrives. Activity
         // restoration runs in the background instead of gating every message.
@@ -1228,6 +1277,7 @@ export function describeError(error: unknown, state: AppState): Notice {
 function liveFromSnapshot(active: readonly ActiveRunView[], previous: AppState["live"]): AppState["live"] {
   const live: Record<string, LiveRun> = {};
   for (const view of active) {
+    view.events.forEach((event, index) => recordObservedAt(event, view.observedAt?.[index]));
     live[view.run.id] = {
       run: view.run,
       events: view.events,

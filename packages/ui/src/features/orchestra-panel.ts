@@ -237,7 +237,9 @@ export function createOrchestraPanel(store: Store, controller: Controller, host:
           if (gate) { void controller.controlWorkflow(action.target.workflowRunId, "approve"); return; }
           const card = [...document.querySelectorAll<HTMLElement>("[data-pending-request]")].find((node) => node.dataset.pendingRequest === action.requestId && node.dataset.executionId === action.executionId);
           card?.scrollIntoView({ block: "nearest" });
-          card?.querySelector<HTMLElement>("input, button:not(:disabled)")?.focus();
+          // Questions focus their first input; inline tool approvals their
+          // first decision button (Deny) rather than the details toggle.
+          (card?.querySelector<HTMLElement>("input, button.button:not(:disabled)") ?? card?.querySelector<HTMLElement>("button:not(:disabled)"))?.focus();
         } }, gate ? "Approve & continue" : action.kind === "question" ? "Answer" : "Review"));
   }
 

@@ -292,6 +292,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
 
     const unknownRunId = unacknowledgedUnknown(state);
     const approvals = pendingApprovals(state);
+    const inlineApprovals = inlinePendingApprovals(state);
     const catalogMessage = state.session === undefined ? undefined : modelCatalogMessage(state);
     const needsFavorites = state.models.length > 0 && selected === undefined;
     const unsupportedMode = modeDisabled(caps);
@@ -300,6 +301,9 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       ...(designer ? [h("div", { class: "guard-warning designer-recovery", role: "region", aria: { label: "Workflow designer" } }, icon("info"), h("span", {}, designer.stopping ? "Stopping workflow designer…" : "Workflow drafting is active. Answer the designer's questions or cancel to return to this conversation."),
         h("button", { class: "button button-small", type: "button", disabled: designer.stopping, onClick: () => void controller.cancelWorkflowGeneration(designer.id) }, "Cancel generation"))] : []),
       ...approvals.map(({ run, live, request }) => renderApproval(request, run, live, state, controller)),
+      ...(inlineApprovals.length === 0 ? [] : [h("div", { class: "guard-warning approval-pointer", role: "status" }, icon("hand"),
+        h("span", {}, inlineApprovals.length === 1 ? "An action in this conversation is waiting for your approval." : `${inlineApprovals.length} actions in this conversation are waiting for your approval.`),
+        h("button", { class: "button button-small", type: "button", onClick: () => revealInlineApproval(inlineApprovals[0]!.id) }, "Review"))]),
       ...(catalogMessage === undefined ? [] : [
         h("div", { class: "guard-warning catalog-warning" }, icon("info"), h("span", {}, catalogMessage)),
       ]),
@@ -315,7 +319,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       ...(unsupportedMode ? [h("div", { class: "guard-warning" }, icon("warning-circle"), h("span", {}, `${selected?.label ?? "This model"} does not support ${PERMISSION_LABELS[mode].label}. Choose a supported permission mode to run.`),
         ...(["read_only", "full_access"] as const).map((candidate) => h("button", { class: "button button-small", type: "button", onClick: () => { mode = candidate; refresh(store.get()); } }, PERMISSION_LABELS[candidate].label)))] : []),
     );
-    guard.hidden = approvals.length === 0 && catalogMessage === undefined && !needsFavorites && unknownRunId === undefined && !unsupportedMode && !missingAccount && !designer;
+    guard.hidden = approvals.length === 0 && inlineApprovals.length === 0 && catalogMessage === undefined && !needsFavorites && unknownRunId === undefined && !unsupportedMode && !missingAccount && !designer;
     guard.classList.toggle("approval-open", approvals.length > 0);
 
     workspace.element.disabled ||= submitting;
@@ -380,11 +384,40 @@ function modelCatalogMessage(state: AppState): string | undefined {
   return `${count} connected account${count === 1 ? "" : "s"} could not load its model list. Your available favorites are shown.`;
 }
 
+/**
+ * Approvals answered here, in the overlay. Approvals of the session's own
+ * turns and of its workflow workers are answered on their tool call in the
+ * transcript (see `tool-group-card.ts`); the composer only points to them,
+ * so no approval has two sets of buttons. What remains is any other run the
+ * composer is asked to supervise for this session.
+ */
 function pendingApprovals(state: AppState): readonly { readonly run: RunView; readonly live: LiveRun; readonly request: ApprovalRequest }[] {
   if (state.session === undefined) return [];
+  const inline = inlineRunIds(state);
   return Object.values(state.live)
-    .filter((live) => live.run.sessionId === state.session?.id || sessionWorkerRunIds(state).has(live.run.id))
+    .filter((live) => !inline.has(live.run.id) && sessionWorkerRunIds(state).has(live.run.id))
     .flatMap((live) => live.pendingApprovals.map((request) => ({ run: live.run, live, request })));
+}
+
+/** Runs whose approvals render inline: this session's turns and its workflow workers. */
+function inlineRunIds(state: AppState): ReadonlySet<string> {
+  const workers = sessionWorkerRunIds(state);
+  return new Set(Object.values(state.live).filter((live) => live.run.sessionId === state.session?.id || workers.has(live.run.id)).map((live) => live.run.id));
+}
+
+/** Pending approvals shown inline in the transcript. */
+function inlinePendingApprovals(state: AppState): readonly ApprovalRequest[] {
+  if (state.session === undefined) return [];
+  const inline = inlineRunIds(state);
+  return Object.values(state.live).filter((live) => inline.has(live.run.id)).flatMap((live) => live.pendingApprovals);
+}
+
+/** Scrolls the transcript to an inline approval and moves focus to it, so the next Tab reaches its buttons. */
+function revealInlineApproval(approvalId: string): void {
+  const target = document.querySelector<HTMLElement>(`.tool-approval[data-approval-id="${CSS.escape(approvalId)}"]`);
+  if (target === null) return;
+  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  target.focus({ preventScroll: true });
 }
 
 /**

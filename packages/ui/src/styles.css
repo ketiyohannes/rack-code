@@ -4575,14 +4575,6 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 .orchestra-composer-title { border: 0; background: none; padding: 0; font-size: 11px; font-weight: 550; color: var(--text); cursor: pointer; }
 .orchestra-composer-bar > span { margin-left: auto; }
 .orchestra-composer-bar .icon-button { width: 20px; height: 20px; }
-.orchestra-turn .prompt-bubble { margin-left: auto; white-space: pre-wrap; padding: 12px 17px; border-radius: 16px; background: var(--inset); max-width: 85%; width: fit-content; }
-.orchestra-turn-status { display: flex; align-items: center; gap: 9px; margin-top: 23px; padding: 0; background: transparent; border: 0; cursor: pointer; color: var(--text-2); font-size: 11px; }
-.orchestra-turn-status strong { color: var(--text); font-weight: 550; }
-.orchestra-turn-status > span { margin-left: 8px; color: var(--text-3); }
-.orchestra-turn-status .icon { width: 14px; height: 14px; }
-.orchestra-turn-agents { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
-.orchestra-turn-agents > span { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-2); background: var(--inset); border-radius: 5px; padding: 5px 7px; }
-.orchestra-turn-agents .icon { width: 12px; height: 12px; }
 @media (max-width: 850px) {
   .orchestra-modal { width: calc(100vw - 24px); height: calc(100vh - 30px); }
   .orchestra-studio-body { grid-template-columns: minmax(0, 1fr) 275px; }
@@ -4736,3 +4728,240 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
   .orchestra-tool-row.entering, .orchestra-run-status.waiting_approval { animation: none; }
   .orchestra-agent::details-content, .orchestra-agent-caret { transition: none; }
 }
+
+/* ------------------------------------------------------------------------
+ * Tool group card (features/tool-group-card.ts)
+ *
+ * A quiet card, a shade lighter than the page, per run of consecutive tool
+ * calls. Header: overlapping brand icons, a muted title, the time or the
+ * failures on the right and a chevron that points up while open. Rows: brand
+ * icon, label, muted summary and duration, a status mark and a chevron. The
+ * only accents are the green check, the red failure and the approval
+ * highlight; each state also has its own icon and words. Motion: a row
+ * fade-in, the height transition, the ring spinner and a slow shimmer across
+ * a running label. `prefers-reduced-motion` removes all of it.
+ * ---------------------------------------------------------------------- */
+.tool-group-card {
+  --tool-ok: #2f9e5b;
+  --tool-problem: #c94343;
+  --tool-surface: color-mix(in srgb, var(--text) 2.5%, var(--canvas));
+  --tool-line: color-mix(in srgb, var(--text) 8%, transparent);
+  --tool-hover: color-mix(in srgb, var(--text) 4%, transparent);
+  --tool-chip: color-mix(in srgb, var(--text) 7%, var(--canvas));
+  --tool-attention: color-mix(in srgb, var(--text) 6%, var(--tool-surface));
+  border: 1px solid var(--tool-line);
+  border-radius: 16px;
+  background: var(--tool-surface);
+  font-size: var(--font-md);
+  line-height: 1.45;
+}
+:root[data-theme="dark"] .tool-group-card { --tool-ok: #4cc777; --tool-problem: #ec6a6f; }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .tool-group-card { --tool-ok: #4cc777; --tool-problem: #ec6a6f; }
+}
+
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 16px 8px 14px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-group-header:hover { color: var(--text); }
+.tool-group-header:focus-visible { outline: 2px solid var(--text-3); outline-offset: -2px; }
+
+/* Overlapping brand icons, each in its own ring cut out of the card. */
+.tool-group-icons { display: inline-flex; flex: none; padding-left: 7px; }
+.tool-group-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: -7px;
+  border: 1px solid var(--tool-line);
+  border-radius: 50%;
+  background: var(--tool-chip);
+  box-shadow: 0 0 0 2px var(--tool-surface);
+  color: var(--text);
+}
+.tool-group-icon .icon { width: 14px; height: 14px; }
+.tool-group-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-group-detail { flex: none; color: var(--text-3); font-size: var(--font-sm); font-variant-numeric: tabular-nums; }
+.tool-group-detail:empty { display: none; }
+.tool-group-detail.problem { color: var(--tool-problem); }
+.tool-group-caret { width: 14px; height: 14px; flex: none; color: var(--text-3); }
+.tool-group-card.animated .tool-group-caret { transition: transform 200ms ease; }
+.tool-group-card.expanded .tool-group-caret { transform: rotate(180deg); }
+
+/* Height animates through the grid row, so content keeps its natural height. */
+.tool-group-body { display: grid; grid-template-rows: 0fr; }
+.tool-group-card.expanded .tool-group-body { grid-template-rows: 1fr; }
+.tool-group-card.animated .tool-group-body { transition: grid-template-rows 220ms ease; }
+.tool-group-clip { min-height: 0; overflow: hidden; }
+.tool-group-rows { display: flex; flex-direction: column; gap: 2px; padding: 6px 6px 8px; border-top: 1px solid var(--tool-line); }
+.tool-group-thought { padding: 2px 12px 6px 44px; color: var(--text-3); font-size: var(--font-sm); }
+
+.tool-row { border-radius: 12px; }
+.tool-row.entering { animation: tool-row-in 180ms ease-out; }
+@keyframes tool-row-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.tool-row.needs-approval { background: var(--tool-attention); box-shadow: inset 0 0 0 1px var(--tool-line); }
+
+/* The whole head expands the row: the toggle's ::after covers it. Retry and
+   approval buttons sit above that layer and stay separate controls. */
+.tool-row-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 10px;
+  border-radius: 12px;
+}
+.tool-row-head:hover { background: var(--tool-hover); }
+.tool-row-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: none; color: var(--text); }
+/* With an error line underneath, the icon stays on the label's line. */
+.tool-row.has-subtitle .tool-row-icon { align-self: flex-start; margin-top: 0; }
+.tool-row.has-subtitle .tool-row-head { padding-top: 8px; padding-bottom: 8px; }
+.tool-row-icon .icon { width: 18px; height: 18px; }
+.tool-row-text { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+.tool-row-toggle {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-row-toggle::after { content: ""; position: absolute; inset: 0; border-radius: 12px; }
+.tool-row-toggle:focus-visible { outline: none; }
+.tool-row-toggle:focus-visible::after { outline: 2px solid var(--text-3); outline-offset: -2px; }
+.tool-row-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The error wraps rather than truncating: it is the one detail a failure needs. */
+.tool-row-subtitle { color: var(--text-3); font-size: var(--font-sm); overflow-wrap: anywhere; }
+
+/* A running label is muted with a slow highlight passing through it. */
+.tool-row[data-status="running"] .tool-row-label {
+  background: linear-gradient(90deg, var(--text-3) 0%, var(--text-3) 35%, var(--text) 50%, var(--text-3) 65%, var(--text-3) 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: tool-shimmer 2.2s linear infinite;
+}
+@keyframes tool-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+
+.tool-row-meta { display: inline-flex; flex: none; align-items: baseline; gap: 7px; color: var(--text-3); font-size: var(--font-sm); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tool-row-meta:empty { display: none; }
+.tool-row-summary + .tool-row-duration::before,
+.tool-row-outcome + .tool-row-duration::before,
+.tool-row-summary + .tool-row-outcome::before { content: "\00b7"; margin-right: 7px; }
+
+.tool-row-retry {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 14px 0 12px;
+  border: 1px solid var(--tool-line);
+  border-radius: 999px;
+  background: var(--tool-chip);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+.tool-row-retry:hover { background: color-mix(in srgb, var(--text) 11%, var(--canvas)); }
+.tool-row-retry:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
+.tool-row-retry .icon { width: 15px; height: 15px; }
+
+.tool-row-status { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; color: var(--text-3); }
+.tool-row-status .icon { width: 16px; height: 16px; }
+.tool-row-status.status-success { color: var(--tool-ok); }
+.tool-row-status.status-error, .tool-row[data-status="error"] .tool-row-outcome { color: var(--tool-problem); }
+.tool-row-status.status-error .icon { width: 18px; height: 18px; }
+.tool-row-status:not(.status-running) .icon { animation: tool-status-in 160ms ease-out; }
+@keyframes tool-status-in { from { opacity: 0; } to { opacity: 1; } }
+.tool-spinner {
+  width: 15px;
+  height: 15px;
+  border: 1.75px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-top-color: var(--text-2);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+.tool-row-caret { width: 14px; height: 14px; flex: none; color: var(--text-3); transition: transform 160ms ease; }
+.tool-row.expanded .tool-row-caret { transform: rotate(180deg); }
+
+.tool-approval { display: flex; align-items: center; gap: 10px; padding: 0 10px 10px 42px; outline: none; }
+.tool-approval-text { flex: 1; min-width: 0; color: var(--text-2); font-size: var(--font-sm); }
+.tool-approval-actions { display: inline-flex; flex: none; align-items: center; gap: 6px; }
+.tool-approval-actions .button-small { height: 30px; padding: 0 14px; border-radius: 999px; font-size: var(--font-sm); }
+.tool-approval-info { width: 30px; height: 30px; color: var(--text-3); }
+.tool-approval-info .icon { width: 16px; height: 16px; }
+
+.tool-row-details { display: flex; flex-direction: column; gap: 10px; padding: 2px 12px 12px 42px; }
+.tool-row-section-label { display: block; margin-bottom: 4px; color: var(--text-3); font: var(--font-2xs) var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; }
+.tool-row-pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--tool-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--canvas) 70%, black);
+  color: var(--text-2);
+  font: var(--font-xs)/1.6 var(--font-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-row-more { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--text-2); font: inherit; font-size: var(--font-xs); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.tool-row-more:hover { color: var(--text); }
+.tool-row-capped { display: block; margin-top: 4px; color: var(--text-3); font-size: var(--font-xs); }
+
+/* "Run again" under the newest answer. */
+.turn-action { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px; border: 0; border-radius: 8px; background: none; color: var(--text-2); font: inherit; font-size: var(--font-lg); cursor: pointer; }
+.turn-action:hover:not(:disabled) { background: var(--overlay); color: var(--text); }
+.turn-action:disabled { cursor: default; opacity: 0.55; }
+.turn-action .icon { width: 17px; height: 17px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-row.entering, .tool-row-status .icon { animation: none; }
+  .tool-row[data-status="running"] .tool-row-label { animation: none; background: none; color: var(--text-2); }
+  .tool-spinner { animation-duration: 3s; }
+  .tool-group-card.animated .tool-group-body, .tool-group-card.animated .tool-group-caret, .tool-row-caret { transition: none; }
+}
+
+/* Workflow turns (session-view renderWorkflowTurn) read like ordinary turns.
+   Each worker's activity is grouped for assistive technology only. */
+.workflow-worker { display: contents; }
+.workflow-indicator {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 3%, var(--canvas));
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+.workflow-indicator:hover { color: var(--text); }
+.workflow-indicator:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
+.workflow-indicator .icon { width: 14px; height: 14px; }

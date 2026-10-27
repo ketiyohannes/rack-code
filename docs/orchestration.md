@@ -112,9 +112,18 @@ siblings. A stopped or failed worker does not count as a successful stage.
 Workers release native process resources on settlement; their execution
 journals and results remain.
 
-The main chat displays one workflow turn with agent progress and the coordinator's
-final response. Timeline also has an Agent activity section linking to workflow
-supervision. This section is independent of Git snapshot capture and works in
+The main chat shows a workflow turn exactly like an ordinary turn (updated
+2026-10-27): the same prompt bubble, then every worker's activity in start order
+(thinking, tool group cards with timing, worker text), then the coordinator's
+answer. The only addition is an indicator under the prompt naming the workflow;
+selecting it opens the run in Orchestration. Worker tool approvals are answered
+inline on the worker's tool row like a normal turn's (the panel's **Review** and
+the composer's pointer focus that row); workflow approval gates stay on the
+composer and in this panel. Worker activity streams live from the host and, for
+settled workers, is loaded from their journals, so a reload or another device
+shows the same turn. Workers stay attributed for assistive technology through a
+labelled group with no visual box. Timeline also has an Agent activity section
+linking to workflow supervision. This section is independent of Git snapshot capture and works in
 standalone chats. Existing Git history and recording behavior remain separate.
 
 The panel fits the 260 px minimum sidebar: titles, models and targets truncate

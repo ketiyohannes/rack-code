@@ -14,7 +14,9 @@
     "archive": "tsx scripts/archive-release.ts",
     "test:desktop-features": "tsx scripts/bundle-fixture.ts verify-desktop-features && electron dist/verify-desktop-features.mjs",
     "test:orchestra": "tsx scripts/bundle-fixture.ts verify-orchestra && electron dist/verify-orchestra.mjs",
-    "test:run-changes": "tsx scripts/bundle-fixture.ts verify-run-changes && electron dist/verify-run-changes.mjs"
+    "test:run-changes": "tsx scripts/bundle-fixture.ts verify-run-changes && electron dist/verify-run-changes.mjs",
+    "test:tool-groups": "tsx scripts/bundle-fixture.ts verify-tool-groups && electron dist/verify-tool-groups.mjs",
+    "demo:tool-groups": "tsx scripts/bundle-fixture.ts verify-tool-groups && RACK_DEMO=1 electron dist/verify-tool-groups.mjs"
   },
   "dependencies": {
     "@rack/contracts": "*",

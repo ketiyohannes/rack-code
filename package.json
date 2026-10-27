@@ -26,7 +26,9 @@
     "rebuild:native": "electron-rebuild -f -w node-pty",
     "test:desktop-features": "npm run test:desktop-features --workspace @rack/desktop",
     "test:orchestra": "npm run test:orchestra --workspace @rack/desktop",
-    "test:run-changes": "npm run test:run-changes --workspace @rack/desktop"
+    "test:run-changes": "npm run test:run-changes --workspace @rack/desktop",
+    "test:tool-groups": "npm run test:tool-groups --workspace @rack/desktop",
+    "demo:tool-groups": "npm run demo:tool-groups --workspace @rack/desktop"
   },
   "engines": {
     "node": ">=20"

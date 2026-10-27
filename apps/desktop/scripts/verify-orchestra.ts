@@ -65,6 +65,8 @@ const runtime: RuntimeAdapter = {
       yield { type: "tool_result", toolCallId: "write", output: "Fixture operation completed; no project files changed." };
       await activityGates.get("idle")!.ready;
     }
+    // Workers think like ordinary turns; the transcript shows it in the middle.
+    if (input.prompt.includes("You are Plan,")) yield { type: "thinking_delta", text: "Reading the request before writing the plan.", format: "summary" };
     const result = input.prompt.includes("End your response with exactly one final line") ? "The fixture change meets the plan.\nVERDICT: APPROVED"
       : input.prompt.includes("You are Coordinator,") ? "The workflow completed: the plan was approved, the builder finished, and independent review passed. This was a fixture run; no files were changed."
         : input.prompt.includes("ASSIGNMENT:\nImplement") ? "Fixture implementation completed and validated." : "Plan: make the requested change, validate it, and ask an independent reviewer to check the result.";
@@ -187,6 +189,13 @@ async function verify(): Promise<void> {
     // The planner settled before the gate, so it is collapsed automatically.
     assert.equal(await js<boolean>("document.querySelector('.orchestra-agent.completed')?.open"), false);
     assert.equal(await js<string>("document.querySelector('.orchestra-agent .orchestra-agent-model')?.textContent"), "Fixture Planner");
+    // The middle reads like an ordinary turn: the same prompt bubble, the
+    // workflow indicator, then the planner's thinking and text.
+    assert.equal(await js<string>("document.querySelector('.orchestra-turn .bubble-text')?.textContent"), "Implement the fixture feature");
+    assert.equal(await js<string>("document.querySelector('.orchestra-turn .workflow-indicator')?.textContent"), "Feature development");
+    await until("document.querySelector('.orchestra-turn .thinking-panel')?.textContent.includes('Reading the request before writing the plan.')");
+    await until("[...document.querySelectorAll('.orchestra-turn .reply > .workflow-worker .md')].some(node => node.textContent.startsWith('Plan: make the requested change'))");
+    assert.equal(await js<number>("document.querySelectorAll('.orchestra-turn .orchestra-turn-status, .orchestra-turn .orchestra-turn-agents').length"), 0, "no workflow-specific summary block remains");
     await capture("/tmp/rack-orchestra-approval.png");
     console.log("Approving plan");
     await click("Approve & continue");
@@ -196,10 +205,17 @@ async function verify(): Promise<void> {
     await until("document.querySelector('.orchestra-required-action')?.textContent.includes('Build needs tool approval')");
     assert.equal(await js<string>(`${build}.querySelector('.orchestra-agent-model').textContent`), "Fixture Builder");
     assert.equal(await js<boolean>(`${build}.open && !!${build}.querySelector('summary .orchestra-spinner')`), true);
-    await click("Review");
-    assert.equal(await js<boolean>("!!document.activeElement?.closest('.approval')"), true);
-    await until("!![...document.querySelectorAll('button')].find(b => /Allow/.test(b.textContent))");
-    await js("[...document.querySelectorAll('.approval button')].find(b => /Allow/.test(b.textContent)).click()");
+    // Worker approvals are answered inline on the build worker's tool row,
+    // like a normal turn's; the composer only points to it and the panel's
+    // Review focuses that exact row.
+    await until("!!document.querySelector('.orchestra-turn .tool-approval button.button-primary:not([disabled])')");
+    assert.equal(await js<number>("document.querySelectorAll('.approval-overlay-card').length"), 0);
+    assert.equal(await js<boolean>("!!document.querySelector('.approval-pointer')"), true);
+    await js("document.querySelector('.orchestra-required-action button').click()");
+    assert.equal(await js<boolean>("!!document.activeElement?.closest('.orchestra-turn .tool-approval')"), true);
+    assert.equal(await js<string>("document.activeElement?.textContent"), "Deny");
+    await capture("/tmp/rack-orchestra-inline-approval.png");
+    await js("document.querySelector('.orchestra-turn .tool-approval button.button-primary').click()");
     await until("document.querySelector('.orchestra-required-action')?.textContent.includes('Build needs an answer')");
     await click("Answer");
     assert.equal(await js<boolean>("!!document.activeElement?.closest('.question-card')"), true);
@@ -214,6 +230,8 @@ async function verify(): Promise<void> {
     await click("Resume workflow");
     await until("document.querySelector('.orchestra-run-status.running') !== null");
     await js("window.__statusSpinner = document.querySelector('.orchestra-run-status .orchestra-spinner')");
+    // The builder's tool calls appear in the middle as an ordinary tool group card.
+    await until("!!document.querySelector('.orchestra-turn .tool-group-card .tool-row[data-status=running] .tool-spinner')");
     await capture("/tmp/rack-orchestra-working.png");
     activityGates.get("shell")!.release();
     await until(`${buildRows}.length === 2 && ${build}.querySelector('.orchestra-agent-count')?.textContent === '2'`);
@@ -226,14 +244,14 @@ async function verify(): Promise<void> {
     activityGates.get("idle")!.release();
     // A finished workflow returns the sidebar to the titles.
     await until("!!document.querySelector('.orchestra-title-row') && !document.querySelector('.orchestra-run')");
-    await until("document.querySelector('.orchestra-turn .markdown')?.textContent.includes('workflow completed')");
+    await until("document.querySelector('.orchestra-turn .reply')?.textContent.includes('The workflow completed')");
     const saved = await application.orchestra!.snapshot();
     assert.equal(saved.runs[0]?.status, "completed");
     assert.equal(saved.runs[0]?.workers.length, 4);
     assert.equal(saved.runs[0]?.workers.find(worker => worker.name === "Build")?.model.model, "fixture-builder");
     assert.equal((await application.sessions.listSummaries()).length, 1);
     await window.webContents.reload();
-    await until("document.querySelector('.orchestra-turn .markdown')?.textContent.includes('workflow completed')");
+    await until("document.querySelector('.orchestra-turn .reply')?.textContent.includes('The workflow completed')");
     await click("Orchestration");
     await until("!!document.querySelector('.orchestra-title-row')");
     // Exact navigation opens the finished run; tools come from saved journals.

@@ -1,3 +1,38 @@
+## 2026-10-27 — Workflow turns read like ordinary turns (working tree on `main`, not committed)
+
+Orchestration in the main view now looks and behaves like normal work. See [Agent orchestra](orchestration.md).
+
+- **Center view.** `renderWorkflowTurn` renders the ordinary prompt bubble and each worker's activity through the same `renderActivity` helper ordinary turns now use (thinking, tool group cards, text), then the coordinator's answer. The previous summary block (status line and agent chips) is gone; a workflow-name indicator under the prompt opens the run in Orchestration.
+- **Worker activity in the renderer.** The session view redraws for worker runs (child sessions), `finishRun` keeps finished worker events, `reloadSession` carries them over, and `loadSessionActivity` loads worker journals for the selected conversation, so replays match live views.
+- **Approvals.** Worker tool approvals are answered inline; the composer points to them and the orchestration panel's Review focuses the inline row (it carries `data-pending-request`/`data-execution-id`). A provider-supplied approval reason now replaces the consequence derived from arguments.
+- **Unchanged.** The scheduler, workflow persistence, IPC and the orchestration side panel (supervision, controls, per-agent waterfall).
+- **Validation performed.** Typecheck, boundaries, full test suite (532 tests), `npm run test:orchestra` (now asserting the shared prompt bubble, workflow indicator, planner thinking and text in the middle, the inline worker approval reached from the panel, and the builder's tool group card), `npm run test:tool-groups`, `npm run test:run-changes` and `npm run test:desktop-features`; center-view screenshots reviewed in the light theme.
+- **Not performed.** No live provider workflow; parallel workers streaming at the same time were not exercised in the native fixture (each renders its own section, in start order).
+
+## 2026-10-27 — Tool group cards matched to the reference design (working tree on `main`, not committed)
+
+The tool group card from the previous entry now follows the reference screenshots. See [Tool groups](tool-groups.md).
+
+- **Header.** Title and detail are separate: "Used 4 tools" on the left, the time or "1 failed" (red) on the right; no spinner; up/down chevron; divider under the header; up to four overlapping brand icons. `summarizeGroup` gains `title`, `detail` and `detailIsProblem`; `text` keeps the combined sentence for accessible names.
+- **Rows.** Brand icons (GitHub, Linear, PostgreSQL from Simple Icons, CC0; Slack drawn), ring spinner and shimmering label while running, bold green check, down chevrons, larger rows on a quieter card surface. A row's toggle now wraps only the label and stretches over the row, so Retry can sit inside the row as its own button.
+- **Failures and Retry.** New "failed" label form ("Could not ..."), the error as a second line, a red warning circle, and Retry as a visible follow-up turn (`Controller.runAgain` accepts a replacement prompt). Groups with failures stay open when done.
+- **Footer.** The newest turn's footer shows only "Run again".
+- **Fixture.** The Linear project reads "Read the Web 2.8 release project"; a failure scenario (`RELEASE_FAILURE_SCENARIO`) and Retry follow-up were added to `verify-tool-groups.ts`.
+- **Validation performed.** Typecheck, boundaries and the full test suite (532 tests); `npm run test:tool-groups` passes, now also covering the ring spinner and shimmer, the four header icons, the "1 failed" header, the failed row's label, error line and Retry, and the Retry follow-up turn; screenshots of the running, collapsed and failed states were compared against the references in the dark theme.
+- **Not performed.** Light theme and Windows/Linux rendering were not reviewed. The brand colors are approximations of the reference, not sampled values.
+
+## 2026-10-27 — Tool group cards with inline approvals (working tree on `main`, not committed)
+
+Tool calls in a turn now render as one card per run of consecutive calls, with tense-aware labels, result summaries, durations and approvals answered on the call itself. See [Tool groups](tool-groups.md).
+
+- **Contracts.** `ApprovalRequest.toolCallId`, `tool_request.mcp`, the `approval_resolved` run event, `ExecutionHandle.observedAt`, `run.event.observedAt` and `ActiveRunView.observedAt`. All additive; older hosts and journals still render (without durations or decisions). Architecture updated under "Tool groups and approval events".
+- **Adapters.** Claude forwards `canUseTool`'s `toolUseID` and parses `mcp__<server>__<tool>`; Codex forwards approval `itemId` and the `mcpToolCall` identity.
+- **Execution.** The approval broker queues and journals each decision before releasing it to the adapter. Every delivered event is stamped once and the same stamp is used for the journal and the live broadcast.
+- **Renderer.** New `turn-activity.ts` (pure reducer), `tool-formatters.ts` (registry with generic fallbacks), `tool-group-card.ts` (stateful card), `event-times.ts`. The session view keeps turn and card nodes across redraws; `reconcileChildren` removes stale nodes instead of moving retained ones, so cards are never detached while a reply streams. Composer approvals for the session's own turns are replaced by a pointer. "Run again" resends the newest finished turn's prompt with the same model, effort, speed, permission and interaction mode, skills and attachments; the account follows normal selection.
+- **Behavior notes.** Group duration is the union of execution intervals, excluding approval waits. Claude has no explicit "tool started executing" signal, so its call start is the time its input became complete. Consequence text is derived from arguments only. No Pi mapping, because Rack has no Pi adapter.
+- **Validation performed.** `npm run typecheck` and `npm run check:boundaries` clean; full `npm test` green (531 tests); new unit tests for the reducer, formatters, adapter correlation, decision journaling and live/journal timestamp parity; `npm run test:tool-groups` passes against a fresh desktop build (header sequence, collapse with the answer, one entry animation per row, keyboard Allow, replay identical to live), and its screenshots were reviewed in the dark theme.
+- **Not performed.** No run against a real Claude or Codex account: approval correlation is covered by adapter tests with recorded shapes, not a live provider. The web and mobile controllers were built only through the shared renderer, not exercised remotely. The light theme and Windows/Linux rendering were not visually reviewed. Imported history keeps the previous activity group.
+
 ## 2026-10-25 — The first release run, and a retired runner (branch `build/github-release`)
 
 Tagging `v1.0.0` ran the pipeline for the first time. Three of the four platforms packaged; the fourth exposed a workflow bug.

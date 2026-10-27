@@ -1,0 +1,57 @@
+# Tool groups
+
+Status: implemented 2026-10-27; visual design matched to the reference screenshots the same day. Session-view presentation of tool calls, their timing and their approvals.
+
+## What the user sees
+
+A turn reads: the prompt bubble, the agent's preamble, one tool group card per run of consecutive tool calls, then the answer, then the turn footer with "Run again" on the newest finished turn.
+
+- **Header.** Overlapping brand icons of the tools involved (up to four), a muted title ("Using 1 tool" ... "Using 3 tools", "Waiting for approval", "Used 4 tools"), and once the group is done a detail on the right: the tool time ("3.0s"), or the problems ("1 failed" in red, "1 denied", "2 stopped") instead. A chevron points up while open and down while closed, and a thin divider separates header and rows.
+- **Rows.** One per call, appended as calls start. Brand icon, label in the right tense ("Searching issues in arc-ui/web" while running, "Searched issues in arc-ui/web" when done), a short result summary ("4 results", "2 blocked"), the duration, a status mark and a down chevron. A running row shows a ring spinner and a slow shimmer across its muted label; a finished one a green check. Denied, stopped and unreported calls also show the status as text.
+- **Failures.** A failed call reads "Could not query pending migrations" (derived from the formatter's imperative), shows its error on a second line, a red warning circle, and a Retry pill once the turn has finished, on the newest turn, with nothing else running. Providers cannot re-run a single tool call, so Retry sends a visible follow-up turn with the same settings: "Retry the step that failed: query pending migrations. It failed with: ...". A group with a failure stays open after it finishes, so the failure and Retry remain visible. A row expands to its raw arguments, output and error, in monospace; output over 40 lines or 4,000 characters is truncated with "Show more" (capped at 200 KB, beyond which the run details hold the full journal).
+- **Approvals.** A call that needs permission is highlighted on its own row: the action ("Post a message to #release"), a one-line consequence ("Sends as Arc agent to everyone in #release"), an info button that opens the request details, and Deny / Allow. Answering calls `runs.respondToApproval`; the row then continues like any other call. The composer no longer duplicates these: it shows a single pointer with a "Review" button that scrolls to and focuses the request. Approvals of orchestration workers bound to the session keep the composer overlay.
+- **Expansion.** A group is open while active, forced open while it waits for approval, and collapses to its one-line summary when done (when later text, a status note or the end of the turn closes it). The viewer's own toggle is respected afterwards. A finished group seen for the first time (reload, remote viewer) appears collapsed without animating.
+- **Footer.** The newest finished turn shows only "Run again" under the answer (its time is on hover); older turns keep their time.
+- **Motion.** Rows fade in once (180 ms), the body height animates (220 ms), the status icon fades on change (160 ms), running labels shimmer (2.2 s cycle). `prefers-reduced-motion` removes all of it except a slowed spinner.
+- **Icons.** GitHub, Linear and PostgreSQL marks are Simple Icons paths (CC0-1.0) embedded in `icons.ts`; the Slack mark is drawn from its four-color geometry. No icon package was added. Other integrations use Phosphor icons, and unknown MCP servers a plug.
+- **Accessibility.** Headers, row toggles, info, Deny and Allow are buttons; collapsibles carry `aria-expanded`/`aria-controls`; collapsed rows are `inert`; approval requests are announced through a polite live region without taking focus; focus stays on Allow while the answer is in flight and moves to the row when the buttons go away.
+
+## How it is built
+
+```text
+provider SDK/app server
+  -> runtime adapter (packages/runtimes)          RuntimeEvent: tool_request{toolCallId, mcp}, tool_result, ...
+  -> ExecutionService (packages/core)              + approval_request{toolCallId}, approval_resolved; journal observedAt
+  -> ActiveRuns / host transport                   run.event{observedAt}, ActiveRunView.observedAt
+  -> controller (packages/ui)                      records observedAt per event (event-times.ts)
+  -> turn-activity.ts                              RuntimeEvent -> ToolCallEvent -> TurnActivity (pure)
+  -> tool-formatters.ts                            labels, icons, summaries, approval copy (pure)
+  -> tool-group-card.ts                            stateful DOM card patched in place
+```
+
+- `features/turn-activity.ts` defines the backend-agnostic tool-call lifecycle (`ToolCallStarted`, `ToolCallUpdated`, `ToolCallApprovalRequested`, `ToolCallApprovalResolved`, `ToolCallCompleted`, `ToolGroupClosed`, `TurnEnded`), the projection from `RuntimeEvent`, and the reducer. It is not a second wire model: `RuntimeEvent` stays the only persisted and transported form, and this projection is derived from it on every client. Labels are deliberately not part of these events, so improving a formatter improves old journals too.
+- `features/tool-formatters.ts` is the registry. Resolution order: exact MCP tool, MCP server defaults, built-in kind recognized by shape (command, read, edit, search, web, plan, subagent, permissions), then generic fallbacks (`search_issues` reads "Searching issues"; anything else "Ran <tool>: <first argument>"). Formatters see only the provider-neutral MCP identity and common field shapes. To add one: `defaultToolFormatters.registerTool("server", ["tool"], { icon, label, summary, approval })`.
+- `features/tool-group-card.ts` keeps one instance per group in the session view. `session-view.ts` keeps each turn's article and reply container, and `reconcileChildren` no longer moves retained nodes, so a card is never detached while the answer streams (detaching restarts CSS animations).
+
+### Timing
+
+Durations come from host timestamps only, never the viewer's clock. The execution service stamps each event once, uses that stamp for its journal row, and exposes it through `ExecutionHandle.observedAt`; `ActiveRuns` forwards the same value on `run.event` and in `runs.active`. A live view and a journal replay therefore show identical durations. A call's duration is the provider's own `durationMs` when reported (Codex commands and MCP calls), otherwise outcome time minus start time, where the start is the Allow for an approved call. A group's duration is the union of its calls' execution intervals: parallel calls are not double counted, and approval waits and model thinking between calls are excluded.
+
+### Grouping and states
+
+Consecutive calls between two assistant text blocks form one group; thinking stays inside the group, non-blank text or a status note closes it. Calls without provider IDs match results by position, as before. A call is `running`, `awaiting_approval`, `success`, `error`, `denied` (kept even when the provider then reports the refusal as an error result), `interrupted` (the turn stopped or failed), or `incomplete` (the turn completed without reporting it). A pending approval at the end of a turn becomes "Not answered".
+
+## Backend notes and limits
+
+- **Claude Agent SDK.** `canUseTool`'s `toolUseID` now reaches `ApprovalRequest.toolCallId`. MCP tools are recognized from `mcp__<server>__<tool>`. Claude reports a call while its input is still streaming, again when complete, and in the final message, with no separate "execution started" signal; the start time is re-taken until the input is final, so the duration measures execution rather than the model writing arguments, but it is an approximation of when the SDK began running the tool.
+- **Codex app server.** `item/started` and `item/completed` bracket each call cleanly. Command and file-change approvals carry `itemId`, now forwarded as `toolCallId`. `item/permissions/requestApproval` is not tied to an item and renders as its own approval row. `mcpToolCall` items provide the MCP identity.
+- **Pi.** There is no Pi runtime adapter in Rack (see `runtime-integration-notes.md`: "Pi integration remains unresearched"), so there is nothing to map. A future Pi adapter only has to emit the existing `RuntimeEvent`s, ideally with `toolCallId`, `mcp` and approval `toolCallId`; the reducer, formatters and card need no change, and unknown Pi tools get the generic labels.
+- **Consequence text** is derived from the call's own arguments. It cannot state facts the call does not carry: the Slack formatter says "to everyone in #release", not "to 48 people", because member counts are not part of a `post_message` call.
+- **Approval modes.** Inline approvals appear only where Rack routes approvals ("Ask"). In "Approve for me" and "Full access" the providers decide natively and no approval row appears.
+- **Imported history** (sessions imported from local Codex/Claude transcripts) keeps the previous compact activity group: those records carry no timing or approval lifecycle.
+
+## Verification
+
+- `packages/ui/src/features/turn-activity.test.ts` and `tool-formatters.test.ts`: grouping, parallel calls, durations, approval transitions (allow, deny, approval before call, approval without call), errors, interruption, positional matching, replay equality, and the release scenario's header sequence and row text.
+- `packages/core/src/execution/service.test.ts`, `packages/host/src/host-api.test.ts`, the Claude and Codex adapter tests: decision journaling and ordering, live/journal timestamp equality, approval correlation and MCP identity.
+- `npm run test:tool-groups` (after `npm run build:desktop`): native Electron check that plays the release scenario (`packages/ui/src/features/fixtures/release-blocker.ts`) through the real host and approval path, answers with the keyboard, asserts header sequence, collapse timing, single row animations, motion durations, row text and durations, details and replay parity, and writes screenshots to `/tmp/rack-tool-groups-*.png`. `npm run demo:tool-groups` opens the same setup for manual use.
