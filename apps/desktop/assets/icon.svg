@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Rack's application icon: three rack units on a graphite tile, each with
+    an emerald status light, for a harness that keeps several agents running.
+    Laid out on Apple's 1024 grid: an 824 body centred with a 100 margin.
+    Rendered to icon.png, icon.icns and icon.ico by scripts/render-icons.mjs.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262a31"/>
+      <stop offset="1" stop-color="#0f1114"/>
+    </linearGradient>
+    <linearGradient id="unit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6f7f8"/>
+      <stop offset="1" stop-color="#d9dde2"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#34d399" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#34d399" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>
+  <!-- A hairline highlight on the upper edge gives the tile some depth. -->
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+
+  <g id="units">
+    <g transform="translate(0 286)">
+      <rect x="252" y="0" width="520" height="116" rx="30" fill="url(#unit)"/>
+      <circle cx="330" cy="58" r="44" fill="url(#glow)"/>
+      <circle cx="330" cy="58" r="19" fill="#10b981"/>
+      <rect x="604" y="40" width="108" height="12" rx="6" fill="#9aa1aa"/>
+      <rect x="604" y="64" width="108" height="12" rx="6" fill="#9aa1aa"/>
+    </g>
+    <g transform="translate(0 454)">
+      <rect x="252" y="0" width="520" height="116" rx="30" fill="url(#unit)"/>
+      <circle cx="330" cy="58" r="44" fill="url(#glow)"/>
+      <circle cx="330" cy="58" r="19" fill="#10b981"/>
+      <rect x="604" y="40" width="108" height="12" rx="6" fill="#9aa1aa"/>
+      <rect x="604" y="64" width="108" height="12" rx="6" fill="#9aa1aa"/>
+    </g>
+    <g transform="translate(0 622)">
+      <rect x="252" y="0" width="520" height="116" rx="30" fill="url(#unit)"/>
+      <circle cx="330" cy="58" r="44" fill="url(#glow)"/>
+      <circle cx="330" cy="58" r="19" fill="#10b981"/>
+      <rect x="604" y="40" width="108" height="12" rx="6" fill="#9aa1aa"/>
+      <rect x="604" y="64" width="108" height="12" rx="6" fill="#9aa1aa"/>
+    </g>
+  </g>
+</svg>

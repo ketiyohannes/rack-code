@@ -55,6 +55,8 @@ const paths = {
   host: join(bundleDirectory, "host.mjs"),
   preload: join(bundleDirectory, "preload.cjs"),
   index: join(bundleDirectory, "renderer", "index.html"),
+  /** Window icon on Linux and the Dock icon in development; packaged macOS and Windows use the bundle icon. */
+  icon: join(bundleDirectory, "icon.png"),
 };
 
 let host: HostProcess | undefined;
@@ -70,7 +72,7 @@ function broadcast(event: HostEvent): void {
 }
 
 function openWindow(): void {
-  createMainWindow({ preloadPath: paths.preload, indexPath: paths.index });
+  createMainWindow({ preloadPath: paths.preload, indexPath: paths.index, iconPath: paths.icon });
 }
 
 /**
@@ -168,7 +170,7 @@ async function handleTimelineWindow(event: IpcMainInvokeEvent, request: unknown)
   catch { return { ok: false, error: { code: "invalid_input", name: "InvalidTimelineWindow", message: "Invalid snapshot window request." } }; }
   const result = await handleInvoke(event, "timeline.snapshot", { scope: target.scope, contextId: target.contextId, checkpointId: target.checkpointId });
   if (!result.ok) return result;
-  createMainWindow({ preloadPath: paths.preload, indexPath: paths.index, timeline: target });
+  createMainWindow({ preloadPath: paths.preload, indexPath: paths.index, iconPath: paths.icon, timeline: target });
   return { ok: true, value: null };
 }
 
@@ -287,6 +289,9 @@ app.on("activate", () => {
 
 void app.whenReady().then(() => {
   if (!ownsInstance) { app.quit(); return; }
+  // A packaged app takes its Dock icon from the bundle (icon.icns); an
+  // unpackaged run would otherwise show Electron's.
+  if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(paths.icon);
   ipcMain.handle(IPC_CHANNELS.windowAction, (event, action: unknown) => {
     if (!isTrustedSender(event)) return;
     const parsed = oneOf(WINDOW_ACTIONS)(action, "action");

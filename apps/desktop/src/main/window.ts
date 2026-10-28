@@ -15,6 +15,8 @@ import { performWindowAction } from "./window-actions.js";
 export interface MainWindowOptions {
   readonly preloadPath: string;
   readonly indexPath: string;
+  /** PNG used as the window icon where the platform reads it from the window (Linux). */
+  readonly iconPath?: string;
   /** A standalone historical viewer, with the same sandbox and fixed bundled page. */
   readonly timeline?: TimelineWindowRequest;
 }
@@ -29,6 +31,8 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     // the wrong color before the page paints.
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#121417" : "#f5f5f3",
     title: options.timeline === undefined ? "Rack" : "Timeline snapshot",
+    // macOS and Windows take the icon from the packaged bundle or executable.
+    ...(process.platform === "linux" && options.iconPath !== undefined ? { icon: options.iconPath } : {}),
     // macOS: content extends under an inset title bar; the sidebar reserves
     // space for the window controls and acts as the drag region.
     titleBarStyle: process.platform === "darwin" ? (options.timeline ? "default" : "hiddenInset") : "hidden",

@@ -10,6 +10,8 @@
  *   renderer/styles.css     copied as-is from `@rack/ui`
  *   renderer/fonts/*.woff2  Inter, IBM Plex Mono and Geist Mono, so the strict
  *                           CSP never needs a remote font host
+ *   icon.png                the app icon (assets/icon.png), for the Linux window
+ *                           and the development Dock
  *
  * Phosphor icon SVGs are imported by the renderer and inlined as text.
  *
@@ -96,6 +98,7 @@ const FONTS: ReadonlyArray<readonly [string, string]> = [
 
 async function copyStatic(): Promise<void> {
   await mkdir(join(outDirectory, "renderer", "fonts"), { recursive: true });
+  await copyFile(join(appRoot, "assets", "icon.png"), join(outDirectory, "icon.png"));
   await copyFile(join(repositoryRoot, "node_modules/@xterm/xterm/css/xterm.css"), join(outDirectory, "renderer/xterm.css"));
   for (const file of ["index.html", "styles.css"]) {
     await copyFile(join(uiSource, file), join(outDirectory, "renderer", file));
