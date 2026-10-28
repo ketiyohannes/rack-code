@@ -584,3 +584,47 @@ test("late workspace inspection cannot replace the newly selected session's dire
   assert.equal(store.get().selection.sessionId, other.id);
   assert.equal(store.get().workspace?.path, "/other-worktree");
 });
+
+test("queueing sends the composer's parameters as stored settings and adopts an immediate start", async () => {
+  const store = new ImmediateStore();
+  const calls: Array<[string, unknown]> = [];
+  const started = { ...run, id: "queued-run", status: "queued" as const };
+  const host = { onEvent: () => () => {}, call: async (command: string, params: unknown) => {
+    calls.push([command, params]);
+    if (command === "queue.add") return { item: { id: "item" }, started: { run: started } };
+    return {};
+  } } as unknown as HostClient;
+  const controller = new Controller(host, store);
+  assert.equal(await controller.queueMessage({ sessionId: "session", projectId: "project", prompt: "Next", attachmentIds: ["file"], providerId: "fake", runtimeId: "runtime", model: "m", permissionMode: "ask", skillIds: ["skill"] }), true);
+  assert.deepEqual(calls[0], ["queue.add", { sessionId: "session", prompt: "Next", attachmentIds: ["file"], settings: { providerId: "fake", runtimeId: "runtime", model: "m", permissionMode: "ask", skillIds: ["skill"] } }]);
+  assert.equal(store.get().live["queued-run"]?.run.id, "queued-run");
+  // Plan implementations cannot wait in the queue.
+  assert.equal(await controller.queueMessage({ sessionId: "session", prompt: "", providerId: "fake", runtimeId: "runtime", permissionMode: "ask", approvedPlanRunId: "plan" }), false);
+  assert.equal(calls.length, 1);
+});
+
+test("editing a message adopts the new turn and explains a busy session", async () => {
+  const store = new ImmediateStore();
+  let busy = false;
+  const edited = { ...run, id: "edited", editOfRunId: run.id, status: "queued" as const };
+  const { HostCommandError } = await import("@rack/contracts");
+  const host = { onEvent: () => () => {}, call: async (command: string) => {
+    if (command === "runs.edit") {
+      if (busy) throw new HostCommandError({ code: "session_busy", name: "HostOperationError", message: "busy" });
+      return { run: edited };
+    }
+    if (command === "sessions.get") return { ...session, supersededRunIds: [run.id] };
+    if (command === "runs.list") return [run, edited];
+    return [];
+  } } as unknown as HostClient;
+  const controller = new Controller(host, store);
+  // An edit whose model left the catalog is refused before contacting the host.
+  assert.equal(await controller.editMessage(run, "Reworded"), false);
+  assert.match(store.get().notice?.message ?? "", /no longer available/);
+  store.update((state) => ({ ...state, models: [{ id: "m", providerId: "fake", runtimeId: "runtime", label: "M", description: "", isDefault: true, providerName: "Fake", accountIds: [] }] }));
+  assert.equal(await controller.editMessage(run, "Reworded"), true);
+  assert.equal(store.get().live["edited"]?.run.editOfRunId, run.id);
+  busy = true;
+  assert.equal(await controller.editMessage(run, "Again"), false);
+  assert.match(store.get().notice?.message ?? "", /Stop the current run before editing/);
+});

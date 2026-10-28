@@ -66,3 +66,21 @@ test("standalone chats and workflow/skills fields are validated without granting
   assert.throws(() => validateCommandParams("skills.list", { sessionId: "chat", runtimeId: "codex-app-server", accountId: "account", path: "/forged" }), ContractValidationError);
   assert.throws(() => validateCommandParams("runs.start", { sessionId: "chat", providerId: "codex", runtimeId: "codex-app-server", prompt: "Help", permissionMode: "ask", interactionMode: "invalid" }), ContractValidationError);
 });
+
+test("queue and edit commands validate their parameters", () => {
+  const settings = { providerId: "codex", runtimeId: "codex-app-server", permissionMode: "ask", skillIds: ["known"] };
+  assert.deepEqual(validateCommandParams("queue.add", { sessionId: "s", prompt: "Next", settings }), { sessionId: "s", prompt: "Next", settings });
+  // Attachment-only items have an empty prompt; core requires text or files.
+  assert.deepEqual(validateCommandParams("queue.add", { sessionId: "s", prompt: "", attachmentIds: ["f"], settings }).attachmentIds, ["f"]);
+  assert.throws(() => validateCommandParams("queue.add", { sessionId: "s", prompt: "x", settings: { ...settings, permissionMode: "everything" } }), ContractValidationError);
+  // Plan approvals and sessions cannot be smuggled into stored settings.
+  assert.throws(() => validateCommandParams("queue.add", { sessionId: "s", prompt: "x", settings: { ...settings, approvedPlanRunId: "r" } }), ContractValidationError);
+  assert.throws(() => validateCommandParams("queue.add", { sessionId: "s", prompt: "x" }), ContractValidationError);
+  assert.deepEqual(validateCommandParams("queue.update", { sessionId: "s", itemId: "i", prompt: "Edited" }), { sessionId: "s", itemId: "i", prompt: "Edited" });
+  assert.deepEqual(validateCommandParams("queue.remove", { sessionId: "s", itemId: "i" }), { sessionId: "s", itemId: "i" });
+  assert.deepEqual(validateCommandParams("queue.sendNow", { sessionId: "s", itemId: "i" }), { sessionId: "s", itemId: "i" });
+  assert.deepEqual(validateCommandParams("queue.resume", { sessionId: "s" }), { sessionId: "s" });
+  assert.throws(() => validateCommandParams("queue.resume", { sessionId: "s", itemId: "i" }), ContractValidationError);
+  assert.deepEqual(validateCommandParams("runs.edit", { runId: "r", prompt: "Reworded" }), { runId: "r", prompt: "Reworded" });
+  assert.throws(() => validateCommandParams("runs.edit", { runId: "r", prompt: "x", model: "other" }), ContractValidationError);
+});

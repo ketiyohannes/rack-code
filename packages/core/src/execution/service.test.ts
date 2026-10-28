@@ -181,11 +181,17 @@ test("executes a run end to end, persists transcript and journal, and releases t
 
   assert.equal(run.status, "completed");
   assert.equal(run.result, "done");
-  assert.deepEqual(events.map((event) => event.type), ["tool_result", "message_delta", "completed"]);
+  // The decision is a run event, delivered before the call's outcome.
+  assert.deepEqual(events.map((event) => event.type), ["approval_resolved", "tool_result", "message_delta", "completed"]);
+  assert.deepEqual(events[0], { type: "approval_resolved", approvalId: approval.value.request.id, decision: "allow" });
   assert.equal((await fixture.sessions.get(fixture.session.id)).messages.length, 2);
   assert.deepEqual(fixture.projects.activeWriters(fixture.project.id), []);
   const journal = await fixture.executions.listJournal(run.id);
   assert.ok(journal.some((entry) => entry.type === "approval_request"));
+  // Replay sees the same decision, journaled ahead of the result.
+  const types = journal.map((entry) => entry.type);
+  assert.ok(types.indexOf("approval_resolved") !== -1 && types.indexOf("approval_resolved") < types.indexOf("tool_result"));
+  assert.deepEqual(journal.find((entry) => entry.type === "approval_resolved")?.payload, events[0]);
   assert.equal(fixture.runtime.started.length, 1);
 });
 
@@ -527,4 +533,66 @@ test("a queued run can be cancelled during host preparation without starting the
   assert.equal((await handle.completed).status, "interrupted");
   assert.deepEqual(fixture.runtime.started, []);
   assert.deepEqual(fixture.projects.activeWriters(fixture.project.id), []);
+});
+
+/** Drains a handle, allowing every approval, and returns the settled run. */
+async function finish(handle: Awaited<ReturnType<ExecutionService["start"]>>) {
+  for await (const event of handle.events) {
+    if (event.type === "approval_request") handle.respondToApproval(event.request.id, "allow");
+  }
+  return handle.completed;
+}
+
+test("an edit replaces the turn and later turns, then starts fresh with only the kept history", async () => {
+  const fixture = await createFixture();
+  const base = { sessionId: fixture.session.id, projectId: fixture.project.id, providerId: "fake", runtimeId: fixture.runtime.runtimeId, permissionMode: "ask" as const };
+  const first = await finish(await fixture.service.start({ ...base, prompt: "first question" }));
+  const second = await finish(await fixture.service.start({ ...base, prompt: "second question" }));
+  const third = await finish(await fixture.service.start({ ...base, prompt: "third question" }));
+  assert.equal(fixture.runtime.resumed.length, 2);
+
+  const edited = await finish(await fixture.service.start({ ...base, prompt: "second, reworded", rewind: { fromRunId: second.id, supersedeIds: ["workflow-1"] } }));
+  assert.equal(edited.editOfRunId, second.id);
+  assert.equal(edited.status, "completed");
+
+  const session = await fixture.sessions.get(fixture.session.id);
+  assert.deepEqual(session.supersededRunIds, [second.id, third.id, "workflow-1"]);
+  // Messages 1..N-1 plus the edited prompt and its reply; nothing from replaced turns.
+  assert.deepEqual(session.messages.map((message) => message.metadata?.["runId"]), [first.id, first.id, edited.id, edited.id]);
+  assert.equal(session.messages[2]?.content, "second, reworded");
+  // The native thread had seen the replaced turns, so the edit started a
+  // fresh thread whose context names the first turn but not the replaced ones.
+  assert.equal(fixture.runtime.resumed.length, 2);
+  const fresh = fixture.runtime.started.at(-1)!;
+  assert.match(fresh.prompt, /first question/);
+  assert.match(fresh.prompt, /second, reworded/);
+  assert.doesNotMatch(fresh.prompt, /second question|third question/);
+  // Replaced runs stay auditable.
+  assert.ok((await fixture.service.listJournal(third.id)).length > 0);
+  assert.equal((await fixture.service.getRun(third.id)).status, "completed");
+});
+
+test("a rejected edit leaves the conversation untouched", async () => {
+  const fixture = await createFixture();
+  const base = { sessionId: fixture.session.id, projectId: fixture.project.id, providerId: "fake", runtimeId: fixture.runtime.runtimeId, permissionMode: "ask" as const };
+  const first = await finish(await fixture.service.start({ ...base, prompt: "first" }));
+  const before = await fixture.sessions.get(fixture.session.id);
+
+  // A start check that fails after the edit was validated (unknown account) must not cut history.
+  await assert.rejects(fixture.service.start({ ...base, accountId: "missing", prompt: "edited", rewind: { fromRunId: first.id } }));
+  // Unknown runs and runs of another conversation are rejected outright.
+  await assert.rejects(fixture.service.start({ ...base, prompt: "edited", rewind: { fromRunId: "missing" } }));
+  const other = await fixture.sessions.create({ id: "session-2", projectId: fixture.project.id });
+  const foreign = await finish(await fixture.service.start({ ...base, sessionId: other.id, prompt: "elsewhere" }));
+  await assert.rejects(fixture.service.start({ ...base, prompt: "edited", rewind: { fromRunId: foreign.id } }), /this conversation/);
+
+  const after = await fixture.sessions.get(fixture.session.id);
+  assert.deepEqual(after.messages, before.messages);
+  assert.deepEqual(after.continuations, before.continuations);
+  assert.equal(after.supersededRunIds, undefined);
+  assert.equal((await fixture.service.listRuns(fixture.session.id)).length, 1);
+
+  // A turn that was already replaced cannot be edited again.
+  await finish(await fixture.service.start({ ...base, prompt: "edited once", rewind: { fromRunId: first.id } }));
+  await assert.rejects(fixture.service.start({ ...base, prompt: "edited twice", rewind: { fromRunId: first.id } }), /already replaced/);
 });

@@ -395,3 +395,39 @@ test("Codex marks a resume of a thread without a rollout as an unavailable conti
   assert.deepEqual(events, [{ type: "failed", error: "no rollout found for thread id stale", reason: "continuation_unavailable" }]);
   assert.equal(requests.includes("turn/start"), false);
 });
+
+test("Codex ties approvals to their item and exposes MCP tool identity", async () => {
+  const requests: unknown[] = [];
+  const responses: unknown[] = [];
+  const messages = [
+    { method: "item/started", params: { item: { type: "mcpToolCall", id: "mcp", server: "github", tool: "search_issues", arguments: { query: "repo:arc-ui/web" }, status: "inProgress" } } },
+    { method: "item/completed", params: { item: { type: "mcpToolCall", id: "mcp", server: "github", tool: "search_issues", status: "completed", result: { content: [] }, durationMs: 1200 } } },
+    { method: "item/started", params: { item: { type: "commandExecution", id: "cmd", command: "rm -rf build" } } },
+    { id: "rpc-approval", method: "item/commandExecution/requestApproval", params: { threadId: "thread", turnId: "turn", itemId: "cmd", command: "rm -rf build", reason: "Deletes build output" } },
+    { id: "rpc-permissions", method: "item/permissions/requestApproval", params: { threadId: "thread", turnId: "turn", permissions: { network: true } } },
+    { method: "item/completed", params: { item: { type: "commandExecution", id: "cmd", status: "completed", exitCode: 0 } } },
+    { method: "turn/completed", params: { turn: { status: "completed" } } },
+  ];
+  const adapter = new CodexRuntimeAdapter(
+    { resolve: async () => ({ environment: {} }) }, { resolve: async () => ({ directory: "/context" }) },
+    { createProcess: () => ({
+      request: async (method) => method === "thread/start" ? { thread: { id: "thread" } } : method === "turn/start" ? { turn: { id: "turn" } } : {},
+      notify: () => {}, respond: (_id, result) => { responses.push(result); }, respondError: () => {}, close: async () => {},
+      nextMessage: async () => { const value = messages.shift(); return value === undefined ? { done: true, value: undefined } : { done: false, value }; },
+    }) },
+  );
+  const events = [];
+  for await (const event of adapter.startRun({ runId: "run", attemptId: "attempt", sessionId: "session", projectPath: "/project", prompt: "test", permissionMode: "ask",
+    account: { accountId: "account", providerId: "codex", credential: { id: "credential", providerId: "codex", method: "native_login" }, runtimeContextId: "context" },
+    signal: new AbortController().signal, requestApproval: async (request) => { requests.push(request); return "allow"; } })) events.push(event);
+
+  const mcp = events.find((event) => event.type === "tool_request" && event.toolCallId === "mcp");
+  assert.deepEqual(mcp?.type === "tool_request" && mcp.mcp, { server: "github", tool: "search_issues", arguments: { query: "repo:arc-ui/web" } });
+  const command = events.find((event) => event.type === "tool_request" && event.toolCallId === "cmd");
+  assert.equal(command?.type === "tool_request" && command.mcp, undefined);
+  // The command approval names its item; the permissions escalation is not tied to one.
+  assert.equal((requests[0] as { toolCallId?: string }).toolCallId, "cmd");
+  assert.equal((requests[0] as { reason?: string }).reason, "Deletes build output");
+  assert.equal("toolCallId" in (requests[1] as object), false);
+  assert.equal(responses.length, 2);
+});

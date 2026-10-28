@@ -1,3 +1,5 @@
+import type { PermissionMode } from "../execution/types.js";
+
 export type SessionId = string;
 
 export type SessionMessageRole = "user" | "assistant" | "system" | "tool";
@@ -40,6 +42,68 @@ export interface NativeContinuationReference {
  */
 export type SessionWorkspaceMode = "shared" | "isolated";
 
+/**
+ * Run settings captured when a message is queued, so a queued message runs
+ * with the composer choices the user made at the time (model, account,
+ * permission, skills) rather than whatever the composer shows later. The
+ * session, project and prompt are supplied separately when the item starts.
+ */
+export interface QueuedRunSettings {
+  readonly providerId: string;
+  readonly runtimeId: string;
+  /** Absent lets account selection choose, as for a normal send. */
+  readonly accountId?: string;
+  readonly model?: string;
+  readonly reasoningEffort?: string;
+  readonly speed?: string;
+  readonly permissionMode: PermissionMode;
+  readonly interactionMode?: "normal" | "plan";
+  readonly skillIds?: readonly string[];
+}
+
+/** A message the user sent while the session was busy, waiting to run. */
+export interface QueuedMessage {
+  readonly id: string;
+  readonly prompt: string;
+  /** Session-owned attachment copies, resolved again when the item starts. */
+  readonly attachmentIds?: readonly string[];
+  readonly settings: QueuedRunSettings;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * Why the queue stopped advancing on its own. The queue only pauses; it
+ * never drops items. A user action (Resume, a manual send or an edit)
+ * clears the pause.
+ * - `run_failed`, `run_interrupted`, `run_unknown`: the turn before the next
+ *   item did not complete cleanly, so continuing could build on a broken or
+ *   unreviewed state.
+ * - `start_failed`: the host could not start the head item (for example its
+ *   model or account is no longer available); `pausedError` explains why.
+ * - `host_restarted`: the app restarted with items waiting; nothing starts
+ *   by itself after a crash or quit.
+ */
+export type QueuePauseReason = "run_failed" | "run_interrupted" | "run_unknown" | "start_failed" | "host_restarted";
+
+export const QUEUE_PAUSE_REASONS: readonly QueuePauseReason[] = ["run_failed", "run_interrupted", "run_unknown", "start_failed", "host_restarted"];
+
+/** Upper bound on waiting messages per session; keeps the record small. */
+export const MAX_QUEUED_MESSAGES = 20;
+
+/** Messages waiting to run in one session, oldest first (FIFO). */
+export interface SessionQueue {
+  readonly items: readonly QueuedMessage[];
+  readonly pausedReason?: QueuePauseReason;
+  /** Display-only detail for `start_failed`. */
+  readonly pausedError?: string;
+  /**
+   * Set by "Send now" while the current run is being cancelled. When that
+   * run settles, this item starts next regardless of how the run ended.
+   */
+  readonly sendNowItemId?: string;
+}
+
 export interface SessionRecord {
   /** Internal worker context; shares its parent workspace and stays out of navigation. */
   readonly parentSessionId?: string;
@@ -59,6 +123,15 @@ export interface SessionRecord {
     readonly nativeSessionId: string;
     readonly importedAt: string;
   };
+  /** Messages waiting to run after the current turn. Absent means empty. */
+  readonly queue?: SessionQueue;
+  /**
+   * Runs (execution run IDs and workflow run IDs) replaced by an edit of an
+   * earlier message. Their journals stay readable for audit, but they are no
+   * longer part of the conversation: clients hide them, and their messages
+   * were removed from `messages`. Absent means none.
+   */
+  readonly supersededRunIds?: readonly string[];
   readonly createdAt: string;
   readonly updatedAt: string;
 }

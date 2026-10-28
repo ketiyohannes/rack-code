@@ -1,6 +1,6 @@
 {
   "name": "rack",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Rack: a coding agent harness. Monorepo root for the shared packages and the applications that run them.",
   "type": "module",
@@ -26,7 +26,10 @@
     "rebuild:native": "electron-rebuild -f -w node-pty",
     "test:desktop-features": "npm run test:desktop-features --workspace @rack/desktop",
     "test:orchestra": "npm run test:orchestra --workspace @rack/desktop",
-    "test:run-changes": "npm run test:run-changes --workspace @rack/desktop"
+    "test:run-changes": "npm run test:run-changes --workspace @rack/desktop",
+    "test:tool-groups": "npm run test:tool-groups --workspace @rack/desktop",
+    "demo:tool-groups": "npm run demo:tool-groups --workspace @rack/desktop",
+    "test:message-queue": "npm run test:message-queue --workspace @rack/desktop"
   },
   "engines": {
     "node": ">=20"

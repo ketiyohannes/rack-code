@@ -7,7 +7,9 @@
  * never hold handles; this class does. It:
  *
  * - drains each handle's events in the background and broadcasts them as
- *   indexed `run.event`s;
+ *   indexed `run.event`s, each stamped with the time the execution service
+ *   journaled it (clients derive tool durations from these stamps, and a
+ *   journal replay reads the same values);
  * - keeps an in-memory copy of every event and every unanswered approval so
  *   a client that (re)connects mid-run can render an exact snapshot;
  * - forwards approval decisions and cancellation to the handle;
@@ -34,6 +36,8 @@ interface ActiveRun {
   readonly sessionId: string;
   run: RunView;
   readonly events: RuntimeEvent[];
+  /** Host observation time of each event, parallel to `events`. */
+  readonly observedAt: string[];
   readonly pendingApprovals: Map<string, ApprovalRequest>;
   readonly pendingQuestions: Map<string, UserQuestionRequest>;
   cancelRequested: boolean;
@@ -49,6 +53,15 @@ export interface ActiveRunsDependencies {
   readonly emit: (event: HostEvent) => void;
   /** Loads the persisted run with attempts; used after status transitions. */
   readonly loadRun: (runId: string) => Promise<RunView>;
+  /** Clock used to stamp observed events; defaults to the system clock. */
+  readonly now?: () => Date;
+  /**
+   * Called once per run after `run.finished` was emitted and the run left
+   * the active set, so the session is no longer busy. The host uses it to
+   * advance the session's message queue. It runs detached from the drain;
+   * errors and rejections are contained and never affect other runs.
+   */
+  readonly onSettled?: (run: RunView) => Promise<void> | void;
 }
 
 export class ActiveRuns {
@@ -67,6 +80,7 @@ export class ActiveRuns {
       sessionId: run.sessionId,
       run,
       events: [],
+      observedAt: [],
       pendingApprovals: new Map(),
       pendingQuestions: new Map(),
       cancelRequested: false,
@@ -85,6 +99,7 @@ export class ActiveRuns {
     return [...this.runs.values()].map((active) => ({
       run: active.run,
       events: [...active.events],
+      observedAt: [...active.observedAt],
       pendingApprovals: [...active.pendingApprovals.values()],
       pendingQuestions: [...active.pendingQuestions.values()],
       cancelRequested: active.cancelRequested,
@@ -186,13 +201,20 @@ export class ActiveRuns {
     try {
       for await (const event of active.handle.events) {
         const index = active.events.length;
+        // Prefer the time the execution service journaled, so this live
+        // stamp equals the one a later journal replay reads.
+        const observedAt = active.handle.observedAt?.(event) ?? (this.dependencies.now?.() ?? new Date()).toISOString();
         active.events.push(event);
+        active.observedAt.push(observedAt);
         if (event.type === "approval_request") {
           active.pendingApprovals.set(event.request.id, event.request);
         }
+        // `respondToApproval` already removed answered approvals; this keeps
+        // the pending set right if a decision reaches the stream another way.
+        if (event.type === "approval_resolved") active.pendingApprovals.delete(event.approvalId);
         if (event.type === "question_request") active.pendingQuestions.set(event.request.id, event.request);
         if (event.type === "question_resolved") active.pendingQuestions.delete(event.requestId);
-        emit({ type: "run.event", runId, index, event });
+        emit({ type: "run.event", runId, index, event, observedAt });
         if (active.observer !== undefined) {
           try { active.observer.observe(event); } catch { /* Optional observers never affect the run. */ }
         }
@@ -230,6 +252,13 @@ export class ActiveRuns {
     // Final observation ("Run settled") after the run is reported finished,
     // including failed and cancelled runs. Awaited so shutdown waits for it.
     await active.observer?.finish().catch(() => undefined);
+    // Follow-up work (the next queued message) starts only after the
+    // observer finished, so Timeline closes this run before the next opens.
+    // Deliberately not awaited: `done` must not include the next run, or a
+    // caller that holds the session's mutation lane while waiting for this
+    // run to stop (a forced `sessions.remove`) would wait on itself.
+    const { onSettled } = this.dependencies;
+    if (onSettled !== undefined) void Promise.resolve().then(() => onSettled(finished)).catch(() => undefined);
   }
 
   private async refresh(active: ActiveRun): Promise<void> {

@@ -19,6 +19,7 @@
  * - usage fields that were not reported stay `undefined`, never zero.
  */
 import type { RuntimeEvent, UserQuestionRequest } from "@rack/contracts/views";
+import { recordObservedAt } from "./event-times.js";
 
 export type TranscriptItem =
   | { readonly kind: "text"; readonly text: string }
@@ -104,7 +105,10 @@ export function applyEvent(state: TranscriptState, event: RuntimeEvent): Transcr
       return { ...state, items };
     }
     case "approval_request":
-      // Approval UI belongs to the composer overlay, not the conversation.
+    case "approval_resolved":
+      // Approvals are not transcript items. The session view shows them on
+      // their tool call (see `turn-activity.ts`); other surfaces use the
+      // composer overlay driven by the host's pending list.
       return state;
     case "native_session":
       // Diagnostic association only; shown in run details, not the transcript.
@@ -158,12 +162,18 @@ function findLastIndex<T>(items: readonly T[], predicate: (item: T) => boolean):
   return -1;
 }
 
-/** Rebuild persisted runtime activity without treating lifecycle journal rows as tools. */
+/**
+ * Rebuild persisted runtime activity without treating lifecycle journal rows
+ * as tools. Each event's journal `observedAt` is recorded (see
+ * `event-times.ts`) so replayed turns show the same durations as live ones.
+ */
 export function eventsFromJournal(entries: readonly import("@rack/contracts/views").JournalEntryView[]): readonly RuntimeEvent[] {
   return [...entries].sort((a, b) => a.sequence - b.sequence).flatMap((entry) => {
     if (entry.type === "run_started" || entry.type === "attempt_started" || entry.type === "run_status") return [];
     const payload = entry.payload;
-    return typeof payload === "object" && payload !== null && "type" in payload && payload.type === entry.type
-      ? [payload as RuntimeEvent] : [];
+    if (!(typeof payload === "object" && payload !== null && "type" in payload && payload.type === entry.type)) return [];
+    const event = payload as RuntimeEvent;
+    recordObservedAt(event, entry.observedAt);
+    return [event];
   });
 }

@@ -81,11 +81,14 @@ live view of that run:
   pending input.
 - Every agent execution in order, as a collapsible card showing its status,
   name, the model it uses (with reasoning effort when set) and its tool-call
-  count. Inside, its tool calls form a waterfall along a rail: each row shows a
-  status mark (spinner, check, warning or stop), a readable title and its
-  command/path target. Rows that arrive together drop in staggered. While the
-  agent works without a tool in flight, a shimmering "Working…" row shows.
-  At most the newest 60 rows are shown per agent, with a count of older ones.
+  count. Inside, its tool calls use the transcript's own tool rows
+  (`ToolCallList`, updated 2026-10-28): brand and file-type icons on a rail,
+  labels in the right tense, summaries and times, the arc spinner, check and
+  warning marks, consecutive calls sharing an icon merged into one expandable
+  row, rows dropping in staggered, and a shimmering "Working…" row while the
+  agent works without a tool in flight. Approval rows show the waiting mark;
+  they are answered on the transcript row. At most the newest 60 items are
+  shown per agent, with a count of older calls.
 
 Running agents start open. When an agent settles it collapses with an animated
 height transition, unless the user opened or closed it explicitly; that choice
@@ -112,9 +115,18 @@ siblings. A stopped or failed worker does not count as a successful stage.
 Workers release native process resources on settlement; their execution
 journals and results remain.
 
-The main chat displays one workflow turn with agent progress and the coordinator's
-final response. Timeline also has an Agent activity section linking to workflow
-supervision. This section is independent of Git snapshot capture and works in
+The main chat shows a workflow turn exactly like an ordinary turn (updated
+2026-10-27): the same prompt bubble, then every worker's activity in start order
+(thinking, tool group cards with timing, worker text), then the coordinator's
+answer. The only addition is an indicator under the prompt naming the workflow;
+selecting it opens the run in Orchestration. Worker tool approvals are answered
+inline on the worker's tool row like a normal turn's (the panel's **Review** and
+the composer's pointer focus that row); workflow approval gates stay on the
+composer and in this panel. Worker activity streams live from the host and, for
+settled workers, is loaded from their journals, so a reload or another device
+shows the same turn. Workers stay attributed for assistive technology through a
+labelled group with no visual box. Timeline also has an Agent activity section
+linking to workflow supervision. This section is independent of Git snapshot capture and works in
 standalone chats. Existing Git history and recording behavior remain separate.
 
 The panel fits the 260 px minimum sidebar: titles, models and targets truncate

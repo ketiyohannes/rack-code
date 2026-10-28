@@ -1,5 +1,5 @@
 import { isWorkflowActive, type WorkflowRun } from "@rack/features/orchestration/types";
-import { workflowStatusLabel } from "./orchestra-panel.js";
+import { sessionWorkerRunIds } from "./orchestra-state.js";
 import { createOpenInButton } from "../components/open-in.js";
 import { openModal } from "../components/modal.js";
 import { bindContentMenu } from "../components/context-menu.js";
@@ -11,13 +11,14 @@ import { selectionQuestion } from "./side-chat-prompt.js";
  * - the prompt is a right-aligned bubble; long prompts are clipped with a
  *   "Show full message" toggle;
  * - the reply is plain text in the page (no bubble), rendered as Markdown.
- *   Live and persisted event folds show streamed text, readable thinking
- *   panels, and consecutive activity (tool calls, outputs, and thinking
- *   between them) compacted into one collapsible group. Each call and trace
- *   keeps its own details inside the group. Completed turns keep
- *   their activity after reload; the saved assistant message is a fallback;
- * - pending approvals are not part of the transcript. The composer renders
- *   them in an overlay above the prompt (see `composer.ts`);
+ *   Live and persisted event folds (`turn-activity.ts`) show streamed text,
+ *   readable thinking panels, and each run of consecutive tool calls as one
+ *   tool group card (`tool-group-card.ts`) with per-call rows, timing and
+ *   expandable details. Completed turns keep their activity after reload;
+ *   the saved assistant message is a fallback;
+ * - a pending approval for one of this session's calls is answered on that
+ *   call's row inside its tool group; the composer only points to it;
+ * - the latest finished turn offers "Run again";
  * - the quiet footer shows only the date and time; active runs are stopped
  *   from the composer.
  *
@@ -41,15 +42,20 @@ import { formatTime, h, replace, shortId } from "../dom.js";
 import { icon } from "../icons.js";
 import { renderMarkdown, type MarkdownActions } from "../markdown.js";
 import type { AppState, Store } from "../store.js";
-import { type TranscriptItem, type TranscriptState } from "../transcript.js";
-import { reconcileChildren, TranscriptCache } from "../render-cache.js";
+import { type TranscriptItem } from "../transcript.js";
+import { reconcileChildren, TurnActivityCache } from "../render-cache.js";
+import { ToolGroupCard, type RetryRequest } from "./tool-group-card.js";
+import type { TurnActivity } from "./turn-activity.js";
 import { accountLabel, isActiveStatus } from "./run-format.js";
 import { importedTool, presentTool } from "./tool-presentation.js";
 import { collectRunChanges, type RunFileChange } from "./run-changes.js";
 import { renderFileDiff, renderFileRow } from "./changes-view.js";
 import { formatAttachmentSize } from "./attachments.js";
-import { compacts, groupConsecutiveActivity, type ActivityItem } from "./tool-groups.js";
+import { compacts, type ActivityItem } from "./tool-groups.js";
 import { renderWorkspaceChip } from "./workspace.js";
+import { visibleRuns as conversationRuns, visibleWorkflowRuns, supersededRunIds, canEditTurn, turnsReplacedByEdit } from "./conversation-history.js";
+import { createMessageEditor, type MessageEditor } from "./message-editor.js";
+import { activeWorkflow } from "./orchestra-state.js";
 
 /** Prompts longer than this (characters or lines) start clipped. */
 const LONG_PROMPT_CHARS = 600;
@@ -65,6 +71,27 @@ interface ViewMemory {
   readonly selectedChanges: Map<string, string>;
   /** Inline/split diff choice shared by every reply's changes card. */
   readonly splitChanges: { value: boolean };
+  /** Tool group cards by `<runId>:<groupId>`, kept so redraws patch rather than rebuild them. */
+  readonly cards: Map<string, ToolGroupCard>;
+  /**
+   * Each turn's article and reply container, by run ID. Kept across redraws
+   * so a streaming reply is patched in place and its tool group cards are
+   * never detached (detaching restarts their animations).
+   */
+  readonly turnNodes: Map<string, { readonly article: HTMLElement; readonly reply: HTMLElement }>;
+  /** Each workflow worker's activity wrapper, by worker ID, kept for the same reason. */
+  readonly workerNodes: Map<string, HTMLElement>;
+  /** Worker runs whose journals were already requested, so a redraw does not re-request them. */
+  readonly requestedActivity: Set<string>;
+  /** The open inline editor for an earlier message, kept across redraws so its draft and focus survive. */
+  readonly editor: { current: MessageEditor | undefined };
+}
+
+/** How a turn's message offers editing. Absent when the turn cannot be edited at all. */
+interface PromptEdit {
+  /** Why Edit is unavailable right now (a turn running): its tooltip and accessible description. */
+  readonly blocked: string | undefined;
+  readonly open: () => void;
 }
 
 export function mountSessionView(root: HTMLElement, header: HTMLElement, store: Store, controller: Controller): void {
@@ -88,9 +115,10 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     ];
   });
 
-  const memory: ViewMemory = { expandedPrompts: new Set(), openTools: new Set(), openToolGroups: new Set(), selectedChanges: new Map(), splitChanges: { value: false } };
+  const memory: ViewMemory = { expandedPrompts: new Set(), openTools: new Set(), openToolGroups: new Set(), selectedChanges: new Map(), splitChanges: { value: false },
+    cards: new Map(), turnNodes: new Map(), workerNodes: new Map(), requestedActivity: new Set(), editor: { current: undefined } };
   let current: AppState | undefined;
-  const folds = new TranscriptCache();
+  const folds = new TurnActivityCache();
   const turns = new Map<string, { signature: readonly unknown[]; node: HTMLElement }>();
   let importedCache: { messages: readonly SessionMessageView[]; nodes: Node[] } | undefined;
   let visibleRuns = 50;
@@ -100,13 +128,60 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     if (current !== undefined) draw(current, false);
   };
   const fold = (id: string, events: readonly RuntimeEvent[]) => folds.fold(id, events);
+  const openEditor = (run: RunView) => {
+    memory.editor.current = createMessageEditor({
+      runId: run.id, prompt: run.prompt, attachmentCount: run.attachments?.length ?? 0,
+      save: async (text) => {
+        const accepted = await controller.editMessage(run, text);
+        if (accepted) {
+          memory.editor.current = undefined;
+          rerender();
+          // The edited turn is gone; continue where the new turn is composed.
+          root.ownerDocument.querySelector<HTMLElement>(".prompt-input")?.focus({ preventScroll: true });
+        }
+        return accepted;
+      },
+      cancel: () => {
+        memory.editor.current = undefined;
+        rerender();
+        transcript.querySelector<HTMLElement>(`.turn[data-run-id="${CSS.escape(run.id)}"] .prompt-edit`)?.focus();
+      },
+    });
+    rerender();
+    memory.editor.current.focus();
+  };
   const renderCachedTurn = (run: RunView, state: AppState): HTMLElement => {
     const live = state.live[run.id];
-    const signature = [run, live, state.transcripts[run.id], state.accounts, state.session?.messages];
+    const latest = latestRunId(state) === run.id;
+    const busy = sessionBusy(state);
+    const blocked = editBlockedReason(state);
+    const editable = live === undefined && canEditTurn(state, run);
+    const editing = memory.editor.current?.runId === run.id;
+    const signature = [run, live, state.transcripts[run.id], state.accounts, state.session?.messages, latest, busy, editable, blocked];
     const cached = turns.get(run.id);
-    if (cached && signature.every((value, index) => value === cached.signature[index])) return cached.node;
-    const node = renderTurn(run, state, controller, fold, memory, rerender);
+    // A turn with an open editor always redraws: how many turns a save
+    // replaces depends on the rest of the conversation.
+    if (!editing && cached && signature.every((value, index) => value === cached.signature[index])) return cached.node;
+    const node = renderTurn(run, state, controller, fold, memory, rerender, { latest, busy },
+      editable ? { blocked, open: () => openEditor(run) } : undefined);
     turns.set(run.id, { signature, node });
+    return node;
+  };
+  const workflowTurns = new Map<string, { signature: readonly unknown[]; node: HTMLElement }>();
+  const requestActivity = (runIds: readonly string[]) => {
+    const fresh = runIds.filter((id) => !memory.requestedActivity.has(id));
+    if (fresh.length === 0) return;
+    for (const id of fresh) memory.requestedActivity.add(id);
+    void controller.loadSessionActivity(fresh);
+  };
+  /** Workflow turns redraw only when the run record, a worker's events or the saved answer changed. */
+  const renderCachedWorkflow = (run: WorkflowRun, state: AppState): HTMLElement => {
+    const signature = [run, state.session?.messages, ...run.workers.flatMap((worker) => worker.runId === undefined ? []
+      : [state.live[worker.runId], state.transcripts[worker.runId]])];
+    const cached = workflowTurns.get(run.id);
+    if (cached && signature.length === cached.signature.length && signature.every((value, index) => value === cached.signature[index])) return cached.node;
+    const node = renderWorkflowTurn(run, state, controller, fold, memory, rerender, requestActivity);
+    workflowTurns.set(run.id, { signature, node });
     return node;
   };
   const renderCachedHistory = (messages: readonly SessionMessageView[], state: AppState): Node[] => {
@@ -131,14 +206,36 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   };
   transcript.addEventListener("scroll", updateChrome, { passive: true });
 
+  // Notices and queued messages float above the composer, over the end of
+  // the transcript. Reserve their height as bottom padding so the newest
+  // output never hides under them, and keep following the end if the view
+  // was there. The composer mounts after this view, hence the frame delay.
+  requestAnimationFrame(() => {
+    const overlays = root.ownerDocument.querySelector(".composer-overlays");
+    if (overlays === null || typeof ResizeObserver === "undefined") return;
+    new ResizeObserver(() => {
+      const height = Math.ceil(overlays.getBoundingClientRect().height);
+      const space = height === 0 ? "0px" : `${height + 8}px`;
+      if (transcript.style.getPropertyValue("--composer-overlay-space") === space) return;
+      const follow = isAtEnd();
+      transcript.style.setProperty("--composer-overlay-space", space);
+      if (follow) transcript.scrollTop = transcript.scrollHeight;
+      updateChrome();
+    }).observe(overlays);
+  });
+
   function draw(state: AppState, jumpToEnd: boolean): void {
     // Keep following streamed output only when the user is already at the end.
     const follow = jumpToEnd || isAtEnd();
     const scrollTop = transcript.scrollTop;
     const children = renderTranscript(state, controller, fold, memory, rerender,
-      (run) => renderCachedTurn(run, state), (messages) => renderCachedHistory(messages, state), visibleRuns);
-    const hasEarlier = state.runs.length > visibleRuns || (state.session?.messages.filter((message) => message.metadata?.["imported"] === "true").length ?? 0) > visibleMessages;
+      (run) => renderCachedTurn(run, state), (messages) => renderCachedHistory(messages, state), visibleRuns,
+      (run) => renderCachedWorkflow(run, state));
+    const hasEarlier = conversationRuns(state).length > visibleRuns || (state.session?.messages.filter((message) => message.metadata?.["imported"] === "true").length ?? 0) > visibleMessages;
     reconcileChildren(transcript, hasEarlier ? [older, ...children] : children);
+    // The edited turn left the conversation (replaced in another window, or
+    // the session changed); its editor goes with it.
+    if (memory.editor.current !== undefined && !transcript.contains(memory.editor.current.element)) memory.editor.current = undefined;
     transcript.scrollTop = follow ? transcript.scrollHeight : scrollTop;
     const ids = [...transcript.querySelectorAll<HTMLElement>(".turn")].map((turn) => turn.dataset["runId"] ?? turn.id).join("|");
     if (rail.dataset["turns"] !== ids) { renderRail(rail, transcript); rail.dataset["turns"] = ids; }
@@ -151,13 +248,13 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
 
   let lastSessionId: string | undefined;
   store.watch(
-    (state) => [state.orchestra,state.page, state.session, state.selection.sessionId, state.selection.projectId, state.runs, state.transcripts, state.accounts, state.projects, ...Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId)],
+    (state) => [state.orchestra,state.page, state.session, state.selection.sessionId, state.selection.projectId, state.runs, state.transcripts, state.accounts, state.projects, ...((workers) => Object.values(state.live).filter((live) => live.run.sessionId === state.selection.sessionId || workers.has(live.run.id)))(sessionWorkerRunIds(state))],
     (_slice, state) => {
       current = state;
       const sessionChanged = state.session?.id !== lastSessionId;
       if (sessionChanged || state.page !== "chat") closeContentMenu();
       lastSessionId = state.session?.id;
-      if (sessionChanged) { turns.clear(); folds.clear(); importedCache = undefined; visibleRuns = 50; visibleMessages = 100; }
+      if (sessionChanged) { turns.clear(); workflowTurns.clear(); folds.clear(); memory.cards.clear(); memory.turnNodes.clear(); memory.workerNodes.clear(); memory.requestedActivity.clear(); memory.editor.current = undefined; importedCache = undefined; visibleRuns = 50; visibleMessages = 100; }
       if (state.page === "chat" && !document.hidden) draw(state, sessionChanged);
     },
   );
@@ -199,12 +296,13 @@ function renderHeader(session: SessionView | undefined, projects: readonly Proje
 function renderTranscript(
   state: AppState,
   controller: Controller,
-  fold: (id: string, events: readonly RuntimeEvent[]) => TranscriptState,
+  fold: (id: string, events: readonly RuntimeEvent[]) => TurnActivity,
   memory: ViewMemory,
   rerender: () => void,
   renderRun: (run: RunView) => HTMLElement,
   renderHistory: (messages: readonly SessionMessageView[]) => Node[],
   visibleRuns: number,
+  renderWorkflow: (run: WorkflowRun) => HTMLElement,
 ): Node[] {
   const session = state.session;
   if (session === undefined || state.selection.sessionId === undefined) {
@@ -228,11 +326,13 @@ function renderTranscript(
   }
 
   // Live runs of this session that the persisted list does not contain yet.
+  // Turns replaced by an edit are left out (see conversation-history.ts).
+  const superseded = supersededRunIds(state);
   const liveOnly = Object.values(state.live)
     .map((live) => live.run)
-    .filter((run) => run.sessionId === session.id && !state.runs.some((stored) => stored.id === run.id));
-  const runs = [...state.runs, ...liveOnly];
-  const workflowRuns = state.orchestra.runs.filter((run) => run.sessionId === session.id);
+    .filter((run) => run.sessionId === session.id && !superseded.has(run.id) && !state.runs.some((stored) => stored.id === run.id));
+  const runs = [...conversationRuns(state), ...liveOnly];
+  const workflowRuns = visibleWorkflowRuns(state, session.id);
   const imported = session.messages.filter((message) => message.metadata?.["imported"] === "true");
   if (runs.length === 0 && imported.length === 0 && workflowRuns.length === 0) {
     return [session.projectId === undefined
@@ -243,7 +343,7 @@ function renderTranscript(
     ...(session.importSource === undefined ? [] : [h("div", { class: "import-history-note note" }, icon("database"),
       `Imported from ${session.importSource.providerName}. Continuing uses recent conversation context in a new runtime session; the original remains unchanged.`)]),
     ...renderHistory(imported),
-    ...[...runs.map((run) => ({ createdAt: run.createdAt, render: () => renderRun(run) })), ...workflowRuns.map((run) => ({ createdAt: run.createdAt, render: () => renderWorkflowTurn(run, state, controller) }))]
+    ...[...runs.map((run) => ({ createdAt: run.createdAt, render: () => renderRun(run) })), ...workflowRuns.map((run) => ({ createdAt: run.createdAt, render: () => renderWorkflow(run) }))]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(-visibleRuns).map((entry) => entry.render()),
   ];
 }
@@ -289,33 +389,109 @@ function renderImportedHistory(messages: readonly SessionMessageView[], memory: 
   return nodes;
 }
 
+/** Run ID of the session's newest turn, live or stored; replaced turns never count. */
+function latestRunId(state: AppState): string | undefined {
+  const sessionId = state.session?.id;
+  const superseded = supersededRunIds(state);
+  const runs = [...conversationRuns(state), ...Object.values(state.live).map((live) => live.run).filter((run) => run.sessionId === sessionId && !superseded.has(run.id))];
+  return runs.reduce<RunView | undefined>((latest, run) => latest === undefined || run.createdAt > latest.createdAt ? run : latest, undefined)?.id;
+}
+
+/** Why an earlier message cannot be edited right now, or undefined when it can. */
+function editBlockedReason(state: AppState): string | undefined {
+  if (state.host.status !== "ready") return "Rack is not connected to its host right now.";
+  if (sessionBusy(state) || activeWorkflow(state) !== undefined) return "Stop the current turn before editing an earlier message.";
+  if (state.orchestra.generations?.some((entry) => entry.sessionId === state.session?.id)) return "Finish or cancel the workflow designer before editing a message.";
+  return undefined;
+}
+
+/** Whether this session has a run the host is still executing. */
+function sessionBusy(state: AppState): boolean {
+  return Object.values(state.live).some((live) => live.run.sessionId === state.session?.id && isActiveStatus(live.run.status));
+}
+
+/** Everything a run's reply needs to render its activity. */
+interface ActivityContext {
+  readonly runId: string;
+  /** The host is executing the run (spinners, Using..., actionable approvals). */
+  readonly running: boolean;
+  readonly memory: ViewMemory;
+  readonly actions: MarkdownActions;
+  readonly pendingApprovalIds: ReadonlySet<string>;
+  readonly respond: (approvalId: string, decision: "allow" | "deny") => Promise<void>;
+  readonly canRetry: boolean;
+  readonly retry?: (request: RetryRequest) => void;
+}
+
+/**
+ * A run's activity in reply order: text, thinking and status items, and one
+ * tool group card per run of consecutive tool calls. Shared by ordinary turns
+ * and by each worker of a workflow turn, so both read identically. Cards are
+ * kept in `memory.cards` by run and group so redraws patch them in place.
+ */
+function renderActivity(activity: TurnActivity, context: ActivityContext): Node[] {
+  const { runId, memory, actions } = context;
+  const folded = activity.transcript;
+  const nodes: Node[] = [];
+  for (const segment of activity.segments) {
+    if (segment.kind === "item") {
+      nodes.push(renderItem(folded.items[segment.index]!, `${runId}:${segment.index}`, memory, actions, context.running));
+      continue;
+    }
+    const group = activity.groups[segment.groupId];
+    if (group === undefined) continue;
+    const key = `${runId}:${segment.groupId}`;
+    let card = memory.cards.get(key);
+    if (card === undefined) {
+      card = new ToolGroupCard({ respond: context.respond, ...(context.retry === undefined ? {} : { retry: context.retry }) });
+      memory.cards.set(key, card);
+    }
+    card.update({
+      runId, group, calls: activity.calls, live: context.running, pendingApprovalIds: context.pendingApprovalIds, canRetry: context.canRetry,
+      renderThought: (index) => {
+        const item = folded.items[index];
+        return item?.kind !== "thinking" ? undefined
+          : { signature: `${item.format ?? ""}:${item.text.length}`, render: () => thinkingLine(item.text, item.format, actions) };
+      },
+    });
+    nodes.push(card.element);
+  }
+  return nodes;
+}
+
 function renderTurn(
   stored: RunView,
   state: AppState,
   controller: Controller,
-  fold: (id: string, events: readonly RuntimeEvent[]) => TranscriptState,
+  fold: (id: string, events: readonly RuntimeEvent[]) => TurnActivity,
   memory: ViewMemory,
   rerender: () => void,
+  position: { readonly latest: boolean; readonly busy: boolean },
+  edit?: PromptEdit,
 ): HTMLElement {
   const live = state.live[stored.id];
   const run = live?.run ?? stored;
   const account = state.accounts.find((candidate) => candidate.id === run.accountId);
   const actions = markdownActions(controller);
+  const running = live !== undefined && isActiveStatus(run.status);
 
   const reply: Node[] = [];
   let copyText = "";
   const events = live?.events ?? state.transcripts[run.id];
-  const folded = events === undefined ? undefined : fold(run.id, events);
-  if (folded !== undefined) {
-    const groups = groupConsecutiveActivity(folded.items);
-    for (const [position, group] of groups.entries()) {
-      const active = live !== undefined && isActiveStatus(run.status);
-      // Group keys keep the earlier `tools:` prefix so open/closed choices
-      // made before this change still apply to the same disclosures.
-      reply.push(group.kind === "item"
-        ? renderItem(group.item, `${run.id}:${group.index}`, memory, actions, active)
-        : renderActivityGroup(`${run.id}:tools:${group.index}`, group.items.map((item, offset) => ({ key: `${run.id}:${group.index + offset}`, item })), memory, actions, active, position === groups.length - 1));
-    }
+  const activity = events === undefined ? undefined : fold(run.id, events);
+  const folded = activity?.transcript;
+  if (activity !== undefined && folded !== undefined) {
+    reply.push(...renderActivity(activity, {
+      runId: run.id, running, memory, actions,
+      pendingApprovalIds: new Set(live?.pendingApprovals.map((request) => request.id) ?? []),
+      respond: (approvalId, decision) => controller.respondToApproval(run.id, approvalId, decision),
+      canRetry: !isActiveStatus(run.status) && position.latest && !position.busy,
+      // A provider cannot re-run one tool call on its own, so Retry asks
+      // the agent to retry it in a visible follow-up turn.
+      retry: ({ action, error }) => void controller.runAgain(run, {
+        prompt: `Retry the step that failed: ${action.charAt(0).toLowerCase()}${action.slice(1)}.${error === undefined ? "" : ` It failed with: ${error}`}`,
+      }),
+    }));
     copyText = folded.items.flatMap((item) => item.kind === "text" ? [item.text] : []).join("\n\n");
     if (folded.failure !== undefined) reply.push(errorLine(folded.failure.error));
   }
@@ -346,11 +522,19 @@ function renderTurn(
   // grow and reflow while the agent is still working.
   const changes = active || folded === undefined ? [] : collectRunChanges(folded.items);
   if (changes.length > 0) reply.push(renderRunChanges(run.id, changes, memory, rerender, actions.openPath));
+  // "Run again" sits under the final answer of the newest turn only: resending
+  // an older prompt would append it after later turns and read out of order.
+  const runAgain = !active && position.latest && run.prompt !== ""
+    ? h("button", { class: "turn-action", type: "button", disabled: position.busy,
+      title: position.busy ? "Wait for the current run to finish" : "Send this prompt again with the same model and settings",
+      onClick: () => void controller.runAgain(run) }, icon("arrow-clockwise"), "Run again")
+    : null;
   const meta = active ? h("div", { class: "run-progress", role: "status", aria: { label: live?.cancelRequested ? "Stopping" : "Run in progress" } },
     h("span", { class: "progress-dots", aria: { hidden: "true" } }, h("span"), h("span"), h("span")),
-  ) : h("div", { class: "turn-meta" },
-    h("time", { class: "meta-time", title: run.createdAt }, formatTime(run.createdAt)),
-  );
+  ) : runAgain !== null
+    // The newest turn's footer is just "Run again"; its time stays on hover.
+    ? h("div", { class: "turn-meta", title: formatTime(run.createdAt) }, runAgain)
+    : h("div", { class: "turn-meta" }, h("time", { class: "meta-time", title: run.createdAt }, formatTime(run.createdAt)));
   if (active) {
     // Streaming redraws rebuild the turn. Phase dots against the run timestamp
     // so their animation keeps advancing instead of restarting on each token.
@@ -360,17 +544,51 @@ function renderTurn(
     });
   }
 
-  return h("article", { class: "turn", data: { runId: run.id } },
-    renderPrompt(run, memory, rerender, controller),
-    run.interactionMode === "plan" ? h("div", { class: "turn-workflow note" }, icon("list-checks"), "Plan") : null,
-    h("div", { class: "reply" }, ...reply, meta),
-  );
+  // The article and reply container persist per run; only their children are
+  // reconciled, so retained cards stay attached while text streams around them.
+  let nodes = memory.turnNodes.get(run.id);
+  if (nodes === undefined) {
+    nodes = { article: h("article", { class: "turn", data: { runId: run.id } }), reply: h("div", { class: "reply" }) };
+    memory.turnNodes.set(run.id, nodes);
+  }
+  reconcileChildren(nodes.reply, [...reply, meta]);
+  const editor = memory.editor.current?.runId === run.id ? memory.editor.current : undefined;
+  if (editor !== undefined) editor.update(turnsReplacedByEdit(state, run), edit === undefined ? "This message can no longer be edited." : edit.blocked);
+  // Edit stays focusable while it is unavailable, so a keyboard user can be
+  // resting on it when the turn ends and the prompt row is rebuilt; keep
+  // their place instead of dropping focus to the document body.
+  const editFocused = nodes.article.querySelector(".prompt-edit") === nodes.article.ownerDocument.activeElement;
+  reconcileChildren(nodes.article, [
+    editor?.element ?? renderPrompt(run, memory, rerender, controller, edit),
+    ...(run.interactionMode === "plan" ? [h("div", { class: "turn-workflow note" }, icon("list-checks"), "Plan")] : []),
+    nodes.reply,
+  ]);
+  if (editFocused && editor === undefined) nodes.article.querySelector<HTMLElement>(".prompt-edit")?.focus({ preventScroll: true });
+  return nodes.article;
 }
 
-function renderPrompt(run: Pick<RunView, "id" | "prompt" | "attachments">, memory: ViewMemory, rerender: () => void, controller?: Controller): HTMLElement {
+function renderPrompt(run: Pick<RunView, "id" | "prompt" | "attachments" | "editOfRunId">, memory: ViewMemory, rerender: () => void, controller?: Controller, edit?: PromptEdit): HTMLElement {
   const long = run.prompt.length > LONG_PROMPT_CHARS || run.prompt.split("\n").length > LONG_PROMPT_LINES;
   const expanded = memory.expandedPrompts.has(run.id);
-  return h("div", { class: "prompt-row" },
+  const edited = run.editOfRunId !== undefined;
+  // Edit is revealed on hover or keyboard focus (see .prompt-actions) and
+  // stays in the tab order, so it is reachable without a pointer. While it is
+  // unavailable it uses aria-disabled rather than `disabled`: a disabled
+  // button leaves the tab order, and keyboard and screen-reader users would
+  // never learn why. The reason is its accessible description, the pointer
+  // tooltip, and a visible hint while it has keyboard focus.
+  const blocked = edit?.blocked;
+  const reasonId = `prompt-edit-reason-${run.id}`;
+  const actions = !edited && edit === undefined ? null : h("div", { class: "prompt-actions" },
+    edited ? h("span", { class: "prompt-edited", title: "This message was edited and resent; the turns it replaced are kept in run history." }, "Edited") : null,
+    blocked === undefined ? null : h("span", { class: "prompt-edit-reason", id: reasonId }, blocked),
+    edit === undefined ? null : h("button", {
+      class: "icon-button prompt-edit", type: "button",
+      title: blocked ?? "Edit message",
+      aria: blocked === undefined ? { label: "Edit message" } : { label: "Edit message", disabled: "true", describedby: reasonId },
+      onClick: () => { if (blocked === undefined) edit.open(); },
+    }, icon("pencil-simple")));
+  return h("div", { class: actions === null ? "prompt-row" : "prompt-row has-actions" },
     h("div", { class: long && !expanded ? "bubble clipped" : "bubble" },
       run.prompt === "" ? null : h("div", { class: "bubble-text" }, run.prompt),
       (run.attachments?.length ?? 0) === 0 ? null : h("div", { class: "attachment-list turn-attachments", aria: { label: "Attached files" } },
@@ -389,6 +607,7 @@ function renderPrompt(run: Pick<RunView, "id" | "prompt" | "attachments">, memor
         },
       }, expanded ? "Show less" : "Show full message"),
     ),
+    actions,
   );
 }
 
@@ -613,12 +832,90 @@ function updateRail(rail: HTMLElement, transcript: HTMLElement): void {
 }
 
 /** A workflow is one user-facing turn even when it has many native threads. */
-function renderWorkflowTurn(run: WorkflowRun, state: AppState, controller: Controller): HTMLElement {
-  const reply = state.session?.messages.find((message) => message.role === "assistant" && message.metadata?.["workflowRunId"] === run.id);
-  return h("article", { class: "turn orchestra-turn", id: `workflow-${run.id}` },
-    h("div", { class: "prompt-bubble" }, run.prompt),
-    h("button", { class: "orchestra-turn-status", type: "button", onClick: () => controller.openOrchestra({ sessionId: run.sessionId, workflowRunId: run.id }) }, icon("flow-arrow"), h("strong", {}, run.workflow.name), h("span", {}, workflowStatusLabel(run.status)), icon("caret-right")),
-    h("div", { class: "orchestra-turn-agents" }, ...run.workers.map((worker) => h("span", {}, icon(worker.status === "completed" ? "check-circle" : worker.status === "running" ? "circle-notch" : worker.status === "failed" ? "warning-circle" : "clock", { className: worker.status === "running" ? "spin" : "" }), worker.name))),
-    reply ? h("div", { class: "assistant-message markdown" }, renderMarkdown(reply.content, markdownActions(controller))) : run.error ? h("p", { class: "error-line" }, run.error) : isWorkflowActive(run) ? h("p", { class: "note" }, run.status === "waiting_approval" ? "Review the plan in Orchestration, then approve to continue." : "Your agents are working. Follow their activity in Orchestration.") : null,
-    h("div", { class: "turn-footer" }, formatTime(run.createdAt)));
+/**
+ * A workflow turn reads like any other turn: the prompt bubble, then each
+ * worker's activity in start order (thinking, tool group cards, text) through
+ * the same `renderActivity` as ordinary runs, then the coordinator's answer.
+ * The only addition is an indicator naming the workflow; it opens the run in
+ * Orchestration. Workers stay attributed for assistive technology through a
+ * labelled group that has no visual box (`display: contents`).
+ *
+ * Worker events come from the live store while a worker runs and from the
+ * session's transcripts once settled; missing journals are requested through
+ * `requestActivity`. Worker approvals are answered inline like a normal
+ * turn's; workflow approval gates stay on the composer and in Orchestration.
+ */
+function renderWorkflowTurn(
+  run: WorkflowRun,
+  state: AppState,
+  controller: Controller,
+  fold: (id: string, events: readonly RuntimeEvent[]) => TurnActivity,
+  memory: ViewMemory,
+  rerender: () => void,
+  requestActivity: (runIds: readonly string[]) => void,
+): HTMLElement {
+  const actions = markdownActions(controller);
+  const active = isWorkflowActive(run);
+  const reply: Node[] = [];
+  const missing: string[] = [];
+  let coordinatorReplied = false;
+  for (const worker of run.workers) {
+    const runId = worker.runId;
+    if (runId === undefined) continue;
+    const live = state.live[runId];
+    const events = live?.events ?? state.transcripts[runId];
+    if (events === undefined) { missing.push(runId); continue; }
+    const activity = fold(runId, events);
+    const running = live !== undefined && isActiveStatus(live.run.status);
+    const nodes = renderActivity(activity, {
+      runId, running, memory, actions, canRetry: false,
+      pendingApprovalIds: new Set(live?.pendingApprovals.map((request) => request.id) ?? []),
+      respond: (approvalId, decision) => controller.respondToApproval(runId, approvalId, decision),
+    });
+    if (worker.status === "failed" && activity.transcript.failure !== undefined) nodes.push(errorLine(activity.transcript.failure.error));
+    if (worker.stepId === "coordinator" && activity.transcript.items.some((item) => item.kind === "text" && item.text.trim() !== "")) coordinatorReplied = true;
+    if (nodes.length === 0) continue;
+    let section = memory.workerNodes.get(worker.id);
+    if (section === undefined) {
+      section = h("div", { class: "workflow-worker", role: "group", aria: { label: worker.name }, data: { workerId: worker.id } });
+      memory.workerNodes.set(worker.id, section);
+    }
+    reconcileChildren(section, nodes);
+    reply.push(section);
+  }
+  if (missing.length > 0) requestActivity(missing);
+  // Until the coordinator's journal is loaded, its saved answer stands in.
+  const answer = state.session?.messages.find((message) => message.role === "assistant" && message.metadata?.["workflowRunId"] === run.id);
+  if (!coordinatorReplied && answer !== undefined) reply.push(h("div", { class: "md" }, renderMarkdown(answer.content, actions)));
+  if (run.error !== undefined) reply.push(errorLine(run.error));
+  else if (run.status === "stopped") reply.push(h("div", { class: "note" }, icon("stop-circle"), "Stopped"));
+  if (active && reply.length === 0) {
+    reply.push(h("div", { class: "note working" }, icon("circle-notch", { className: "spin" }), run.status === "waiting_approval" ? "Waiting for your approval" : "Working"));
+  }
+  const meta = active ? h("div", { class: "run-progress", role: "status", aria: { label: "Workflow in progress" } },
+    h("span", { class: "progress-dots", aria: { hidden: "true" } }, h("span"), h("span"), h("span")))
+    : h("div", { class: "turn-meta" }, h("time", { class: "meta-time", title: run.createdAt }, formatTime(run.createdAt)));
+  if (active) {
+    const elapsed = Math.max(0, Date.now() - Date.parse(run.createdAt)) || 0;
+    meta.querySelectorAll<HTMLElement>(".progress-dots > span").forEach((dot, index) => {
+      dot.style.animationDelay = `${-(elapsed % 1200) - (3 - index) * 150}ms`;
+    });
+  }
+
+  const key = `workflow:${run.id}`;
+  let nodes = memory.turnNodes.get(key);
+  if (nodes === undefined) {
+    nodes = { article: h("article", { class: "turn orchestra-turn", id: `workflow-${run.id}`, data: { workflowRunId: run.id } }), reply: h("div", { class: "reply" }) };
+    memory.turnNodes.set(key, nodes);
+  }
+  reconcileChildren(nodes.reply, [...reply, meta]);
+  reconcileChildren(nodes.article, [
+    renderPrompt({ id: run.id, prompt: run.prompt }, memory, rerender, controller),
+    h("button", { class: "turn-workflow note workflow-indicator", type: "button", title: "Show this workflow in Orchestration",
+      aria: { label: `Workflow ${run.workflow.name}. Show in Orchestration` },
+      onClick: () => controller.openOrchestra({ sessionId: run.sessionId, workflowRunId: run.id }) },
+    icon("flow-arrow"), h("span", {}, run.workflow.name)),
+    nodes.reply,
+  ]);
+  return nodes.article;
 }

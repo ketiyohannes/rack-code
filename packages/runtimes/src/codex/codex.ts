@@ -481,10 +481,13 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
         }
         return;
       }
+      // Command and file-change approvals name the item already reported by
+      // `item/started`; permission escalations are not tied to one item.
       const decision = await input.requestApproval({
         tool: message.method,
         input: params,
         ...(typeof params.reason === "string" ? { reason: params.reason } : {}),
+        ...(typeof params.itemId === "string" ? { toolCallId: params.itemId } : {}),
       });
       process.respond(message.id, codexApprovalResponse(message.method, decision, params));
       return;
@@ -558,8 +561,13 @@ function mapCodexNotification(method: string, rawParams: unknown, state: CodexEv
       const item = asRecord(params.item);
       const itemType = typeof item.type === "string" ? item.type : "item";
       if (["agentMessage", "reasoning", "userMessage", "plan", "contextCompaction"].includes(itemType)) return [];
+      // MCP calls carry their server, tool and arguments as item fields;
+      // expose them through the provider-neutral identity.
+      const mcp = itemType === "mcpToolCall" && typeof item.server === "string" && typeof item.tool === "string"
+        ? { server: item.server, tool: item.tool, ...(item.arguments === undefined ? {} : { arguments: item.arguments }) } : undefined;
       return [{ type: "tool_request", tool: itemType, input: item,
-        ...(typeof item.id === "string" ? { toolCallId: item.id } : {}) }];
+        ...(typeof item.id === "string" ? { toolCallId: item.id } : {}),
+        ...(mcp === undefined ? {} : { mcp }) }];
     }
     case "item/completed": {
       const item = asRecord(params.item);

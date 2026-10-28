@@ -50,6 +50,15 @@ export interface StartRunInput {
   readonly interactionMode?: "normal" | "plan";
   readonly skillIds?: readonly string[];
   readonly approvedPlanRunId?: string;
+  /**
+   * Starts this run as an edit of an earlier user message. `fromRunId` is
+   * the run whose prompt is being replaced; it and every later run of the
+   * session are superseded, together with `supersedeIds` (workflow runs,
+   * which execution does not own, supplied by the host). History is cut
+   * only after every other start check passed, so a rejected edit leaves
+   * the conversation untouched. See `SessionsService.rewind`.
+   */
+  readonly rewind?: { readonly fromRunId: string; readonly supersedeIds?: readonly string[] };
 }
 
 export interface ExecutionHandle {
@@ -60,6 +69,12 @@ export interface ExecutionHandle {
   respondToApproval(approvalId: string, decision: ApprovalDecision): void;
   respondToQuestions?(requestId: string, response: UserQuestionResponse | null): Promise<void>;
   cancel(): Promise<void>;
+  /**
+   * The `observedAt` journaled for an event this handle delivered (ISO 8601).
+   * Hosts forward it with live events so a live view and a later journal
+   * replay show identical timing. Optional for handles that keep no journal.
+   */
+  observedAt?(event: RuntimeEvent): string | undefined;
 }
 
 /** Host integration point after execution-directory preparation and before
@@ -144,16 +159,20 @@ export class ExecutionService {
     if (project) input = { ...input, projectId: project.id };
     const projectPath = project?.path ?? await this.sessions.workspace(session.id);
     const attachments = await this.sessions.resolveAttachments(input.sessionId, input.attachmentIds ?? []);
+    // Runs replaced by an earlier edit are no longer part of the
+    // conversation, so they never count as the "latest" turn.
+    const superseded = new Set(session.supersededRunIds ?? []);
     let approvedPlan: string | undefined;
     if (input.approvedPlanRunId !== undefined) {
       const plan = await this.getRun(input.approvedPlanRunId);
-      const runs = await this.store.listRuns(session.id);
+      const runs = (await this.store.listRuns(session.id)).filter((candidate) => !superseded.has(candidate.id));
       const newest = [...runs].reverse().sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       if (plan.sessionId !== session.id || plan.interactionMode !== "plan" || plan.status !== "completed" || !plan.result?.trim()
         || newest?.id !== plan.id || input.interactionMode === "plan") throw new InvalidSessionError("Choose the latest completed plan in this conversation.");
       approvedPlan = plan.result;
     }
     if (input.prompt.trim() === "" && attachments.length === 0 && approvedPlan === undefined) throw new InvalidSessionError("A prompt or attachment is required.");
+    const replaced = input.rewind === undefined ? undefined : await this.supersededBy(session.id, superseded, input.rewind, input.approvedPlanRunId);
     const account = await this.resolveAccount(input);
     const runtime = this.runtimes.get(input.runtimeId);
     if (runtime.providerId !== undefined && runtime.providerId !== account.providerId) throw new AccountProviderMismatchError(account.id, runtime.providerId, account.providerId);
@@ -164,6 +183,9 @@ export class ExecutionService {
       return skill;
     });
     if (skills.length > 16 || new Set(input.skillIds).size !== skills.length) throw new InvalidSessionError("Choose up to 16 distinct skills.");
+    // Every check that can reject this start has passed; only now is it safe
+    // to remove the replaced turns from the conversation.
+    if (replaced !== undefined) await this.sessions.rewind(session.id, replaced);
     const effectivePermission = input.interactionMode === "plan" ? "read_only" : input.permissionMode;
     const runtimePrompt = approvedPlan === undefined ? input.prompt : `Implement this explicitly approved plan:\n\n${approvedPlan}\n\n${input.prompt}`;
     const runId = this.createId();
@@ -183,6 +205,7 @@ export class ExecutionService {
       permissionMode: input.permissionMode,
       ...(input.interactionMode === undefined ? {} : { interactionMode: input.interactionMode }),
       ...(input.approvedPlanRunId === undefined ? {} : { approvedPlanRunId: input.approvedPlanRunId }),
+      ...(input.rewind === undefined ? {} : { editOfRunId: input.rewind.fromRunId }),
       ...(skills.length === 0 ? {} : { skills }),
       status: "queued",
       attemptIds: [attemptId],
@@ -211,21 +234,24 @@ export class ExecutionService {
 
     const controller = new AbortController();
     const queue = new AsyncQueue<RuntimeEvent>();
+    // One timestamp per delivered event, taken before it is queued and used
+    // for its journal row, so live clients and replays agree exactly.
+    const observed = new WeakMap<RuntimeEvent, string>();
+    const stamp = (event: RuntimeEvent): string => {
+      const at = this.now().toISOString();
+      observed.set(event, at);
+      return at;
+    };
     const approvals = new ApprovalBroker(
       queue,
       this.createId,
-      async (request) => {
-        await this.store.appendJournal({
-          runId,
-          attemptId,
-          type: "approval_request",
-          payload: { type: "approval_request", request },
-          observedAt: this.now().toISOString(),
-        });
+      stamp,
+      async (event, observedAt) => {
+        await this.store.appendJournal({ runId, attemptId, type: event.type, payload: event, observedAt });
       },
     );
     const questions = new QuestionBroker(this.createId, async (event) => {
-      await this.store.appendJournal({ runId, attemptId, type: event.type, payload: event, observedAt: this.now().toISOString() });
+      await this.store.appendJournal({ runId, attemptId, type: event.type, payload: event, observedAt: stamp(event) });
       queue.push(event);
     });
     let currentRun = run;
@@ -263,6 +289,7 @@ export class ExecutionService {
       attempt: currentAttempt,
       controller,
       queue,
+      stamp,
       approvals,
       questions,
       onRun: (next) => {
@@ -291,6 +318,7 @@ export class ExecutionService {
       respondToApproval: (approvalId, decision) => approvals.respond(approvalId, decision),
       respondToQuestions: (requestId, response) => questions.respond(requestId, response),
       cancel: stopRuntime,
+      observedAt: (event) => observed.get(event),
     };
   }
 
@@ -345,6 +373,33 @@ export class ExecutionService {
     return [...entries].sort((left, right) => left.sequence - right.sequence);
   }
 
+  /**
+   * Validates an edit and returns every run ID it replaces: the edited run,
+   * each later run of the session not already superseded, and the host's
+   * workflow run IDs. Rejects an edit of another session's run, of a turn
+   * that was already replaced, and of a plan-approval implementation turn
+   * (its prompt is generated from the approved plan, not typed by the user).
+   * The new run itself is not created yet, so it is never in the list.
+   */
+  private async supersededBy(
+    sessionId: string,
+    superseded: ReadonlySet<string>,
+    rewind: NonNullable<StartRunInput["rewind"]>,
+    approvedPlanRunId: string | undefined,
+  ): Promise<readonly string[]> {
+    const from = await this.getRun(rewind.fromRunId);
+    if (from.sessionId !== sessionId) throw new InvalidSessionError("Only messages in this conversation can be edited.");
+    if (superseded.has(from.id)) throw new InvalidSessionError("This message was already replaced by a later edit.");
+    if (from.approvedPlanRunId !== undefined || approvedPlanRunId !== undefined) throw new InvalidSessionError("A plan implementation turn cannot be edited.");
+    // Transcript order (a stable sort by creation time), so runs created in
+    // the same millisecond keep their recorded order.
+    const runs = await this.listRuns(sessionId);
+    const later = runs.slice(runs.findIndex((run) => run.id === from.id))
+      .filter((run) => !superseded.has(run.id))
+      .map((run) => run.id);
+    return [...new Set([...later, ...(rewind.supersedeIds ?? [])])];
+  }
+
   private async resolveAccount(input: StartRunInput): Promise<AccountRecord> {
     if (input.accountId !== undefined) {
       const account = await this.accounts.get(input.accountId);
@@ -371,6 +426,7 @@ export class ExecutionService {
       attempt,
       controller,
       queue,
+      stamp,
       approvals,
       questions,
       onRun,
@@ -547,7 +603,7 @@ export class ExecutionService {
           attemptId: currentAttempt.id,
           type: event.type,
           payload: event,
-          observedAt: this.now().toISOString(),
+          observedAt: stamp(event),
         });
         queue.push(event);
         if (event.type === "message_delta") {
@@ -612,13 +668,14 @@ export class ExecutionService {
       const failure: RuntimeEvent = isCancelled()
         ? { type: "interrupted" }
         : { type: "failed", error: terminalError };
+      const failureObservedAt = stamp(failure);
       queue.push(failure);
       await this.store.appendJournal({
         runId: currentRun.id,
         attemptId: currentAttempt.id,
         type: failure.type,
         payload: failure,
-        observedAt: this.now().toISOString(),
+        observedAt: failureObservedAt,
       });
     } finally {
       try {
@@ -746,6 +803,8 @@ interface ConsumeContext {
   readonly attempt: AttemptRecord;
   readonly controller: AbortController;
   readonly queue: AsyncQueue<RuntimeEvent>;
+  /** Records and returns an event's journal time before it is queued (see `ExecutionHandle.observedAt`). */
+  readonly stamp: (event: RuntimeEvent) => string;
   readonly approvals: ApprovalBroker;
   readonly questions: QuestionBroker;
   readonly onRun: (run: RunRecord) => void;
@@ -756,17 +815,37 @@ interface ConsumeContext {
   readonly stopRuntime: () => Promise<void>;
 }
 
+/**
+ * Owns the pending approvals of one attempt.
+ *
+ * Both halves of an approval are run events: `approval_request` when the
+ * adapter asks, and `approval_resolved` when a client answers. Each is
+ * pushed to the client stream and journaled, so a client replaying the
+ * journal (a reconnecting phone, a reload) sees the same decision a live
+ * client saw. The resolution is published before the decision is released
+ * to the adapter, which keeps it ahead of the call's eventual `tool_result`
+ * in both the live stream and the journal.
+ *
+ * `close()` (cancellation or settlement) denies whatever is still pending
+ * without publishing a resolution, because no person decided it; clients
+ * read the run's terminal event to show those approvals as unanswered.
+ */
 class ApprovalBroker {
   private closed = false;
   private readonly pending = new Map<
     string,
     { resolve: (decision: ApprovalDecision) => void }
   >();
+  /** Serializes resolution journaling so concurrent answers keep their order. */
+  private resolutions: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly queue: AsyncQueue<RuntimeEvent>,
     private readonly createId: () => string,
-    private readonly onRequest: (request: ApprovalRequest) => Promise<void>,
+    /** Records the event's observation time; called before the event is queued. */
+    private readonly stamp: (event: RuntimeEvent) => string,
+    /** Journals a request or resolution with the time `stamp` returned. */
+    private readonly journal: (event: Extract<RuntimeEvent, { type: "approval_request" | "approval_resolved" }>, observedAt: string) => Promise<void>,
   ) {}
 
   async request(request: Omit<ApprovalRequest, "id">): Promise<ApprovalDecision> {
@@ -775,8 +854,10 @@ class ApprovalBroker {
     const decision = new Promise<ApprovalDecision>((resolve) => {
       this.pending.set(full.id, { resolve });
     });
-    this.queue.push({ type: "approval_request", request: full });
-    await this.onRequest(full);
+    const event = { type: "approval_request", request: full } as const;
+    const observedAt = this.stamp(event);
+    this.queue.push(event);
+    await this.journal(event, observedAt);
     return decision;
   }
 
@@ -786,6 +867,13 @@ class ApprovalBroker {
       throw new ApprovalNotFoundError(approvalId);
     }
     this.pending.delete(approvalId);
+    const event = { type: "approval_resolved", approvalId, decision } as const;
+    const observedAt = this.stamp(event);
+    this.queue.push(event);
+    // The journal write is chained rather than awaited: `respond` stays
+    // synchronous for the host, and the native callback must not wait on
+    // storage. A failed write loses only this audit row, never the decision.
+    this.resolutions = this.resolutions.then(() => this.journal(event, observedAt)).catch(() => undefined);
     pending.resolve(decision);
   }
 

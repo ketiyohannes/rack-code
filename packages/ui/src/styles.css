@@ -4575,14 +4575,6 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 .orchestra-composer-title { border: 0; background: none; padding: 0; font-size: 11px; font-weight: 550; color: var(--text); cursor: pointer; }
 .orchestra-composer-bar > span { margin-left: auto; }
 .orchestra-composer-bar .icon-button { width: 20px; height: 20px; }
-.orchestra-turn .prompt-bubble { margin-left: auto; white-space: pre-wrap; padding: 12px 17px; border-radius: 16px; background: var(--inset); max-width: 85%; width: fit-content; }
-.orchestra-turn-status { display: flex; align-items: center; gap: 9px; margin-top: 23px; padding: 0; background: transparent; border: 0; cursor: pointer; color: var(--text-2); font-size: 11px; }
-.orchestra-turn-status strong { color: var(--text); font-weight: 550; }
-.orchestra-turn-status > span { margin-left: 8px; color: var(--text-3); }
-.orchestra-turn-status .icon { width: 14px; height: 14px; }
-.orchestra-turn-agents { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
-.orchestra-turn-agents > span { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-2); background: var(--inset); border-radius: 5px; padding: 5px 7px; }
-.orchestra-turn-agents .icon { width: 12px; height: 12px; }
 @media (max-width: 850px) {
   .orchestra-modal { width: calc(100vw - 24px); height: calc(100vh - 30px); }
   .orchestra-studio-body { grid-template-columns: minmax(0, 1fr) 275px; }
@@ -4702,17 +4694,6 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 .orchestra-agent[open]::details-content { block-size: auto; }
 .orchestra-agent-body { padding: 0 10px 10px 10px; }
 
-/* Waterfall: a rail connects tool rows; new rows drop in, staggered. */
-.orchestra-waterfall { position: relative; list-style: none; margin: 0; padding: 2px 0 0 0; display: grid; gap: 2px; }
-.orchestra-waterfall::before { content: ""; position: absolute; left: 6px; top: 10px; bottom: 10px; width: 1px; background: var(--border); }
-.orchestra-tool-row { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; font-size: 11px; color: var(--text-2); }
-.orchestra-node { position: relative; z-index: 1; display: inline-grid; place-items: center; width: 13px; height: 17px; flex: none; background: var(--card); }
-.orchestra-tool-row.entering { animation: orchestra-drop .36s cubic-bezier(.2, .8, .2, 1) both; animation-delay: var(--enter-delay, 0ms); }
-.orchestra-tool-row[data-status="running"] { color: var(--text); }
-.orchestra-tool-row[data-status="failed"] { color: var(--danger, #b44a4a); }
-.orchestra-tool-title { flex: none; font-weight: 500; }
-.orchestra-tool-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10.5px var(--font-code); color: var(--text-3); }
-.orchestra-tool-overflow { padding: 2px 0 4px 21px; font-size: 10.5px; color: var(--text-3); }
 
 /* Status marks and the live spinner (a rotating gradient arc, phase-locked
    to the clock by the panel so rebuilt nodes continue smoothly). */
@@ -4725,14 +4706,320 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
   animation: orchestra-spin .9s linear infinite; }
-.orchestra-shimmer { background: linear-gradient(90deg, var(--text-3) 0%, var(--text-3) 35%, var(--text) 50%, var(--text-3) 65%, var(--text-3) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: orchestra-shimmer 1.8s linear infinite; }
 @keyframes orchestra-spin { to { transform: rotate(360deg); } }
-@keyframes orchestra-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
-@keyframes orchestra-drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes orchestra-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) {
   .orchestra-spinner { animation-duration: 3s; }
-  .orchestra-shimmer { animation: none; color: var(--text-2); background: none; }
-  .orchestra-tool-row.entering, .orchestra-run-status.waiting_approval { animation: none; }
+  .orchestra-run-status.waiting_approval { animation: none; }
   .orchestra-agent::details-content, .orchestra-agent-caret { transition: none; }
 }
+
+/* ------------------------------------------------------------------------
+ * Tool groups (features/tool-group-card.ts)
+ *
+ * The Orchestration waterfall applied to the transcript: no box, border or
+ * background around a group. A plain header line (stacked tool icons, title,
+ * the time or "1 failed" on the right, chevron) over rows joined by a thin
+ * rail. Rows drop in (staggered), running labels shimmer, the arc spinner is
+ * phase-locked, and a "Working..." row closes the rail between calls.
+ * Accents are limited to the check, the failure color and the brand marks;
+ * every state also has its own icon and words. `prefers-reduced-motion`
+ * removes the motion.
+ * ---------------------------------------------------------------------- */
+.tool-group-card {
+  --tool-ok: light-dark(#187537, #73e2a0);
+  --tool-problem: light-dark(#bd2638, #ff8a8a);
+  --tool-line: color-mix(in srgb, var(--text) 12%, transparent);
+  --tool-chip: color-mix(in srgb, var(--text) 7%, var(--canvas));
+  font-size: var(--font-md);
+  line-height: 1.45;
+}
+
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 30px;
+  padding: 3px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-group-header:hover { color: var(--text); }
+.tool-group-header:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
+
+/* Overlapping tool icons, each in a small chip. */
+.tool-group-icons { display: inline-flex; flex: none; padding-left: 6px; }
+.tool-group-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--tool-chip);
+  box-shadow: 0 0 0 2px var(--canvas);
+  color: var(--text-2);
+}
+.tool-group-icon .icon { width: 13px; height: 13px; }
+.tool-group-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-group-detail { flex: none; color: var(--text-3); font-size: var(--font-sm); font-variant-numeric: tabular-nums; }
+.tool-group-detail::before { content: "\00b7"; margin-right: 8px; color: var(--text-3); }
+.tool-group-detail:empty { display: none; }
+.tool-group-detail.problem { color: var(--tool-problem); }
+.tool-group-caret { width: 13px; height: 13px; flex: none; color: var(--text-3); }
+.tool-group-card.animated .tool-group-caret { transition: transform 200ms ease; }
+.tool-group-card.expanded .tool-group-caret { transform: rotate(180deg); }
+
+/* Height animates through the grid row, so content keeps its natural height. */
+.tool-group-body { display: grid; grid-template-rows: 0fr; }
+.tool-group-card.expanded .tool-group-body { grid-template-rows: 1fr; }
+.tool-group-card.animated .tool-group-body { transition: grid-template-rows 280ms cubic-bezier(.2, .7, .2, 1); }
+.tool-group-clip { min-height: 0; overflow: hidden; }
+.tool-group-rows { display: grid; gap: 2px; padding: 2px 0 4px; }
+.tool-group-thought { padding: 0 0 4px 30px; color: var(--text-3); font-size: var(--font-sm); }
+
+/* One row per call. The rail runs from below this row's icon to just above
+   the next visible entry, so it needs no background to cut it and passes
+   through expanded details and approval rows; the last row has none. */
+.tool-row { position: relative; }
+.tool-row:has(~ :not([hidden]))::before {
+  content: "";
+  position: absolute;
+  left: 9.5px;
+  top: 25px;
+  bottom: -8px;
+  width: 1px;
+  background: var(--tool-line);
+}
+.tool-row.entering { animation: tool-row-drop .36s cubic-bezier(.2, .8, .2, 1) both; animation-delay: var(--enter-delay, 0ms); }
+@keyframes tool-row-drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+/* The whole head expands the row: the toggle's ::after covers it. Retry and
+   approval buttons sit above that layer and stay separate controls. */
+.tool-row-head { position: relative; display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 4px 0; }
+.tool-row-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: none; color: var(--text-2); }
+.tool-row-icon .icon { width: 16px; height: 16px; }
+.tool-row.has-subtitle .tool-row-icon { align-self: flex-start; }
+.tool-row-text { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+.tool-row-toggle { display: block; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.tool-row-toggle::after { content: ""; position: absolute; inset: 0; border-radius: 6px; }
+.tool-row-toggle:focus-visible { outline: none; }
+.tool-row-toggle:focus-visible::after { outline: 2px solid var(--text-3); outline-offset: 1px; }
+.tool-row-head:hover .tool-row-label { color: var(--text); }
+.tool-row-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-row-subtitle { color: var(--text-3); font-size: var(--font-sm); overflow-wrap: anywhere; }
+
+/* Running labels and the "Working..." row shimmer, as in the waterfall. */
+.tool-row[data-status="running"] > .tool-row-head .tool-row-label, .tool-shimmer {
+  background: linear-gradient(90deg, var(--text-3) 0%, var(--text-3) 35%, var(--text) 50%, var(--text-3) 65%, var(--text-3) 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: tool-shimmer 1.8s linear infinite;
+}
+@keyframes tool-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+.tool-row-working .tool-row-label { font-size: var(--font-sm); }
+
+.tool-row-meta { display: inline-flex; flex: none; align-items: baseline; gap: 7px; color: var(--text-3); font-size: var(--font-sm); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tool-row-meta:empty { display: none; }
+.tool-row-summary + .tool-row-duration::before,
+.tool-row-outcome + .tool-row-duration::before,
+.tool-row-summary + .tool-row-outcome::before { content: "\00b7"; margin-right: 7px; }
+
+.tool-row-retry {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+.tool-row-retry:hover { background: var(--overlay); color: var(--text); }
+.tool-row-retry:focus-visible { outline: 2px solid var(--text-3); outline-offset: 1px; }
+.tool-row-retry .icon { width: 14px; height: 14px; }
+
+/* Status marks: the waterfall's arc spinner, check and warning. */
+.tool-row-status { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; color: var(--text-3); }
+.tool-row-status .icon { width: 15px; height: 15px; }
+.tool-row-status.status-success { color: var(--tool-ok); }
+.tool-row-status.status-error, .tool-row[data-status="error"] > .tool-row-head .tool-row-outcome { color: var(--tool-problem); }
+.tool-row-status:not(.status-running) .icon { animation: tool-status-in 160ms ease-out; }
+@keyframes tool-status-in { from { opacity: 0; } to { opacity: 1; } }
+.tool-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0deg, color-mix(in srgb, var(--primary) 15%, transparent) 60deg, var(--primary) 300deg, transparent 360deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  animation: spin .9s linear infinite;
+}
+.tool-row-caret { width: 12px; height: 12px; flex: none; color: var(--text-3); transition: transform 160ms ease; }
+.tool-row.expanded > .tool-row-head .tool-row-caret { transform: rotate(180deg); }
+
+/* Merged rows: consecutive calls sharing an icon, expanding to their own
+   rows on an indented rail. */
+.tool-cluster-rows { display: grid; gap: 2px; padding: 0 0 4px 30px; }
+.tool-row-overflow { padding: 2px 0 4px 30px; color: var(--text-3); font-size: var(--font-sm); }
+
+/* The Orchestration panel uses the same rows, sized for the sidebar; below
+   300px the summaries and times give way to the labels. */
+.orchestra-agent-body { container-type: inline-size; }
+.orchestra-agent-body .tool-group-rows { --tool-ok: light-dark(#187537, #73e2a0); --tool-problem: light-dark(#bd2638, #ff8a8a); --tool-line: color-mix(in srgb, var(--text) 12%, transparent); font-size: var(--font-sm); line-height: 1.45; }
+.orchestra-agent-body .tool-row-head { min-height: 26px; gap: 8px; padding: 2px 0; }
+.orchestra-agent-body .tool-row-icon { width: 16px; height: 16px; }
+.orchestra-agent-body .tool-row-icon .icon { width: 13px; height: 13px; }
+.orchestra-agent-body .tool-row:has(~ :not([hidden]))::before { left: 7.5px; top: 20px; bottom: -6px; }
+.orchestra-agent-body .tool-cluster-rows, .orchestra-agent-body .tool-row-details, .orchestra-agent-body .tool-row-overflow { padding-left: 24px; }
+@container (max-width: 300px) { .orchestra-agent-body .tool-row-meta { display: none; } }
+
+/* Approval: the row reads as the action; the consequence and decision sit
+   under the label, without a box. */
+.tool-approval { display: flex; align-items: center; gap: 10px; padding: 0 0 6px 30px; outline: none; }
+.tool-approval-text { flex: 1; min-width: 0; color: var(--text-2); font-size: var(--font-sm); }
+.tool-approval-actions { display: inline-flex; flex: none; align-items: center; gap: 6px; }
+.tool-approval-actions .button-small { height: 28px; padding: 0 12px; font-size: var(--font-sm); }
+.tool-approval-info { width: 28px; height: 28px; color: var(--text-3); }
+.tool-approval-info .icon { width: 15px; height: 15px; }
+
+.tool-row-details { display: flex; flex-direction: column; gap: 10px; padding: 2px 0 10px 30px; }
+.tool-row-section-label { display: block; margin-bottom: 4px; color: var(--text-3); font: var(--font-2xs) var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; }
+.tool-row-pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--inset);
+  color: var(--text-2);
+  font: var(--font-xs)/1.6 var(--font-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-row-more { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--text-2); font: inherit; font-size: var(--font-xs); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.tool-row-more:hover { color: var(--text); }
+.tool-row-capped { display: block; margin-top: 4px; color: var(--text-3); font-size: var(--font-xs); }
+
+/* "Run again" under the newest answer. */
+.turn-action { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px; border: 0; border-radius: 8px; background: none; color: var(--text-2); font: inherit; font-size: var(--font-lg); cursor: pointer; }
+.turn-action:hover:not(:disabled) { background: var(--overlay); color: var(--text); }
+.turn-action:disabled { cursor: default; opacity: 0.55; }
+.turn-action .icon { width: 17px; height: 17px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-row.entering, .tool-row-status .icon { animation: none; }
+  .tool-row[data-status="running"] > .tool-row-head .tool-row-label, .tool-shimmer { animation: none; background: none; color: var(--text-2); }
+  .tool-spinner { animation-duration: 3s; }
+  .tool-group-card.animated .tool-group-body, .tool-group-card.animated .tool-group-caret, .tool-row-caret { transition: none; }
+}
+
+/* Workflow turns (session-view renderWorkflowTurn) read like ordinary turns.
+   Each worker's activity is grouped for assistive technology only. */
+.workflow-worker { display: contents; }
+.workflow-indicator {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 3%, var(--canvas));
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+.workflow-indicator:hover { color: var(--text); }
+.workflow-indicator:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
+.workflow-indicator .icon { width: 14px; height: 14px; }
+
+/* ------------------------------------------------- message queue and edits */
+
+/* Floating notices and queued messages sit over the end of the transcript;
+ * the session view reserves their height here so the newest output stays
+ * readable above them (see mountSessionView). */
+.transcript { padding-bottom: calc(28px + var(--composer-overlay-space, 0px)); }
+
+/* While a turn runs the toolbar can show Stop and Send (queue) together.
+ * Send stays the primary action; Stop steps back to a quiet secondary. */
+.composer-toolbar:has(.send-button:not(.is-stop):not([hidden])) .send-button.is-stop { background: var(--inset); color: var(--text); }
+.composer-toolbar .send-button.is-stop + .send-button { margin-left: 4px; }
+
+.message-queue { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 6px 6px 6px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: var(--ui-shadow); font-size: var(--font-md); animation: tool-row-drop .28s cubic-bezier(.2, .8, .2, 1) both; }
+.queue-head { display: flex; align-items: center; gap: 7px; height: 22px; padding: 0 4px; color: var(--text-2); font-size: var(--font-sm); }
+.queue-head .icon { width: 14px; height: 14px; color: var(--text-3); }
+.queue-pause { display: flex; align-items: center; gap: 8px; margin: 2px 0 4px; padding: 6px 6px 6px 8px; border-radius: 8px; background: var(--inset); color: var(--text-2); font-size: var(--font-sm); line-height: 1.45; }
+.queue-pause > .icon { flex: none; width: 14px; height: 14px; color: var(--text-2); }
+.queue-pause > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.queue-pause .button { flex: none; gap: 5px; }
+.queue-pause .button .icon { width: 13px; height: 13px; }
+.queue-items { display: flex; flex-direction: column; gap: 1px; max-height: calc(4 * 33px); margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+.queue-item { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 2px 0 4px; border-radius: 8px; animation: tool-row-drop .3s cubic-bezier(.2, .8, .2, 1) both; }
+.queue-item:hover, .queue-item:focus-within { background: var(--overlay); }
+.queue-index { flex: none; width: 16px; color: var(--text-3); font-size: var(--font-xs); font-variant-numeric: tabular-nums; text-align: center; }
+.queue-text { flex: 1; min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.queue-meta { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--text-3); font-size: var(--font-xs); }
+.queue-meta .icon { width: 12px; height: 12px; }
+.queue-next { color: var(--text-2); }
+.queue-actions { display: inline-flex; flex: none; align-items: center; gap: 1px; }
+.queue-actions .icon-button { width: 26px; height: 26px; }
+.queue-actions .icon-button .icon { width: 15px; height: 15px; }
+.queue-actions .icon-button:disabled { opacity: .35; cursor: default; }
+/* Pointer users see the row's actions on hover; keyboard focus reveals them
+ * too, and touch screens (no hover) always show them. */
+@media (hover: hover) {
+  .queue-actions { opacity: 0; transition: opacity 120ms ease; }
+  .queue-item:hover .queue-actions, .queue-item:focus-within .queue-actions, .queue-item.is-next .queue-actions { opacity: 1; }
+}
+.queue-item.editing { flex-direction: column; align-items: stretch; gap: 6px; padding: 6px; background: var(--inset); }
+.queue-edit-input { width: 100%; min-height: 30px; max-height: 160px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; line-height: 1.5; resize: none; }
+.queue-edit-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.queue-edit-actions .note { flex: 1; color: var(--text-3); font-size: var(--font-xs); }
+
+/* Sent messages: Edit appears under the bubble on hover or focus. */
+.prompt-row.has-actions { flex-direction: column; align-items: flex-end; gap: 2px; }
+.prompt-actions { display: flex; align-items: center; gap: 6px; min-height: 26px; }
+.prompt-edited { color: var(--text-3); font-size: var(--font-xs); }
+.prompt-edit.icon-button { width: 26px; height: 26px; }
+.prompt-edit .icon { width: 15px; height: 15px; }
+/* Unavailable Edit stays focusable (aria-disabled, not disabled), so it is
+ * dimmed on its icon: the hover/focus reveal below sets the button's own
+ * opacity. Its reason is the accessible description, and is shown as a muted
+ * hint only while the button has keyboard focus (pointer users get the tooltip). */
+.prompt-edit[aria-disabled="true"] { cursor: default; }
+.prompt-edit[aria-disabled="true"] .icon { opacity: .4; }
+.prompt-edit.icon-button[aria-disabled="true"]:hover { border-color: transparent; background: transparent; color: var(--text-2); }
+.prompt-edit-reason { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.prompt-actions:has(.prompt-edit[aria-disabled="true"]:focus-visible) .prompt-edit-reason { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; color: var(--text-3); font-size: var(--font-xs); white-space: normal; text-align: right; }
+@media (hover: hover) {
+  .prompt-edit { opacity: 0; transition: opacity 120ms ease; }
+  .prompt-row:hover .prompt-edit, .prompt-edit:focus-visible { opacity: 1; }
+}
+
+.message-editor { display: flex; flex-direction: column; gap: 8px; width: min(78%, 620px); margin-left: auto; padding: 10px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--card); animation: tool-status-in .18s ease both; }
+.message-editor-input { width: 100%; min-height: 44px; max-height: 320px; padding: 4px 6px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--font-lg); line-height: 1.55; resize: none; }
+.message-editor-input:focus, .message-editor-input:focus-visible { outline: none; box-shadow: none; border: 0; }
+.message-editor:focus-within { border-color: var(--text-3); }
+.message-editor-warning { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 0 6px; color: var(--text-2); font-size: var(--font-sm); line-height: 1.45; }
+.message-editor-warning .icon { flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--text-3); }
+.message-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.message-editor[aria-busy="true"] .message-editor-input { color: var(--text-2); }

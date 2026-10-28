@@ -6,8 +6,10 @@
  *   it to the open conversation's next message (selecting it again removes
  *   it). Edit/delete appear on hover or keyboard focus; "+" creates one.
  * - Running: the active workflow's agents in order. Each agent shows its model
- *   and a collapsible waterfall of the tools it called, streaming in as they
- *   start. Running agents stay open; an agent collapses with an animation when
+ *   and a collapsible list of the tools it called, streaming in as they
+ *   start. The list is the transcript's own `ToolCallList`, so rows look,
+ *   animate and merge (consecutive calls sharing an icon) exactly as in the
+ *   main view. Running agents stay open; an agent collapses with an animation when
  *   it settles unless the user chose otherwise. A finished run can still be
  *   inspected through exact navigation (transcript/Timeline links), with Back
  *   returning to the titles.
@@ -17,9 +19,9 @@
  * are phase-locked to the clock for the same reason. Ordinary response text is
  * ignored; only tool activity and lifecycle changes update the view.
  *
- * Execution and pending requests belong to the host. Worker approvals and
- * questions are answered through broker-owned forms above the composer; this
- * panel only links to them. Settled workers' events leave the live store, so
+ * Execution and pending requests belong to the host. Worker approvals are
+ * answered on the worker's row in the transcript and questions in the forms
+ * above the composer; this panel shows the waiting row and links to them. Settled workers' events leave the live store, so
  * the panel caches what it observed and lazily loads saved journals for
  * workers that finished before it was opened.
  */
@@ -35,7 +37,9 @@ import { eventsFromJournal } from "../transcript.js";
 import { openOrchestraEditor } from "./orchestra-editor.js";
 import { workflowTemplate } from "./orchestra-templates.js";
 import { workflowRequiredActions, type WorkflowRequiredAction } from "./orchestra-state.js";
-import { workerDetail } from "./orchestra-worker-state.js";
+import { ToolCallList } from "./tool-group-card.js";
+import { TurnActivityCache } from "../render-cache.js";
+import type { ToolGroupEntry } from "./turn-activity.js";
 
 export const workflowStatusLabel = (status: string): string => ({ waiting_approval: "Your approval", running: "Working", queued: "Waiting", paused: "Paused", completed: "Completed", failed: "Needs attention", stopped: "Stopped", interrupted: "Interrupted" })[status] ?? status;
 
@@ -60,14 +64,13 @@ function statusMark(status: string): HTMLElement {
   return h("span", { class: `orchestra-mark ${status.toLowerCase()}`, aria: { hidden: "true" } }, icon(name));
 }
 
-interface ToolNode { readonly row: HTMLElement; status: string; text: string }
 interface AgentNode {
   readonly details: HTMLDetailsElement;
   readonly summary: HTMLElement;
-  readonly list: HTMLElement;
-  readonly working: HTMLElement;
-  readonly overflow: HTMLElement;
-  readonly tools: Map<string, ToolNode>;
+  /** The shared tool rows (see `ToolCallList`). */
+  readonly list: ToolCallList;
+  /** Whether the list has rendered once; later rows animate, a settled first view does not. */
+  rendered: boolean;
   status: string;
   /** The `open` value the panel last set itself. Toggle events are async, so a
    * toggle that lands on this value is the panel's own change, not a user's. */
@@ -89,6 +92,7 @@ export function createOrchestraPanel(store: Store, controller: Controller, host:
   const bindingActions = new Map<string, { pending: boolean; error?: string }>();
   /** Worker execution events observed live or loaded from saved journals. */
   const events = new Map<string, readonly RuntimeEvent[]>();
+  const folds = new TurnActivityCache();
   const loading = new Set<string>();
   /** Explicit open/closed choices by worker; absent means automatic. */
   const openChoice = new Map<string, boolean>();
@@ -237,7 +241,9 @@ export function createOrchestraPanel(store: Store, controller: Controller, host:
           if (gate) { void controller.controlWorkflow(action.target.workflowRunId, "approve"); return; }
           const card = [...document.querySelectorAll<HTMLElement>("[data-pending-request]")].find((node) => node.dataset.pendingRequest === action.requestId && node.dataset.executionId === action.executionId);
           card?.scrollIntoView({ block: "nearest" });
-          card?.querySelector<HTMLElement>("input, button:not(:disabled)")?.focus();
+          // Questions focus their first input; inline tool approvals their
+          // first decision button (Deny) rather than the details toggle.
+          (card?.querySelector<HTMLElement>("input, button.button:not(:disabled)") ?? card?.querySelector<HTMLElement>("button:not(:disabled)"))?.focus();
         } }, gate ? "Approve & continue" : action.kind === "question" ? "Answer" : "Review"));
   }
 
@@ -268,12 +274,12 @@ export function createOrchestraPanel(store: Store, controller: Controller, host:
     let node = agents.get(worker.id);
     if (!node) {
       const summary = h("summary", {});
-      const list = h("ol", { class: "orchestra-waterfall" });
-      const working = h("li", { class: "orchestra-tool-row working" }, h("span", { class: "orchestra-node" }, spinner()), h("span", { class: "orchestra-shimmer" }, "Working…"));
-      const overflow = h("li", { class: "orchestra-tool-overflow" });
-      const details = h("details", { class: "orchestra-agent", data: { workerId: worker.id } }, summary, h("div", { class: "orchestra-agent-body" }, list)) as HTMLDetailsElement;
+      // Approvals are answered on the transcript row; the panel shows the
+      // waiting row and its Review link, never a second set of buttons.
+      const list = new ToolCallList({ respond: async () => undefined });
+      const details = h("details", { class: "orchestra-agent", data: { workerId: worker.id } }, summary, h("div", { class: "orchestra-agent-body" }, list.element)) as HTMLDetailsElement;
       details.open = openChoice.get(worker.id) ?? !SETTLED.includes(worker.status);
-      node = { details, summary, list, working, overflow, tools: new Map(), status: "", expectedOpen: details.open, summaryKey: "", toolsKey: "" };
+      node = { details, summary, list, rendered: false, status: "", expectedOpen: details.open, summaryKey: "", toolsKey: "" };
       const agent = node;
       // Only user toggles become explicit choices; the initial state and the
       // automatic collapse on settlement must not count as one.
@@ -296,58 +302,37 @@ export function createOrchestraPanel(store: Store, controller: Controller, host:
 
     // Tool activity only; streamed response text never reaches this key.
     let toolEvents = 0;
-    for (const event of source) if (event.type === "tool_request" || event.type === "tool_result") toolEvents++;
+    for (const event of source) if (event.type === "tool_request" || event.type === "tool_result" || event.type === "approval_request" || event.type === "approval_resolved") toolEvents++;
     const toolsKey = `${worker.status}|${source.length === 0 ? 0 : toolEvents}|${live?.cancelRequested ? 1 : 0}`;
     if (toolsKey === node.toolsKey) return;
     node.toolsKey = toolsKey;
-    const tools = workerDetail(worker, source, live).tools;
-    const shown = tools.slice(-MAX_TOOL_ROWS);
+    // The same fold as the transcript; every call of the worker, across its
+    // groups, on one rail.
+    const activity = worker.runId === undefined ? undefined : folds.fold(worker.runId, source);
+    const entries: ToolGroupEntry[] = activity === undefined ? [] : activity.segments.flatMap((segment) => segment.kind === "tools"
+      ? activity.groups[segment.groupId]?.entries.filter((entry) => entry.kind === "call") ?? [] : []);
+    const calls = activity?.calls ?? {};
+    const running = live !== undefined && (worker.status === "running" || worker.status === "queued");
 
-    const summaryKey = `${worker.status}|${worker.name}|${worker.round}|${modelLabel(worker)}|${tools.length}`;
+    const summaryKey = `${worker.status}|${worker.name}|${worker.round}|${modelLabel(worker)}|${entries.length}`;
     if (summaryKey !== node.summaryKey) {
       node.summaryKey = summaryKey;
       replace(node.summary, statusMark(worker.status),
         h("span", { class: "orchestra-agent-name" }, worker.name, worker.round ? h("small", {}, ` · revision ${worker.round}`) : null),
         h("span", { class: "orchestra-agent-model", title: modelLabel(worker) }, modelLabel(worker)),
-        tools.length ? h("span", { class: "orchestra-agent-count", aria: { label: `${tools.length} tool calls` } }, String(tools.length)) : null,
+        entries.length ? h("span", { class: "orchestra-agent-count", aria: { label: `${entries.length} tool calls` } }, String(entries.length)) : null,
         icon("caret-right", { className: "orchestra-agent-caret" }));
     }
 
-    const keep = new Set(shown.map((tool) => tool.key));
-    for (const [key, entry] of node.tools) if (!keep.has(key)) { entry.row.remove(); node.tools.delete(key); }
-    let entering = 0;
-    for (const tool of shown) {
-      const view = tool.presentation;
-      const text = `${view.title}|${view.subtitle ?? ""}`;
-      let entry = node.tools.get(tool.key);
-      if (!entry) {
-        const row = h("li", { class: "orchestra-tool-row entering" });
-        // Stagger rows that arrive together into a waterfall.
-        row.style.setProperty("--enter-delay", `${Math.min(entering++, 8) * 55}ms`);
-        row.addEventListener("animationend", () => row.classList.remove("entering"), { once: true });
-        entry = { row, status: "", text: "" };
-        node.tools.set(tool.key, entry);
-        node.list.insertBefore(row, node.working.isConnected ? node.working : null);
-      }
-      if (entry.status !== view.status || entry.text !== text) {
-        entry.status = view.status; entry.text = text;
-        entry.row.dataset.status = view.status.toLowerCase();
-        // The node masks the waterfall rail behind the mark without painting
-        // over the spinner's own gradient.
-        replace(entry.row, h("span", { class: "orchestra-node" }, statusMark(view.status)),
-          h("span", { class: "orchestra-tool-title" }, view.title),
-          view.subtitle ? h("code", { class: "orchestra-tool-target", title: view.subtitle }, view.subtitle.replace(/\s+/g, " ").slice(0, 240)) : null);
-      }
-    }
-    node.overflow.textContent = tools.length > shown.length ? `${tools.length - shown.length} earlier tool calls` : "";
-    if (tools.length > shown.length) node.list.prepend(node.overflow); else node.overflow.remove();
-    // While the agent works without a tool in flight, show a live "Working" row.
-    const toolRunning = shown.some((tool) => tool.presentation.status === "Running");
-    const thinking = (worker.status === "running" || worker.status === "queued") && !toolRunning && !live?.cancelRequested;
-    // New tool rows are inserted before it, so it stays last without moving
-    // (moving a node would restart its animations).
-    if (thinking && !node.working.isConnected) { node.working.querySelector(".orchestra-spinner")?.replaceWith(spinner()); node.list.append(node.working); }
-    else if (!thinking) node.working.remove();
+    // While the agent works without a tool in flight, the list shows "Working...".
+    const inFlight = entries.some((entry) => entry.kind === "call" && (calls[entry.id]?.status === "running" || calls[entry.id]?.status === "awaiting_approval"));
+    node.list.update({
+      ...(worker.runId === undefined ? {} : { runId: worker.runId }),
+      entries, calls, live: running, pendingApprovalIds: new Set(), canRetry: false, approvals: false,
+      working: (worker.status === "running" || worker.status === "queued") && !inFlight && !live?.cancelRequested,
+      animate: node.rendered || !SETTLED.includes(worker.status), limit: MAX_TOOL_ROWS,
+    });
+    node.rendered = true;
   }
 
   store.watch((state) => [state.orchestra, state.selection.sessionId, state.live, state.orchestraTarget, state.workflowControls, state.host.status, state.models], render);

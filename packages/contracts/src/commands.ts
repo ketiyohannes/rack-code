@@ -48,6 +48,8 @@ import {
   type SessionSummaryView,
   type SessionView,
   type StartRunResult,
+  type QueueStartResult,
+  type QueuedMessageView,
   type ProjectView,
   type SessionDiscovery,
   type ExternalSessionSnapshot,
@@ -99,6 +101,20 @@ export interface StartRunParams {
   readonly interactionMode?: "normal" | "plan";
   readonly skillIds?: readonly string[];
   readonly approvedPlanRunId?: string;
+}
+
+/**
+ * Run settings stored with a queued message: everything `runs.start` takes
+ * except what the queue supplies itself (session, project, prompt and
+ * attachments). Plan approvals cannot be queued.
+ */
+export type QueuedRunSettingsParams = Omit<StartRunParams, "sessionId" | "projectId" | "prompt" | "attachmentIds" | "approvedPlanRunId">;
+
+export interface QueueAddParams {
+  readonly sessionId: string;
+  readonly prompt: string;
+  readonly attachmentIds?: readonly string[];
+  readonly settings: QueuedRunSettingsParams;
 }
 
 type NoParams = Record<string, never>;
@@ -246,6 +262,30 @@ export interface HostCommandMap {
     result: null;
   };
   "runs.cancel": { params: { readonly runId: string }; result: null };
+  /**
+   * Replaces the prompt of an earlier turn and runs it again with that
+   * turn's original settings (account chosen by normal selection). The
+   * edited turn and every later turn are superseded: hidden from the
+   * conversation and from the agent's context, with their journals kept.
+   * Files are not reverted. Refused with `session_busy` while the session
+   * has an active run or workflow.
+   */
+  "runs.edit": { params: { readonly runId: string; readonly prompt: string }; result: StartRunResult };
+  /*
+   * Message queue: messages sent while a run is active wait in the
+   * session's host-owned queue (`SessionView.queue`) and start in order
+   * after the run completes. Every change is announced with
+   * `sessions.changed`. Not available in workflow-bound or worker sessions.
+   */
+  /** Queues a message; starts it at once when the session is idle and the queue is not paused. */
+  "queue.add": { params: QueueAddParams; result: QueueStartResult & { readonly item: QueuedMessageView } };
+  /** Replaces a waiting message's text; its settings and attachments are kept. */
+  "queue.update": { params: { readonly sessionId: string; readonly itemId: string; readonly prompt: string }; result: QueuedMessageView };
+  "queue.remove": { params: { readonly sessionId: string; readonly itemId: string }; result: null };
+  /** Stops the current run (if any) and starts this item next. */
+  "queue.sendNow": { params: { readonly sessionId: string; readonly itemId: string }; result: QueueStartResult };
+  /** Clears a pause; starts the oldest item when the session is idle. */
+  "queue.resume": { params: { readonly sessionId: string }; result: QueueStartResult };
   "runs.respondToQuestions": { params: { readonly runId: string; readonly requestId: string; readonly response: UserQuestionResponse | null }; result: null };
   /*
    * Optional Timeline feature. A host assembled without Timeline answers
@@ -403,6 +443,27 @@ export const COMMAND_VALIDATORS: { readonly [C in HostCommand]: Validator<Comman
     speed: optional(text({ maxLength: 64 })),
     permissionMode: oneOf(PERMISSION_MODES),
   }),
+  "runs.edit": object({ runId: id, prompt: text({ maxLength: 200_000, allowEmpty: true }) }),
+  "queue.add": object({
+    sessionId: id,
+    prompt: text({ maxLength: 200_000, allowEmpty: true }),
+    attachmentIds: optional(array(id, MAX_ATTACHMENTS)),
+    settings: object({
+      providerId: id,
+      runtimeId: id,
+      accountId: optional(id),
+      model: optional(id),
+      reasoningEffort: optional(text({ maxLength: 32 })),
+      speed: optional(text({ maxLength: 64 })),
+      permissionMode: oneOf(PERMISSION_MODES),
+      interactionMode: optional(oneOf(["normal", "plan"])),
+      skillIds: optional(array(id, 16)),
+    }),
+  }),
+  "queue.update": object({ sessionId: id, itemId: id, prompt: text({ maxLength: 200_000, allowEmpty: true }) }),
+  "queue.remove": object({ sessionId: id, itemId: id }),
+  "queue.sendNow": object({ sessionId: id, itemId: id }),
+  "queue.resume": object({ sessionId: id }),
   "runs.list": object({ sessionId: id }),
   "runs.journal": object({ runId: id }),
   "runs.active": empty,
