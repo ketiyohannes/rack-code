@@ -1,3 +1,11 @@
+## 2026-10-28 — Actions on Node.js 24, and the v1.0.0 draft removed (branch `build/upgrade-actions`)
+
+- **Why.** GitHub has deprecated actions that run on Node.js 20, and the v0.0.1 release run warned about `actions/checkout@v4`, `actions/setup-node@v4` and `actions/upload-artifact@v4`.
+- **Upgrade.** `ci.yml` and `release.yml` now use `actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7` and `actions/download-artifact@v8`, the current majors, all running on Node.js 24 (checked in each action's `action.yml`). The breaking changes between v4 and these majors do not affect these workflows: GitHub-hosted runners meet the minimum runner version; `cache: npm` is set explicitly, so setup-node's changed automatic caching does not apply; uploads stay zipped (v7's unzipped uploads are opt-in); downloads use `merge-multiple` rather than single artifacts by ID; and download-artifact v8 now fails on a digest mismatch, which is the safer default.
+- **v1.0.0 removed.** The unpublished `v1.0.0` draft release and its tag were deleted on GitHub and locally. It pointed at a commit already in `main`, so no code was lost; release notes will now compare against `v0.0.1`. The historical entry about the first `v1.0.0` pipeline run below is left as written. Nobody had installed a 1.0.0 build, so the version moving to 0.0.1 affects no one.
+- **Validation performed.** Both workflow files parse as YAML; the pull request's CI run exercises `ci.yml` with the new checkout and setup-node.
+- **Not performed.** `release.yml` (including the artifact upload and download) runs only on a tag or manual dispatch, so the upgraded release path is first exercised by the next release.
+
 ## 2026-10-28 — Release v0.0.1 (alpha): review fixes for message editing, and the version
 
 The first public build, a pre-release. It ships everything on `feat/tool-group-cards`. Three review findings from the message-queue work are fixed first; see [Message queue and edits](message-queue-and-edits.md).
