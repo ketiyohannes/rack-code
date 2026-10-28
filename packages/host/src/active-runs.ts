@@ -55,6 +55,13 @@ export interface ActiveRunsDependencies {
   readonly loadRun: (runId: string) => Promise<RunView>;
   /** Clock used to stamp observed events; defaults to the system clock. */
   readonly now?: () => Date;
+  /**
+   * Called once per run after `run.finished` was emitted and the run left
+   * the active set, so the session is no longer busy. The host uses it to
+   * advance the session's message queue. It runs detached from the drain;
+   * errors and rejections are contained and never affect other runs.
+   */
+  readonly onSettled?: (run: RunView) => Promise<void> | void;
 }
 
 export class ActiveRuns {
@@ -245,6 +252,13 @@ export class ActiveRuns {
     // Final observation ("Run settled") after the run is reported finished,
     // including failed and cancelled runs. Awaited so shutdown waits for it.
     await active.observer?.finish().catch(() => undefined);
+    // Follow-up work (the next queued message) starts only after the
+    // observer finished, so Timeline closes this run before the next opens.
+    // Deliberately not awaited: `done` must not include the next run, or a
+    // caller that holds the session's mutation lane while waiting for this
+    // run to stop (a forced `sessions.remove`) would wait on itself.
+    const { onSettled } = this.dependencies;
+    if (onSettled !== undefined) void Promise.resolve().then(() => onSettled(finished)).catch(() => undefined);
   }
 
   private async refresh(active: ActiveRun): Promise<void> {

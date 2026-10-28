@@ -4694,17 +4694,6 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 .orchestra-agent[open]::details-content { block-size: auto; }
 .orchestra-agent-body { padding: 0 10px 10px 10px; }
 
-/* Waterfall: a rail connects tool rows; new rows drop in, staggered. */
-.orchestra-waterfall { position: relative; list-style: none; margin: 0; padding: 2px 0 0 0; display: grid; gap: 2px; }
-.orchestra-waterfall::before { content: ""; position: absolute; left: 6px; top: 10px; bottom: 10px; width: 1px; background: var(--border); }
-.orchestra-tool-row { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; font-size: 11px; color: var(--text-2); }
-.orchestra-node { position: relative; z-index: 1; display: inline-grid; place-items: center; width: 13px; height: 17px; flex: none; background: var(--card); }
-.orchestra-tool-row.entering { animation: orchestra-drop .36s cubic-bezier(.2, .8, .2, 1) both; animation-delay: var(--enter-delay, 0ms); }
-.orchestra-tool-row[data-status="running"] { color: var(--text); }
-.orchestra-tool-row[data-status="failed"] { color: var(--danger, #b44a4a); }
-.orchestra-tool-title { flex: none; font-weight: 500; }
-.orchestra-tool-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10.5px var(--font-code); color: var(--text-3); }
-.orchestra-tool-overflow { padding: 2px 0 4px 21px; font-size: 10.5px; color: var(--text-3); }
 
 /* Status marks and the live spinner (a rotating gradient arc, phase-locked
    to the clock by the panel so rebuilt nodes continue smoothly). */
@@ -4717,15 +4706,11 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
   animation: orchestra-spin .9s linear infinite; }
-.orchestra-shimmer { background: linear-gradient(90deg, var(--text-3) 0%, var(--text-3) 35%, var(--text) 50%, var(--text-3) 65%, var(--text-3) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: orchestra-shimmer 1.8s linear infinite; }
 @keyframes orchestra-spin { to { transform: rotate(360deg); } }
-@keyframes orchestra-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
-@keyframes orchestra-drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes orchestra-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) {
   .orchestra-spinner { animation-duration: 3s; }
-  .orchestra-shimmer { animation: none; color: var(--text-2); background: none; }
-  .orchestra-tool-row.entering, .orchestra-run-status.waiting_approval { animation: none; }
+  .orchestra-run-status.waiting_approval { animation: none; }
   .orchestra-agent::details-content, .orchestra-agent-caret { transition: none; }
 }
 
@@ -4831,7 +4816,7 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 .tool-row-subtitle { color: var(--text-3); font-size: var(--font-sm); overflow-wrap: anywhere; }
 
 /* Running labels and the "Working..." row shimmer, as in the waterfall. */
-.tool-row[data-status="running"] .tool-row-label, .tool-shimmer {
+.tool-row[data-status="running"] > .tool-row-head .tool-row-label, .tool-shimmer {
   background: linear-gradient(90deg, var(--text-3) 0%, var(--text-3) 35%, var(--text) 50%, var(--text-3) 65%, var(--text-3) 100%);
   background-size: 250% 100%;
   -webkit-background-clip: text;
@@ -4873,7 +4858,7 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 .tool-row-status { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; color: var(--text-3); }
 .tool-row-status .icon { width: 15px; height: 15px; }
 .tool-row-status.status-success { color: var(--tool-ok); }
-.tool-row-status.status-error, .tool-row[data-status="error"] .tool-row-outcome { color: var(--tool-problem); }
+.tool-row-status.status-error, .tool-row[data-status="error"] > .tool-row-head .tool-row-outcome { color: var(--tool-problem); }
 .tool-row-status:not(.status-running) .icon { animation: tool-status-in 160ms ease-out; }
 @keyframes tool-status-in { from { opacity: 0; } to { opacity: 1; } }
 .tool-spinner {
@@ -4888,7 +4873,23 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
   animation: spin .9s linear infinite;
 }
 .tool-row-caret { width: 12px; height: 12px; flex: none; color: var(--text-3); transition: transform 160ms ease; }
-.tool-row.expanded .tool-row-caret { transform: rotate(180deg); }
+.tool-row.expanded > .tool-row-head .tool-row-caret { transform: rotate(180deg); }
+
+/* Merged rows: consecutive calls sharing an icon, expanding to their own
+   rows on an indented rail. */
+.tool-cluster-rows { display: grid; gap: 2px; padding: 0 0 4px 30px; }
+.tool-row-overflow { padding: 2px 0 4px 30px; color: var(--text-3); font-size: var(--font-sm); }
+
+/* The Orchestration panel uses the same rows, sized for the sidebar; below
+   300px the summaries and times give way to the labels. */
+.orchestra-agent-body { container-type: inline-size; }
+.orchestra-agent-body .tool-group-rows { --tool-ok: light-dark(#187537, #73e2a0); --tool-problem: light-dark(#bd2638, #ff8a8a); --tool-line: color-mix(in srgb, var(--text) 12%, transparent); font-size: var(--font-sm); line-height: 1.45; }
+.orchestra-agent-body .tool-row-head { min-height: 26px; gap: 8px; padding: 2px 0; }
+.orchestra-agent-body .tool-row-icon { width: 16px; height: 16px; }
+.orchestra-agent-body .tool-row-icon .icon { width: 13px; height: 13px; }
+.orchestra-agent-body .tool-row:has(~ :not([hidden]))::before { left: 7.5px; top: 20px; bottom: -6px; }
+.orchestra-agent-body .tool-cluster-rows, .orchestra-agent-body .tool-row-details, .orchestra-agent-body .tool-row-overflow { padding-left: 24px; }
+@container (max-width: 300px) { .orchestra-agent-body .tool-row-meta { display: none; } }
 
 /* Approval: the row reads as the action; the consequence and decision sit
    under the label, without a box. */
@@ -4925,7 +4926,7 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 
 @media (prefers-reduced-motion: reduce) {
   .tool-row.entering, .tool-row-status .icon { animation: none; }
-  .tool-row[data-status="running"] .tool-row-label, .tool-shimmer { animation: none; background: none; color: var(--text-2); }
+  .tool-row[data-status="running"] > .tool-row-head .tool-row-label, .tool-shimmer { animation: none; background: none; color: var(--text-2); }
   .tool-spinner { animation-duration: 3s; }
   .tool-group-card.animated .tool-group-body, .tool-group-card.animated .tool-group-caret, .tool-row-caret { transition: none; }
 }
@@ -4950,3 +4951,75 @@ button.workspace-chip:hover { border-color: var(--border-strong); color: var(--t
 .workflow-indicator:hover { color: var(--text); }
 .workflow-indicator:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
 .workflow-indicator .icon { width: 14px; height: 14px; }
+
+/* ------------------------------------------------- message queue and edits */
+
+/* Floating notices and queued messages sit over the end of the transcript;
+ * the session view reserves their height here so the newest output stays
+ * readable above them (see mountSessionView). */
+.transcript { padding-bottom: calc(28px + var(--composer-overlay-space, 0px)); }
+
+/* While a turn runs the toolbar can show Stop and Send (queue) together.
+ * Send stays the primary action; Stop steps back to a quiet secondary. */
+.composer-toolbar:has(.send-button:not(.is-stop):not([hidden])) .send-button.is-stop { background: var(--inset); color: var(--text); }
+.composer-toolbar .send-button.is-stop + .send-button { margin-left: 4px; }
+
+.message-queue { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 6px 6px 6px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: var(--ui-shadow); font-size: var(--font-md); animation: tool-row-drop .28s cubic-bezier(.2, .8, .2, 1) both; }
+.queue-head { display: flex; align-items: center; gap: 7px; height: 22px; padding: 0 4px; color: var(--text-2); font-size: var(--font-sm); }
+.queue-head .icon { width: 14px; height: 14px; color: var(--text-3); }
+.queue-pause { display: flex; align-items: center; gap: 8px; margin: 2px 0 4px; padding: 6px 6px 6px 8px; border-radius: 8px; background: var(--inset); color: var(--text-2); font-size: var(--font-sm); line-height: 1.45; }
+.queue-pause > .icon { flex: none; width: 14px; height: 14px; color: var(--text-2); }
+.queue-pause > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.queue-pause .button { flex: none; gap: 5px; }
+.queue-pause .button .icon { width: 13px; height: 13px; }
+.queue-items { display: flex; flex-direction: column; gap: 1px; max-height: calc(4 * 33px); margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+.queue-item { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 2px 0 4px; border-radius: 8px; animation: tool-row-drop .3s cubic-bezier(.2, .8, .2, 1) both; }
+.queue-item:hover, .queue-item:focus-within { background: var(--overlay); }
+.queue-index { flex: none; width: 16px; color: var(--text-3); font-size: var(--font-xs); font-variant-numeric: tabular-nums; text-align: center; }
+.queue-text { flex: 1; min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.queue-meta { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--text-3); font-size: var(--font-xs); }
+.queue-meta .icon { width: 12px; height: 12px; }
+.queue-next { color: var(--text-2); }
+.queue-actions { display: inline-flex; flex: none; align-items: center; gap: 1px; }
+.queue-actions .icon-button { width: 26px; height: 26px; }
+.queue-actions .icon-button .icon { width: 15px; height: 15px; }
+.queue-actions .icon-button:disabled { opacity: .35; cursor: default; }
+/* Pointer users see the row's actions on hover; keyboard focus reveals them
+ * too, and touch screens (no hover) always show them. */
+@media (hover: hover) {
+  .queue-actions { opacity: 0; transition: opacity 120ms ease; }
+  .queue-item:hover .queue-actions, .queue-item:focus-within .queue-actions, .queue-item.is-next .queue-actions { opacity: 1; }
+}
+.queue-item.editing { flex-direction: column; align-items: stretch; gap: 6px; padding: 6px; background: var(--inset); }
+.queue-edit-input { width: 100%; min-height: 30px; max-height: 160px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; line-height: 1.5; resize: none; }
+.queue-edit-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.queue-edit-actions .note { flex: 1; color: var(--text-3); font-size: var(--font-xs); }
+
+/* Sent messages: Edit appears under the bubble on hover or focus. */
+.prompt-row.has-actions { flex-direction: column; align-items: flex-end; gap: 2px; }
+.prompt-actions { display: flex; align-items: center; gap: 6px; min-height: 26px; }
+.prompt-edited { color: var(--text-3); font-size: var(--font-xs); }
+.prompt-edit.icon-button { width: 26px; height: 26px; }
+.prompt-edit .icon { width: 15px; height: 15px; }
+/* Unavailable Edit stays focusable (aria-disabled, not disabled), so it is
+ * dimmed on its icon: the hover/focus reveal below sets the button's own
+ * opacity. Its reason is the accessible description, and is shown as a muted
+ * hint only while the button has keyboard focus (pointer users get the tooltip). */
+.prompt-edit[aria-disabled="true"] { cursor: default; }
+.prompt-edit[aria-disabled="true"] .icon { opacity: .4; }
+.prompt-edit.icon-button[aria-disabled="true"]:hover { border-color: transparent; background: transparent; color: var(--text-2); }
+.prompt-edit-reason { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.prompt-actions:has(.prompt-edit[aria-disabled="true"]:focus-visible) .prompt-edit-reason { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; color: var(--text-3); font-size: var(--font-xs); white-space: normal; text-align: right; }
+@media (hover: hover) {
+  .prompt-edit { opacity: 0; transition: opacity 120ms ease; }
+  .prompt-row:hover .prompt-edit, .prompt-edit:focus-visible { opacity: 1; }
+}
+
+.message-editor { display: flex; flex-direction: column; gap: 8px; width: min(78%, 620px); margin-left: auto; padding: 10px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--card); animation: tool-status-in .18s ease both; }
+.message-editor-input { width: 100%; min-height: 44px; max-height: 320px; padding: 4px 6px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--font-lg); line-height: 1.55; resize: none; }
+.message-editor-input:focus, .message-editor-input:focus-visible { outline: none; box-shadow: none; border: 0; }
+.message-editor:focus-within { border-color: var(--text-3); }
+.message-editor-warning { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 0 6px; color: var(--text-2); font-size: var(--font-sm); line-height: 1.45; }
+.message-editor-warning .icon { flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--text-3); }
+.message-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.message-editor[aria-busy="true"] .message-editor-input { color: var(--text-2); }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { applyTimedEvent, EMPTY_TURN, type ToolCall } from "./turn-activity.js";
-import { createDefaultRegistry, toolCallContext } from "./tool-formatters.js";
+import { clusterLabel, createDefaultRegistry, mergeSimilarCalls, toolCallContext } from "./tool-formatters.js";
 import { releaseEventLog, RELEASE_APPROVAL, RELEASE_FINAL_ROWS } from "./fixtures/release-blocker.js";
 
 const registry = createDefaultRegistry();
@@ -126,4 +126,39 @@ test("file reads and edits get the icon of the file type", () => {
 test("well-known MCP servers show their brand mark", () => {
   const icon = (server: string) => resolve({ tool: `mcp__${server}__search`, input: {}, mcp: { server, tool: "search" }, isError: false }).icon;
   assert.deepEqual(["notion", "figma", "sentry", "google-drive", "unknown-thing"].map(icon), ["brand-notion", "brand-figma", "brand-sentry", "brand-google-drive", "plugs-fill"]);
+});
+
+test("consecutive calls that share an icon merge; thoughts and approvals break the run", () => {
+  const call = (id: string, extra: Partial<ToolCall> = {}): ToolCall => ({ id, groupId: "g", tool: "Bash", input: {}, status: "success", approvalOnly: false, ...extra });
+  const calls = Object.fromEntries([
+    call("git1"), call("git2"), call("git3"), call("npm1"), call("git4"), call("git5"),
+    call("ask", { approval: { request: { id: "ap", tool: "Bash", input: {} }, state: "allowed" } }), call("git6"),
+  ].map((entry) => [entry.id, entry]));
+  const icons: Record<string, string> = { git1: "brand-git", git2: "brand-git", git3: "brand-git", npm1: "brand-npm", git4: "brand-git", git5: "brand-git", ask: "brand-git", git6: "brand-git" };
+  const entries = [
+    ...["git1", "git2", "git3", "npm1", "git4"].map((id) => ({ kind: "call" as const, id })),
+    { kind: "thought" as const, index: 7 },
+    ...["git5", "ask", "git6"].map((id) => ({ kind: "call" as const, id })),
+  ];
+  assert.deepEqual(mergeSimilarCalls(entries, calls, (id) => icons[id] as never), [
+    { kind: "cluster", key: "git1", ids: ["git1", "git2", "git3"] },
+    { kind: "call", id: "npm1" },
+    { kind: "call", id: "git4" },
+    { kind: "thought", index: 7 },
+    { kind: "call", id: "git5" },
+    { kind: "call", id: "ask" },
+    { kind: "call", id: "git6" },
+  ]);
+});
+
+test("merged rows read as one action", () => {
+  const context = (tool: string, input: Record<string, unknown>, server?: string) => toolCallContext({ tool, input, isError: false, ...(server === undefined ? {} : { mcp: { server, tool, arguments: input } }) });
+  const git = ["git status", "git diff --stat", "cd repo && git log -3"].map((command) => context("Bash", { command }));
+  assert.equal(clusterLabel(git, "brand-git", "past"), "Ran 3 git commands");
+  assert.equal(clusterLabel(git.slice(0, 2), "brand-git", "present"), "Running 2 git commands");
+  assert.equal(clusterLabel([context("Bash", { command: "make" }), context("Bash", { command: "ls" })], "terminal-window-fill", "past"), "Ran 2 commands");
+  const ts = [context("Read", { file_path: "a.ts" }), context("Read", { file_path: "b.ts" })];
+  assert.equal(clusterLabel(ts, "brand-typescript", "past"), "Read 2 TypeScript files");
+  assert.equal(clusterLabel([...ts, context("Edit", { file_path: "c.ts" })], "brand-typescript", "present"), "Reading and editing 3 TypeScript files");
+  assert.equal(clusterLabel([context("search", {}, "notion"), context("fetch", {}, "notion")], "brand-notion", "past"), "Used Notion 2 times");
 });

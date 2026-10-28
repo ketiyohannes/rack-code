@@ -257,6 +257,13 @@ export interface RunRecord {
   readonly skills?: readonly RuntimeSkill[];
   /** The completed plan explicitly approved for this implementation turn. */
   readonly approvedPlanRunId?: string;
+  /**
+   * The run whose user message this run edits. Set when the user edited an
+   * earlier message: that run and every later turn were superseded (see
+   * `SessionRecord.supersededRunIds`) and this run took their place. Used for
+   * audit and the "Edited" label.
+   */
+  readonly editOfRunId?: string;
   readonly status: RunStatus;
   readonly attemptIds: readonly AttemptId[];
   readonly result?: string;

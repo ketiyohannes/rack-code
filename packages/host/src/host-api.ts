@@ -20,6 +20,8 @@ import type { UsageService } from "@rack/features/usage";
  *   workspaces (shared folder or isolated worktree) through Projects;
  * - reporting whether the Accounts service fell back from the selected
  *   account when the caller did not name one;
+ * - advancing each session's message queue when one of its runs settles
+ *   (see `advanceQueue`), and starting edits of earlier messages;
  * - connecting optional features that were assembled at startup. Timeline,
  *   when present, captures the run-start observation before a run starts and
  *   observes the run's events through `ActiveRuns`. Its commands answer
@@ -27,7 +29,7 @@ import type { UsageService } from "@rack/features/usage";
  */
 import type { AccountRecord } from "@rack/core/accounts/types";
 import type { AccountsService } from "@rack/core/accounts/service";
-import type { ExecutionService } from "@rack/core/execution/service";
+import type { ExecutionService, StartRunInput } from "@rack/core/execution/service";
 import type { RuntimeRegistry } from "@rack/core/execution/runtime-registry";
 import type { RunRecord } from "@rack/core/execution/types";
 import type { ProjectsService } from "@rack/core/projects/service";
@@ -35,6 +37,8 @@ import { IsolationUnavailableError } from "@rack/core/projects/errors";
 import type { ProjectRecord, SourceControlAction } from "@rack/core/projects/types";
 import type { ConnectionsService } from "@rack/core/connections/service";
 import type { SessionsService } from "@rack/core/sessions/service";
+import { afterRunSettled } from "@rack/core/sessions/queue-policy";
+import type { SessionRecord } from "@rack/core/sessions/types";
 import type { SessionImportsService } from "@rack/core/session-imports/service";
 import type { TimelineRunObserver, TimelineService } from "@rack/features/timeline";
 import {
@@ -43,6 +47,7 @@ import {
   type CommandParams,
   type CommandResult,
   type HostCommand,
+  type StartRunParams,
 } from "@rack/contracts/commands";
 import type { HostEvent } from "@rack/contracts/events";
 import type { CommandResponse } from "@rack/contracts/transport";
@@ -53,6 +58,7 @@ import {
   type ProjectView,
   type RunView,
   type SessionSummaryView,
+  type StartRunResult,
 } from "@rack/contracts/views";
 import { ModelCatalogCache } from "./model-cache.js";
 import { ActiveRuns } from "./active-runs.js";
@@ -98,9 +104,19 @@ export class HostApi {
     private readonly app: HostApplication,
     private readonly emit: (event: HostEvent) => void,
   ) {
-    this.ready = Promise.all([app.execution.initialize(), app.orchestra?.initialize()]).then(() => undefined);
+    // Queues left with waiting items by the previous process are paused: the
+    // run before them was recovered as interrupted, and nothing should start
+    // after a restart without the user. A failure here must not make every
+    // command unavailable; an unpaused queue still advances only after a run
+    // the user starts in that session settles.
+    const pausingQueues = app.sessions.pauseAllQueues("host_restarted").catch(() => undefined);
+    this.ready = Promise.all([app.execution.initialize(), app.orchestra?.initialize(), pausingQueues]).then(() => undefined);
     void this.ready.catch(() => {});
-    this.activeRuns = new ActiveRuns({ emit, loadRun: (runId) => this.loadRun(runId) });
+    this.activeRuns = new ActiveRuns({
+      emit,
+      loadRun: (runId) => this.loadRun(runId),
+      onSettled: (run) => this.advanceQueue(run.sessionId, run.status),
+    });
     this.handlers = this.createHandlers();
     app.orchestra?.subscribe(() => {
       emit({ type: "orchestra.changed" });
@@ -501,70 +517,115 @@ export class HostApi {
       },
 
       "runs.start": async (params) => this.mutateSession(params.sessionId, async () => {
+        const started = await this.startInSession(params);
+        await this.resumeQueueAfterUserStart(started.run.sessionId);
+        return started;
+      }),
+      "runs.edit": async (params) => {
+        const original = await execution.getRun(params.runId);
+        return this.mutateSession(original.sessionId, async () => {
+          if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+          if (this.sessionBusy(original.sessionId)) throw new HostOperationError("session_busy", "Stop the current run before editing an earlier message.", { sessionId: original.sessionId });
+          const session = await sessions.get(original.sessionId);
+          if (session.parentSessionId !== undefined) throw new HostOperationError("invalid_input", "Messages in a workflow agent's conversation cannot be edited.");
+          // Re-read under the lane: another window may have edited or the run
+          // may have been replaced since the first read.
+          const run = await execution.getRun(params.runId);
+          const lastAttemptId = run.attemptIds.at(-1);
+          if (lastAttemptId === undefined) throw new HostOperationError("invalid_input", "This turn has no recorded runtime and cannot be edited.");
+          const { runtimeId } = await execution.getAttempt(lastAttemptId);
+          // An edit resends a plain agent turn. In a conversation that runs a
+          // workflow that would silently skip the workflow and hide its turns,
+          // so it is refused (editing workflow prompts is out of scope).
+          if (await this.runsWorkflow(session, run.createdAt)) {
+            throw new HostOperationError("invalid_input", "Messages in a conversation that runs a workflow cannot be edited.");
+          }
+          // "Run again" semantics: the turn's own settings, with the account
+          // chosen by normal selection so an unavailable account cannot block it.
+          const started = await this.startInSession({
+            sessionId: session.id,
+            ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
+            providerId: run.providerId,
+            runtimeId,
+            prompt: params.prompt,
+            ...(run.model === undefined ? {} : { model: run.model }),
+            ...(run.reasoningEffort === undefined ? {} : { reasoningEffort: run.reasoningEffort }),
+            ...(run.speed === undefined ? {} : { speed: run.speed }),
+            permissionMode: run.permissionMode,
+            ...(run.interactionMode === undefined ? {} : { interactionMode: run.interactionMode }),
+            ...(run.skills === undefined || run.skills.length === 0 ? {} : { skillIds: run.skills.map((skill) => skill.id) }),
+            ...(run.attachments === undefined || run.attachments.length === 0 ? {} : { attachmentIds: run.attachments.map((file) => file.id) }),
+            rewind: { fromRunId: run.id },
+          });
+          await this.resumeQueueAfterUserStart(session.id);
+          // The conversation lost turns; refresh every client's session now
+          // rather than at the new run's first event.
+          this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId: session.id });
+          return started;
+        });
+      },
+      "queue.add": async (params) => this.mutateSession(params.sessionId, async () => {
         if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
-        const project = params.projectId === undefined ? undefined : await projects.getProject(params.projectId);
+        const session = await sessions.get(params.sessionId);
+        await this.requireQueueable(session);
+        const item = await sessions.enqueue(session.id, {
+          prompt: params.prompt,
+          ...(params.attachmentIds === undefined ? {} : { attachmentIds: params.attachmentIds }),
+          settings: params.settings,
+        });
+        this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId: session.id });
+        // The run may have settled between the client's busy check and this
+        // command. Start the oldest item now instead of leaving it waiting
+        // for a run that is no longer there. A paused queue keeps waiting.
+        if (this.sessionBusy(session.id) || session.queue?.pausedReason !== undefined) return { item };
+        try {
+          const started = await this.startQueued(session.id);
+          return { item, ...(started === undefined ? {} : { started }) };
+        } catch {
+          // The item is back in the queue and the queue shows why it paused.
+          return { item };
+        }
+      }),
+      "queue.update": async (params) => this.mutateSession(params.sessionId, async () => {
+        const item = await sessions.updateQueued(params.sessionId, params.itemId, params.prompt);
+        await this.emitSessionChanged(params.sessionId);
+        return item;
+      }),
+      "queue.remove": async (params) => this.mutateSession(params.sessionId, async () => {
+        await sessions.removeQueued(params.sessionId, params.itemId);
+        await this.emitSessionChanged(params.sessionId);
+        return null;
+      }),
+      "queue.sendNow": async (params) => this.mutateSession(params.sessionId, async () => {
+        if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
         if (this.app.orchestra?.isBusy(params.sessionId)) throw new HostOperationError("session_busy", "This conversation has an active workflow. Pause or stop it in Orchestration.");
         const running = this.activeRuns.list().find((active) => active.run.sessionId === params.sessionId);
+        // Send now is an explicit user action, so it also clears a pause.
+        await sessions.resumeQueue(params.sessionId);
         if (running !== undefined) {
-          const attemptId = running.run.attemptIds.at(-1) ?? running.run.id;
-          throw new HostOperationError(
-            "session_busy",
-            `Session '${params.sessionId}' already has an active run.`,
-            { sessionId: params.sessionId, attemptId },
-          );
+          // Mark the item first, so the settle that the cancellation causes
+          // starts it (see `afterRunSettled`), then stop the current turn.
+          await sessions.requestSendNow(params.sessionId, params.itemId);
+          await this.emitSessionChanged(params.sessionId);
+          try { await this.activeRuns.cancel(running.run.id); }
+          catch (error) {
+            // The run ended on its own after the check above. Its settle
+            // starts the marked item all the same, so this is not a failure.
+            if (!(error instanceof HostOperationError && error.code === "run_not_active")) throw error;
+          }
+          return {};
         }
-        const session = await sessions.get(params.sessionId);
-        if (session.projectId !== project?.id) throw new HostOperationError("invalid_input", "The run's project must match its session's project.");
-        // Read the selection before starting so a fallback can be reported.
-        const selected = params.accountId === undefined
-          ? await accounts.selected(params.providerId)
-          : undefined;
-        // Attach the optional observer only after execution creates/restores
-        // the worktree, while still capturing before any provider can edit it.
-        // The forwarding object is stable while the queued run prepares; its
-        // event stream cannot begin until beforeRuntime has completed.
-        let preparedObserver: TimelineRunObserver | undefined;
-        const observer: TimelineRunObserver | undefined = project === undefined || !this.app.timeline ? undefined : {
-          bindRun: (id) => preparedObserver?.bindRun(id),
-          observe: (event) => preparedObserver?.observe(event),
-          finish: async () => { await preparedObserver?.finish(); },
-          abandon: () => preparedObserver?.abandon(),
-        };
-        let handle: Awaited<ReturnType<typeof execution.start>>;
-        try {
-          if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
-          handle = await execution.start(params, { beforeRuntime: async (runId, signal) => {
-            if (!observer || signal.aborted) return;
-            preparedObserver = await this.app.timeline?.beginRun({ sessionId: params.sessionId });
-            preparedObserver?.bindRun(runId);
-            if (signal.aborted) preparedObserver?.abandon();
-          } });
-        } catch (error) {
-          observer?.abandon();
-          throw error;
-        }
-        observer?.bindRun(handle.runId);
-        let run: RunView;
-        try {
-          if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
-          run = await this.loadRun(handle.runId);
-          if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
-        } catch (error) {
-          // A failed start reply must not strand an untracked provider process.
-          try { await handle.cancel(); await handle.completed; } finally { observer?.abandon(); }
-          throw error;
-        }
-        const fallbackFromAccountId = selected !== undefined && selected.id !== run.accountId
-          ? selected.id
-          : undefined;
-        this.activeRuns.track(handle, run, fallbackFromAccountId, observer);
-        const started = {
-          run,
-          ...(fallbackFromAccountId === undefined ? {} : { fallbackFromAccountId }),
-        };
-        this.emit({ type: "run.started", ...started });
-        this.emit({ type: "accounts.changed" });
-        return started;
+        const started = await this.startQueued(params.sessionId, params.itemId);
+        if (started === undefined) throw new HostOperationError("invalid_input", "This queued message was already sent or removed.");
+        return { started };
+      }),
+      "queue.resume": async (params) => this.mutateSession(params.sessionId, async () => {
+        if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+        await sessions.resumeQueue(params.sessionId);
+        await this.emitSessionChanged(params.sessionId);
+        if (this.sessionBusy(params.sessionId)) return {};
+        const started = await this.startQueued(params.sessionId);
+        return started === undefined ? {} : { started };
       }),
       "runs.list": async (params) => {
         const runs = await execution.listRuns(params.sessionId);
@@ -596,6 +657,187 @@ export class HostApi {
       "timeline.projectFileDiff": async (params) => this.timeline().projectFileDiff(params.projectId, params.checkpointId, params.path),
       "timeline.fileDiff": async (params) => this.timeline().fileDiff(params.sessionId, params.checkpointId, params.path),
     };
+  }
+
+  /**
+   * Starts a run in a session. The caller must hold the session's mutation
+   * lane (`mutateSession`), so the busy check and the start cannot race
+   * another start, a queued message or an edit. Shared by `runs.start`,
+   * queued messages and edits.
+   */
+  private async startInSession(params: StartRunParams & Pick<StartRunInput, "rewind">): Promise<StartRunResult> {
+    const { accounts, projects, sessions, execution } = this.app;
+    if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+    const project = params.projectId === undefined ? undefined : await projects.getProject(params.projectId);
+    if (this.app.orchestra?.isBusy(params.sessionId)) throw new HostOperationError("session_busy", "This conversation has an active workflow. Pause or stop it in Orchestration.");
+    const running = this.activeRuns.list().find((active) => active.run.sessionId === params.sessionId);
+    if (running !== undefined) {
+      const attemptId = running.run.attemptIds.at(-1) ?? running.run.id;
+      throw new HostOperationError(
+        "session_busy",
+        `Session '${params.sessionId}' already has an active run.`,
+        { sessionId: params.sessionId, attemptId },
+      );
+    }
+    const session = await sessions.get(params.sessionId);
+    if (session.projectId !== project?.id) throw new HostOperationError("invalid_input", "The run's project must match its session's project.");
+    // Read the selection before starting so a fallback can be reported.
+    const selected = params.accountId === undefined
+      ? await accounts.selected(params.providerId)
+      : undefined;
+    // Attach the optional observer only after execution creates/restores
+    // the worktree, while still capturing before any provider can edit it.
+    // The forwarding object is stable while the queued run prepares; its
+    // event stream cannot begin until beforeRuntime has completed.
+    let preparedObserver: TimelineRunObserver | undefined;
+    const observer: TimelineRunObserver | undefined = project === undefined || !this.app.timeline ? undefined : {
+      bindRun: (id) => preparedObserver?.bindRun(id),
+      observe: (event) => preparedObserver?.observe(event),
+      finish: async () => { await preparedObserver?.finish(); },
+      abandon: () => preparedObserver?.abandon(),
+    };
+    let handle: Awaited<ReturnType<typeof execution.start>>;
+    try {
+      if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+      handle = await execution.start(params, { beforeRuntime: async (runId, signal) => {
+        if (!observer || signal.aborted) return;
+        preparedObserver = await this.app.timeline?.beginRun({ sessionId: params.sessionId });
+        preparedObserver?.bindRun(runId);
+        if (signal.aborted) preparedObserver?.abandon();
+      } });
+    } catch (error) {
+      observer?.abandon();
+      throw error;
+    }
+    observer?.bindRun(handle.runId);
+    let run: RunView;
+    try {
+      if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+      run = await this.loadRun(handle.runId);
+      if (this.stopping) throw new HostOperationError("host_unavailable", "The app is shutting down.");
+    } catch (error) {
+      // A failed start reply must not strand an untracked provider process.
+      try { await handle.cancel(); await handle.completed; } finally { observer?.abandon(); }
+      throw error;
+    }
+    const fallbackFromAccountId = selected !== undefined && selected.id !== run.accountId
+      ? selected.id
+      : undefined;
+    this.activeRuns.track(handle, run, fallbackFromAccountId, observer);
+    const started = {
+      run,
+      ...(fallbackFromAccountId === undefined ? {} : { fallbackFromAccountId }),
+    };
+    this.emit({ type: "run.started", ...started });
+    this.emit({ type: "accounts.changed" });
+    return started;
+  }
+
+  /** Whether the session has an active run or workflow in this host. */
+  private sessionBusy(sessionId: string): boolean {
+    return this.activeRuns.list().some((active) => active.run.sessionId === sessionId) || (this.app.orchestra?.isBusy(sessionId) ?? false);
+  }
+
+  /**
+   * Queuing is for a person's own conversation. Worker sessions are driven
+   * by their workflow, and a workflow-bound conversation sends each message
+   * to Orchestration, which has its own step control (out of scope for v1).
+   */
+  private async requireQueueable(session: SessionRecord): Promise<void> {
+    if (session.parentSessionId !== undefined) throw new HostOperationError("invalid_input", "Messages cannot be queued in a workflow agent's conversation.");
+    if (await this.runsWorkflow(session)) {
+      throw new HostOperationError("invalid_input", "Messages cannot be queued in a conversation that runs a workflow.");
+    }
+  }
+
+  /**
+   * Whether the session is bound to a workflow or, when `since` is given,
+   * still shows a workflow turn created at or after that time (turns an
+   * earlier edit replaced do not count). Queuing and editing share this rule;
+   * the renderer mirrors it in `canEditTurn`.
+   */
+  private async runsWorkflow(session: SessionRecord, since?: string): Promise<boolean> {
+    if (this.app.orchestra === undefined) return false;
+    const snapshot = await this.app.orchestra.snapshot();
+    if (snapshot.bindings[session.id] !== undefined) return true;
+    if (since === undefined) return false;
+    const superseded = new Set(session.supersededRunIds ?? []);
+    return snapshot.runs.some((candidate) => candidate.sessionId === session.id && !superseded.has(candidate.id) && candidate.createdAt >= since);
+  }
+
+  /**
+   * A manual send or edit is the user acting in the session, which is the
+   * signal a paused queue waits for: clear the pause so the queue continues
+   * after this run. A queue that is not paused is left alone.
+   */
+  private async resumeQueueAfterUserStart(sessionId: string): Promise<void> {
+    const session = await this.app.sessions.get(sessionId);
+    if (session.queue?.pausedReason === undefined) return;
+    await this.app.sessions.resumeQueue(sessionId);
+    this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId });
+  }
+
+  /**
+   * Takes a waiting message (the named one, or the oldest) and starts it.
+   * Caller holds the session's lane and has checked the session is idle.
+   * Returns `undefined` when no such item is waiting. When the start fails
+   * (for example the item's model or account is gone), the item goes back
+   * to the head of the queue, the queue pauses with the reason, and the
+   * error is rethrown, so a message is never lost.
+   */
+  private async startQueued(sessionId: string, itemId?: string): Promise<StartRunResult | undefined> {
+    const { sessions } = this.app;
+    const item = await sessions.takeQueued(sessionId, itemId);
+    if (item === undefined) return undefined;
+    const session = await sessions.get(sessionId);
+    try {
+      return await this.startInSession({
+        sessionId,
+        ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
+        prompt: item.prompt,
+        ...(item.attachmentIds === undefined ? {} : { attachmentIds: item.attachmentIds }),
+        ...item.settings,
+      });
+    } catch (error) {
+      await sessions.restoreQueued(sessionId, item);
+      await sessions.pauseQueue(sessionId, "start_failed", error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId });
+    }
+  }
+
+  /**
+   * Advances a session's queue after one of its runs settled (called by
+   * `ActiveRuns`, detached from the run). Applies `afterRunSettled`: start
+   * the next item, pause, or do nothing. Runs inside the session's lane, so
+   * it cannot race a client's queue command or a manual start; if a manual
+   * start won the race, the session is busy and the queue waits for that
+   * run instead. Failures are contained: a failed start already paused the
+   * queue, and a removed session simply has no queue.
+   */
+  private async advanceQueue(sessionId: string, status: RunView["status"]): Promise<void> {
+    try {
+      await this.mutateSession(sessionId, async () => {
+        if (this.stopping || this.sessionBusy(sessionId)) return;
+        const session = await this.app.sessions.get(sessionId);
+        const decision = afterRunSettled(status, session.queue);
+        if (decision.action === "pause") {
+          await this.app.sessions.pauseQueue(sessionId, decision.reason);
+          this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId });
+        } else if (decision.action === "start") {
+          await this.startQueued(sessionId, decision.itemId);
+        }
+      });
+    } catch {
+      // See above; the session record already reflects the outcome.
+    }
+  }
+
+  /** Announces a session change to every client, with its project for list refreshes. */
+  private async emitSessionChanged(sessionId: string): Promise<void> {
+    const session = await this.app.sessions.get(sessionId);
+    this.emit({ type: "sessions.changed", projectId: session.projectId, sessionId });
   }
 
   /** Host commands can arrive from several windows. Serialize mutations of

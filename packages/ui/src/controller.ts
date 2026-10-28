@@ -18,6 +18,7 @@ import {
   type ConnectView,
   type HostEvent,
   type StartRunParams,
+  type StartRunResult,
   type ActiveRunView,
   type RunView,
   type SessionDiscovery,
@@ -649,17 +650,7 @@ export class Controller {
         await Promise.all([this.reloadOrchestra(), this.reloadSession(params.sessionId), this.reloadSessions()]);
         return;
       }
-      const started = await this.host.call("runs.start", params);
-      this.addLiveRun(started.run, started.fallbackFromAccountId);
-      if (started.fallbackFromAccountId !== undefined) {
-        const accounts = this.store.get().accounts;
-        const from = accounts.find((account) => account.id === started.fallbackFromAccountId);
-        const to = accounts.find((account) => account.id === started.run.accountId);
-        this.notify({
-          kind: "info",
-          message: `Selected account ${label(from, started.fallbackFromAccountId)} is not available; this run uses ${label(to, started.run.accountId)}.`,
-        });
-      }
+      this.adoptStarted(await this.host.call("runs.start", params));
     }, (error) => {
       if (error instanceof HostCommandError && error.code === "session_busy") {
         return {
@@ -705,6 +696,99 @@ export class Controller {
       ...(run.skills === undefined || run.skills.length === 0 ? {} : { skillIds: run.skills.map((skill) => skill.id) }),
       ...(options.prompt !== undefined || run.attachments === undefined || run.attachments.length === 0 ? {} : { attachmentIds: run.attachments.map((file) => file.id) }),
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Message queue and edits of earlier messages
+  //
+  // The host owns each session's queue (`SessionView.queue`) and decides
+  // when a queued message starts. These methods only send commands; every
+  // resulting change returns through `sessions.changed`, which reloads the
+  // selected session in every window. A run started directly by a command
+  // is adopted at once, like a `runs.start` result. Each method returns
+  // true on success so a form knows whether to clear its draft.
+
+  /**
+   * Queues a message for after the current turn, with the same parameters
+   * `startRun` takes (the composer builds one shape for both). The current
+   * model, account, permission, skills and attachments are stored with the
+   * item. If the session became idle meanwhile, the host starts it at once.
+   */
+  async queueMessage(params: StartRunParams): Promise<boolean> {
+    return this.attempt(async () => {
+      if (params.approvedPlanRunId !== undefined) throw new Error("Implementing a plan cannot be queued. Wait for the current turn to finish.");
+      const { sessionId, projectId: _project, prompt, attachmentIds, approvedPlanRunId: _plan, ...settings } = params;
+      const result = await this.host.call("queue.add", { sessionId, prompt, ...(attachmentIds === undefined ? {} : { attachmentIds }), settings });
+      if (result.started !== undefined) this.adoptStarted(result.started);
+    });
+  }
+
+  /** Replaces a waiting message's text. */
+  async updateQueued(sessionId: string, itemId: string, prompt: string): Promise<boolean> {
+    return this.attempt(async () => { await this.host.call("queue.update", { sessionId, itemId, prompt }); });
+  }
+
+  /** Removes a waiting message. */
+  async removeQueued(sessionId: string, itemId: string): Promise<boolean> {
+    return this.attempt(async () => { await this.host.call("queue.remove", { sessionId, itemId }); });
+  }
+
+  /**
+   * Stops the current turn (if any) and runs this message next. With a run
+   * active, the host starts the item once the stopped run settles and
+   * announces it with `run.started`.
+   */
+  async sendQueuedNow(sessionId: string, itemId: string): Promise<boolean> {
+    return this.attempt(async () => {
+      const result = await this.host.call("queue.sendNow", { sessionId, itemId });
+      if (result.started !== undefined) this.adoptStarted(result.started);
+    });
+  }
+
+  /** Clears a paused queue; starts the oldest message when the session is idle. */
+  async resumeQueue(sessionId: string): Promise<boolean> {
+    return this.attempt(async () => {
+      const result = await this.host.call("queue.resume", { sessionId });
+      if (result.started !== undefined) this.adoptStarted(result.started);
+    });
+  }
+
+  /**
+   * Replaces an earlier message and runs it again with that turn's original
+   * settings (the account is chosen by normal selection). The host
+   * supersedes the edited turn and every later turn; they disappear from the
+   * conversation (see `conversation-history.ts`) but keep their journals.
+   * Files changed by those turns are not reverted; the caller confirms that
+   * with the user first.
+   */
+  async editMessage(run: RunView, prompt: string): Promise<boolean> {
+    // Same catalog check as "Run again": an edit with a model that is gone
+    // would replace the later turns and then fail, so refuse it up front.
+    const models = this.store.get().models;
+    if (!models.some((candidate) => candidate.providerId === run.providerId && (run.model === undefined || candidate.id === run.model))) {
+      this.notify({ kind: "error", message: "The model used for this turn is no longer available, so it can't be edited and resent." });
+      return false;
+    }
+    return this.attempt(async () => {
+      this.adoptStarted(await this.host.call("runs.edit", { runId: run.id, prompt }));
+      await this.reloadSession(run.sessionId);
+    }, (error) => error instanceof HostCommandError && error.code === "session_busy"
+      ? { kind: "error", code: error.code, message: "Stop the current run before editing an earlier message." }
+      : undefined);
+  }
+
+  /** Shows a run a command started and explains an account fallback, as for a normal send. */
+  private adoptStarted(started: StartRunResult): void {
+    this.addLiveRun(started.run, started.fallbackFromAccountId);
+    if (started.fallbackFromAccountId !== undefined) {
+      const accounts = this.store.get().accounts;
+      const from = accounts.find((account) => account.id === started.fallbackFromAccountId);
+      const to = accounts.find((account) => account.id === started.run.accountId);
+      this.notify({
+        kind: "info",
+        message: `Selected account ${label(from, started.fallbackFromAccountId)} is not available; this run uses ${label(to, started.run.accountId)}.`,
+      });
+    }
   }
 
   private orchestraLoading: Promise<void> | undefined;

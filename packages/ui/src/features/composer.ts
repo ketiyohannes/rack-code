@@ -31,6 +31,8 @@ import { modelKey } from "../components/model-settings.js";
 import { loadSessionChoice, saveSessionChoice } from "../session-model-choice.js";
 import { createQuestionRequests } from "./user-questions.js";
 import { initialComposerSelection, type AccountChoice, type ComposerSelection } from "./composer-selection.js";
+import { visibleRuns } from "./conversation-history.js";
+import { createQueueStack } from "./message-queue.js";
 
 const MODE_ICONS: Readonly<Record<PermissionMode, Parameters<typeof icon>[0]>> = {
   read_only: "lock-simple", ask: "hand", approve_for_me: "shield-check", full_access: "lightning",
@@ -74,15 +76,21 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   const prompt = h("textarea", {
     class: "prompt-input", rows: 1, placeholder: "Ask the agent to do something", aria: { label: "Prompt" },
   });
+  // Send and Stop are separate controls: while a turn runs, Send (and Enter)
+  // queues the message for after it, and only Stop or Escape stops the turn.
   const send = h("button", { class: "send-button", type: "submit" });
+  const stop = h("button", { class: "send-button is-stop", type: "button", onClick: () => void stopActive() }, icon("stop"));
+  stop.hidden = true;
   const guard = h("div", { class: "guard" });
+  const queueStack = createQueueStack(controller, () => prompt.focus());
   const form = h("form", { class: "composer", onSubmit: (event) => {
     event.preventDefault();
-    void submitOrStop();
+    void submit();
   } },
     // Requests and notices share one bounded stack above the prompt. They
     // must never consume its fixed height or hide the send/stop control.
-    h("div", { class: "composer-overlays" }, createQuestionRequests(store, controller), guard, planCard),
+    // Queued messages sit last, directly above the prompt they came from.
+    h("div", { class: "composer-overlays" }, createQuestionRequests(store, controller), guard, planCard, queueStack.element),
     h("div", { class: "composer-card" },
       orchestraBar,
       attachments.list,
@@ -91,6 +99,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       h("div", { class: "composer-toolbar" },
         attachments.trigger,
         h("div", { class: "composer-pills" }, planToggle, workspace.element, permission.element, skills.trigger, account.element, connectPill, model.element),
+        stop,
         send,
       ),
     ),
@@ -100,10 +109,11 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   prompt.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
-      // Enter never stops a workflow: a follow-up typed while agents work
-      // must not silently cancel them. Stop stays on the button and Escape.
+      // Enter never stops anything: during a turn it queues the message, and
+      // a workflow (which cannot queue) ignores it. Stopping stays on the
+      // Stop button and Escape.
       if (activeWorkflow(store.get())) return;
-      void submitOrStop();
+      void submit();
     }
   });
   prompt.addEventListener("input", () => { refresh(store.get()); });
@@ -132,15 +142,33 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     return Object.values(state.live).find((live) => live.run.sessionId === state.session?.id && isActiveStatus(live.run.status))?.run.id;
   }
 
-  async function submitOrStop(approvedPlanRunId?: string): Promise<void> {
+  async function stopActive(): Promise<void> {
     const state = store.get();
     const orchestra = activeWorkflow(state);
     if (orchestra) { await controller.controlWorkflow(orchestra.id, "stop"); return; }
     const active = activeRunId(state);
-    if (active !== undefined) {
-      if (!state.live[active]?.cancelRequested) await controller.cancelRun(active);
-      return;
-    }
+    if (active !== undefined && !state.live[active]?.cancelRequested) await controller.cancelRun(active);
+  }
+
+  /**
+   * Whether a message typed now would be queued rather than started. Queuing
+   * is for a person's own conversation: workflow-bound conversations and
+   * workflow agents' conversations send nothing while busy.
+   */
+  function queueing(state: AppState): boolean {
+    return activeRunId(state) !== undefined && !activeWorkflow(state) && !boundWorkflow(state) && state.session?.parentSessionId === undefined;
+  }
+
+  function boundWorkflow(state: AppState): boolean {
+    const sessionId = state.selection.sessionId;
+    return sessionId !== undefined && state.enabledPlugins.includes("orchestration") && state.orchestra.bindings[sessionId] !== undefined;
+  }
+
+  async function submit(approvedPlanRunId?: string): Promise<void> {
+    const state = store.get();
+    if (activeWorkflow(state)) return;
+    const queue = queueing(state);
+    if (activeRunId(state) !== undefined && (!queue || approvedPlanRunId !== undefined)) return;
     const session = state.session;
     const selected = model.selected;
     const choice = parseChoice(account.value);
@@ -152,7 +180,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     refresh(state);
     const reasoningEffort = model.reasoningEffort;
     const chosenSpeed = model.speed;
-    const ok = await controller.startRun({
+    const params = {
       sessionId: session.id, ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
       runtimeId: selected.runtimeId, providerId: selected.providerId,
       ...(choice.accountId === undefined ? {} : { accountId: choice.accountId }),
@@ -163,7 +191,10 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
       ...(approvedPlanRunId ? { approvedPlanRunId } : {}),
       ...(skills.ids().length ? { skillIds: skills.ids() } : {}),
       ...(draft.length === 0 ? {} : { attachmentIds: draft.map((file) => file.id) }),
-    });
+    } as const;
+    // The host stores the queued item with these exact settings, so a later
+    // change in the composer does not affect messages already waiting.
+    const ok = queue ? await controller.queueMessage(params) : await controller.startRun(params);
     submitting = false;
     if (ok) {
       attachments.clear(session.id, draft.map((file) => file.id));
@@ -173,7 +204,8 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
   }
 
   function unacknowledgedUnknown(state: AppState): string | undefined {
-    const last = state.runs.at(-1);
+    // A turn replaced by an edit no longer needs acknowledging.
+    const last = visibleRuns(state).at(-1);
     return last?.status === "unknown" && state.acknowledgedUnknown[last.id] === undefined ? last.id : undefined;
   }
 
@@ -232,7 +264,7 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     // Session metadata/history arrive after selection. Restore the persisted
     // workflow only once they belong to this chat, without overwriting a draft.
     if (draftSession && workflowInitializedFor !== draftSession && state.session?.id === draftSession) {
-      workflow = state.runs.at(-1)?.interactionMode ?? "normal";
+      workflow = visibleRuns(state).at(-1)?.interactionMode ?? "normal";
       const selection = initialComposerSelection(state, draftSession);
       const chosen = loadSessionChoice(draftSession) ?? selection.model;
       model.setSelection(chosen);
@@ -331,17 +363,18 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     planToggle.setAttribute("aria-pressed", String(workflow === "plan"));
     planToggle.classList.toggle("active", workflow === "plan");
     planToggle.title = workflow === "plan" ? "Plan mode on · Research before implementing" : "Plan mode · Research before implementing";
-    const latest = state.runs.at(-1);
+    const latest = visibleRuns(state).at(-1);
     const readyPlan = latest?.interactionMode === "plan" && latest.status === "completed" && latest.result?.trim() && activeId === undefined && !orchestra && !bound ? latest : undefined;
     planCard.hidden = !readyPlan;
     if (readyPlan) replace(planCard,
       h("div", { class: "plan-ready-label" }, icon("list-checks"), h("span", {}, "Plan ready"), h("span", { class: "note" }, "Review the plan above before implementing.")),
       h("div", { class: "plan-ready-actions" },
         h("button", { class: "button button-small", type: "button", disabled: submitting, onClick: () => { workflow = "plan"; prompt.focus(); refresh(store.get()); } }, "Revise plan"),
-        h("button", { class: "button button-primary button-small", type: "button", disabled: submitting || !canRun(state), onClick: () => { workflow = "normal"; void submitOrStop(readyPlan.id); } }, "Implement")));
+        h("button", { class: "button button-primary button-small", type: "button", disabled: submitting || !canRun(state), onClick: () => { workflow = "normal"; void submit(readyPlan.id); } }, "Implement")));
     prompt.disabled = noSession || submitting;
     attachments.update(state.session?.id, noSession || submitting);
-    prompt.placeholder = state.session === undefined ? "Open or start a session to run an agent" : workflow === "plan" ? "Describe what you want to plan…" : "Ask anything, or describe a task…";
+    const queues = queueing(state);
+    prompt.placeholder = state.session === undefined ? "Open or start a session to run an agent" : queues ? "Queue a follow-up for after this turn…" : workflow === "plan" ? "Describe what you want to plan…" : "Ask anything, or describe a task…";
     // The selection is sent when a run starts, not changed mid-turn. Keep
     // the picker truthful while active instead of showing a future setting.
     permission.setDisabled(noSession || activeId !== undefined);
@@ -349,20 +382,34 @@ export function mountComposer(root: HTMLElement, store: Store, controller: Contr
     model.setDisabled(noSession || submitting);
 
     const active = activeRunId(state);
+    const hasAttachments = state.session !== undefined && attachments.files(state.session.id).length > 0;
+    const empty = prompt.value.trim() === "" && !hasAttachments;
     if (orchestra) {
       const pending = state.workflowControls?.[orchestra.id];
-      replace(send, icon("stop")); send.classList.add("is-stop"); send.disabled = state.host.status !== "ready" || !!pending?.pending; send.title = pending?.pending && pending.action === "stop" ? "Stopping workflow" : "Stop workflow (Esc)"; send.setAttribute("aria-label", send.title);
+      stop.hidden = false; stop.disabled = state.host.status !== "ready" || !!pending?.pending;
+      stop.title = pending?.pending && pending.action === "stop" ? "Stopping workflow" : "Stop workflow (Esc)";
     } else if (active !== undefined) {
       const cancelling = state.live[active]?.cancelRequested === true;
-      replace(send, icon("stop"));
-      send.classList.add("is-stop"); send.disabled = cancelling; send.title = cancelling ? "Cancelling" : "Stop the running agent (Esc)";
-      send.setAttribute("aria-label", send.title);
+      stop.hidden = false; stop.disabled = cancelling;
+      stop.title = cancelling ? "Stopping" : "Stop the running agent (Esc)";
     } else {
-      replace(send, submitting ? icon("circle-notch", { className: "spin" }) : icon("arrow-up"));
-      const hasAttachments = state.session !== undefined && attachments.files(state.session.id).length > 0;
-      send.classList.remove("is-stop"); send.disabled = submitting || attachments.busy || (prompt.value.trim() === "" && !hasAttachments) || !canRun(state);
-      send.title = "Run (Enter)"; send.setAttribute("aria-label", "Run");
+      stop.hidden = true;
     }
+    stop.setAttribute("aria-label", stop.title);
+    // While a turn runs, Send appears only once there is something to queue,
+    // so the idle toolbar shows a single Stop control.
+    send.hidden = !!orchestra || (active !== undefined && (!queues || empty));
+    replace(send, submitting ? icon("circle-notch", { className: "spin" }) : icon("arrow-up"));
+    send.classList.toggle("is-queue", queues);
+    send.disabled = submitting || attachments.busy || empty || !canRun(state);
+    send.title = queues ? "Queue for after this turn (Enter)" : "Run (Enter)";
+    send.setAttribute("aria-label", queues ? "Queue message" : "Run");
+    queueStack.update({
+      sessionId: state.session?.id ?? "",
+      queue: state.session !== undefined && state.session.id === state.selection.sessionId ? state.session.queue : undefined,
+      busy: active !== undefined,
+      disabled: noSession,
+    });
   }
 
   store.watch(
@@ -451,7 +498,7 @@ function renderApproval(request: ApprovalRequest, run: RunView, _live: LiveRun, 
       : h("pre", { class: "activity-code approval-detail" }, section.text)),
     request.reason === undefined ? null : h("p", { class: "approval-reason" }, request.reason),
     // These controls live inside the composer form. A submit button would
-    // also invoke submitOrStop(), cancelling the run just after answering it.
+    // also invoke submit(), sending the draft just after answering it.
     h("div", { class: "approval-actions" },
       h("button", { class: "button", type: "button", onClick: () => void controller.respondToApproval(run.id, request.id, "deny") }, icon("x"), "Deny"),
       h("button", { class: "button button-primary", type: "button", onClick: () => void controller.respondToApproval(run.id, request.id, "allow") }, icon("check"), "Allow")),

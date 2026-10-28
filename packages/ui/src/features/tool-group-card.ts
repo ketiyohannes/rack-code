@@ -45,12 +45,15 @@ import {
   callDurationMs,
   displayStatus,
   formatDuration,
+  groupDurationMs,
   summarizeGroup,
   type ToolCall,
   type ToolCallStatus,
   type ToolGroup,
+  type ToolGroupEntry,
 } from "./turn-activity.js";
-import { callDetails, defaultToolFormatters, toolCallContext, type ToolFormatterRegistry } from "./tool-formatters.js";
+import { reconcileChildren } from "../render-cache.js";
+import { callDetails, clusterLabel, defaultToolFormatters, mergeSimilarCalls, toolCallContext, type ToolCallContext, type ToolFormatterRegistry } from "./tool-formatters.js";
 
 /** Output longer than this is shown truncated with "Show more". */
 const PREVIEW_CHARS = 4_000;
@@ -101,6 +104,234 @@ function spinner(): HTMLElement {
 let nextElementId = 0;
 const elementId = (prefix: string) => `${prefix}-${++nextElementId}`;
 
+/** What a `ToolCallList` shows: calls (and thoughts) in arrival order, and how. */
+export interface ToolCallListModel {
+  /** The run these calls belong to; approval rows expose it for exact navigation. */
+  readonly runId?: string;
+  readonly entries: readonly ToolGroupEntry[];
+  readonly calls: Readonly<Record<string, ToolCall>>;
+  /** True while the host is executing the run. */
+  readonly live: boolean;
+  readonly pendingApprovalIds: ReadonlySet<string>;
+  readonly canRetry: boolean;
+  /** Show the shimmering "Working..." row at the end of the rail. */
+  readonly working: boolean;
+  /** Animate rows created in this update (false for a replayed, finished list). */
+  readonly animate: boolean;
+  /** Offer Allow/Deny on approval rows; false where another surface answers them. */
+  readonly approvals: boolean;
+  readonly renderThought?: ToolGroupCardModel["renderThought"];
+  /** Show only the newest items, with a count of earlier calls. */
+  readonly limit?: number;
+}
+
+/**
+ * The rows of a tool group, shared by the transcript's tool group cards and
+ * the Orchestration panel's agents so both look and move the same: rows on
+ * a rail, dropping in (staggered), a "Working..." row while idle, and
+ * consecutive calls that share an icon (three git commands, two TypeScript
+ * reads) merged into one expandable row. Calls with an approval are never
+ * merged, so a decision is always on its own row.
+ *
+ * Row, merged-row and thought elements persist across updates and are only
+ * reordered by `reconcileChildren`, which never detaches a node it keeps, so
+ * animations play once.
+ */
+export class ToolCallList {
+  readonly element: HTMLElement;
+  private readonly working: HTMLElement;
+  private readonly overflow: HTMLElement;
+  private readonly rows = new Map<string, ToolRow>();
+  private readonly clusters = new Map<string, ToolCluster>();
+  private readonly thoughts = new Map<number, { signature: string; node: HTMLElement }>();
+
+  constructor(private readonly actions: ToolGroupCardActions, private readonly formatters: ToolFormatterRegistry = defaultToolFormatters) {
+    this.working = h("div", { class: "tool-row tool-row-working", aria: { hidden: "true" } },
+      h("div", { class: "tool-row-head" },
+        h("span", { class: "tool-row-icon" }, spinner()),
+        h("span", { class: "tool-row-text" }, h("span", { class: "tool-row-label tool-shimmer" }, "Working…"))));
+    this.working.hidden = true;
+    this.overflow = h("div", { class: "tool-row-overflow" });
+    this.element = h("div", { class: "tool-group-rows" }, this.working);
+  }
+
+  /** Updates the rows; returns each call's view, in order, for the caller's header. */
+  update(model: ToolCallListModel): readonly RowView[] {
+    const views = new Map<string, RowView>();
+    const contexts = new Map<string, ToolCallContext>();
+    for (const entry of model.entries) {
+      const call = entry.kind === "call" ? model.calls[entry.id] : undefined;
+      if (call === undefined) continue;
+      const { view, context } = describeCall(call, model, this.formatters, this.actions);
+      views.set(call.id, view);
+      contexts.set(call.id, context);
+    }
+
+    const items = mergeSimilarCalls(model.entries, model.calls, (id) => views.get(id)?.icon);
+
+    const shown = model.limit === undefined ? items : items.slice(-model.limit);
+    const hidden = items.slice(0, items.length - shown.length).reduce((sum, item) => sum + (item.kind === "call" ? 1 : item.kind === "cluster" ? item.ids.length : 0), 0);
+    this.overflow.textContent = hidden === 0 ? "" : `${hidden} earlier tool ${hidden === 1 ? "call" : "calls"}`;
+
+    let entering = 0;
+    const rowFor = (id: string): ToolRow => {
+      let row = this.rows.get(id);
+      if (row === undefined) {
+        row = new ToolRow(this.actions, model.animate, model.runId);
+        if (model.animate) row.element.style.setProperty("--enter-delay", `${Math.min(entering++, 8) * 55}ms`);
+        this.rows.set(id, row);
+      }
+      row.update(views.get(id)!);
+      return row;
+    };
+    const nodes: Node[] = hidden === 0 ? [] : [this.overflow];
+    for (const item of shown) {
+      if (item.kind === "call") { nodes.push(rowFor(item.id).element); continue; }
+      if (item.kind === "cluster") {
+        let cluster = this.clusters.get(item.key);
+        if (cluster === undefined) {
+          cluster = new ToolCluster(model.animate);
+          if (model.animate) cluster.element.style.setProperty("--enter-delay", `${Math.min(entering++, 8) * 55}ms`);
+          this.clusters.set(item.key, cluster);
+        }
+        const rows = item.ids.map(rowFor);
+        const members = item.ids.map((id) => model.calls[id]!);
+        cluster.update(describeCluster(members, item.ids.map((id) => contexts.get(id)!), views.get(item.ids[0]!)!.icon, model.live), rows.map((row) => row.element));
+        nodes.push(cluster.element);
+        continue;
+      }
+      const thought = model.renderThought?.(item.index);
+      if (thought === undefined) continue;
+      const previous = this.thoughts.get(item.index);
+      if (previous?.signature === thought.signature) { nodes.push(previous.node); continue; }
+      const node = h("div", { class: "tool-group-thought" }, thought.render());
+      this.thoughts.set(item.index, { signature: thought.signature, node });
+      nodes.push(node);
+    }
+    this.working.hidden = !model.working;
+    nodes.push(this.working);
+    reconcileChildren(this.element, nodes);
+    return [...views.values()];
+  }
+}
+
+/** A run of consecutive calls sharing an icon, shown as one row that expands to its calls. */
+class ToolCluster {
+  readonly element: HTMLElement;
+  private readonly toggle: HTMLButtonElement;
+  private readonly head: HTMLElement;
+  private readonly members: HTMLElement;
+  private signature = "";
+  private expanded = false;
+
+  constructor(animateEntry: boolean) {
+    const membersId = elementId("tool-cluster-rows");
+    this.toggle = h("button", { class: "tool-row-toggle", type: "button", aria: { expanded: "false", controls: membersId },
+      onClick: () => this.setExpanded(!this.expanded) });
+    this.head = h("div", { class: "tool-row-head" });
+    this.members = h("div", { class: "tool-cluster-rows", id: membersId });
+    this.members.hidden = true;
+    this.element = h("div", { class: animateEntry ? "tool-row tool-cluster entering" : "tool-row tool-cluster" }, this.head, this.members);
+    if (animateEntry) this.element.addEventListener("animationend", (event) => { if (event.target === this.element) this.element.classList.remove("entering"); });
+  }
+
+  update(view: ClusterView, rows: readonly HTMLElement[]): void {
+    reconcileChildren(this.members, rows);
+    const signature = JSON.stringify(view);
+    if (signature === this.signature) return;
+    this.signature = signature;
+    const outcome = STATUS_TEXT[view.status];
+    this.element.dataset.status = view.status;
+    this.toggle.replaceChildren(h("span", { class: "tool-row-label", title: view.label }, view.label));
+    const meta: Node[] = [];
+    if (view.problems !== undefined) meta.push(h("span", { class: "tool-row-outcome" }, view.problems));
+    if (view.duration !== undefined) meta.push(h("span", { class: "tool-row-duration" }, view.duration));
+    this.head.replaceChildren(
+      h("span", { class: "tool-row-icon", aria: { hidden: "true" }, data: { icon: view.icon } }, icon(view.icon)),
+      h("span", { class: "tool-row-text" }, this.toggle),
+      h("span", { class: "tool-row-meta", aria: { hidden: "true" } }, ...meta),
+      h("span", { class: `tool-row-status status-${view.status}`, aria: { hidden: "true" } },
+        view.status === "running" ? spinner() : icon(outcome.icon)),
+      icon("caret-down", { className: "tool-row-caret" }),
+    );
+    this.toggle.setAttribute("aria-label", [view.label, view.problems, outcome.label, view.duration].filter(Boolean).join(", "));
+  }
+
+  private setExpanded(expanded: boolean): void {
+    this.expanded = expanded;
+    this.toggle.setAttribute("aria-expanded", String(expanded));
+    this.element.classList.toggle("expanded", expanded);
+    this.members.hidden = !expanded;
+  }
+}
+
+interface ClusterView {
+  readonly icon: IconName;
+  readonly label: string;
+  readonly status: ToolCallStatus;
+  /** "1 failed", "2 stopped": problems among the merged calls, in words. */
+  readonly problems?: string;
+  readonly duration?: string;
+}
+
+/** A merged row's label, aggregate status and total time. */
+function describeCluster(calls: readonly ToolCall[], contexts: readonly ToolCallContext[], iconName: IconName, live: boolean): ClusterView {
+  const statuses = calls.map((call) => displayStatus(call, live));
+  const failed = statuses.filter((status) => status === "error").length;
+  const stopped = statuses.filter((status) => status === "interrupted" || status === "incomplete").length;
+  const status: ToolCallStatus = statuses.includes("running") ? "running" : failed > 0 ? "error" : stopped > 0 ? "interrupted" : "success";
+  const durationMs = groupDurationMs({ id: "", entries: [], callIds: calls.map((call) => call.id), closed: true }, Object.fromEntries(calls.map((call) => [call.id, call])));
+  const problems = [failed > 0 ? `${failed} failed` : null, stopped > 0 ? `${stopped} stopped` : null].filter((part) => part !== null).join(" · ");
+  return {
+    icon: iconName, status,
+    label: clusterLabel(contexts, iconName, status === "running" ? "present" : "past"),
+    ...(problems === "" ? {} : { problems }),
+    ...(durationMs === undefined || status === "running" ? {} : { duration: formatDuration(durationMs) }),
+  };
+}
+
+/** One call's row view and the formatter context it was built from. */
+function describeCall(call: ToolCall, model: ToolCallListModel, formatters: ToolFormatterRegistry, actions: ToolGroupCardActions): { readonly view: RowView; readonly context: ToolCallContext } {
+  const status = displayStatus(call, model.live);
+  const context = toolCallContext({
+    tool: call.tool, input: call.input, ...(call.mcp === undefined ? {} : { mcp: call.mcp }),
+    ...(call.output === undefined ? {} : { output: call.output }), ...(call.progress === undefined ? {} : { progress: call.progress }),
+    isError: status === "error", ...(call.approval?.request.reason === undefined ? {} : { reason: call.approval.request.reason }),
+  });
+  const format = formatters.resolve(context);
+  const duration = status === "success" || status === "error" ? callDurationMs(call) : undefined;
+  const approval = call.approval;
+  const actionable = approval !== undefined && approval.state === "pending" && status === "awaiting_approval"
+    && model.live && model.pendingApprovalIds.has(approval.request.id);
+  // Calls that did not run read as the action; finished ones in the past
+  // tense; failed ones as "Could not ..."; anything still going (or
+  // stopped mid-way) in the present tense.
+  const label = status === "awaiting_approval" || status === "denied" ? format.approval.action
+    : status === "success" ? format.label("past") : status === "error" ? format.label("failed") : format.label("present");
+  const outcome = STATUS_TEXT[status];
+  const approvalNote = approval?.state === "allowed" && call.approvalOnly ? "Allowed"
+    : approval?.state === "unanswered" ? "Not answered" : undefined;
+  // A failure's error is its second line; the right side then holds only Retry.
+  const failed = status === "error";
+  const view: RowView = {
+    id: call.id, icon: format.icon, label, status, statusText: outcome.label,
+    ...(status === "success" && format.summary !== undefined ? { summary: format.summary } : {}),
+    ...(failed && format.summary !== undefined ? { subtitle: format.summary } : {}),
+    ...(failed && model.canRetry && actions.retry !== undefined ? { retry: {
+      action: format.label("imperative"), ...(format.summary === undefined ? {} : { error: format.summary }) } } : {}),
+    ...(approvalNote === undefined ? {} : { note: approvalNote }),
+    ...(duration === undefined || failed ? {} : { duration: formatDuration(duration) }),
+    // Where another surface answers approvals, the row shows only the action and the hand.
+    ...(!model.approvals || approval === undefined || approval.state !== "pending" || status !== "awaiting_approval" ? {} : { approval: {
+      id: approval.request.id, action: format.approval.action,
+      ...(format.approval.consequence === undefined ? {} : { consequence: format.approval.consequence }),
+      actionable,
+    } }),
+    details: callDetails(context, call.input),
+  };
+  return { view, context };
+}
+
 export class ToolGroupCard {
   readonly element: HTMLElement;
   private readonly header: HTMLButtonElement;
@@ -108,19 +339,23 @@ export class ToolGroupCard {
   private readonly status: HTMLElement;
   private readonly detail: HTMLElement;
   private readonly body: HTMLElement;
-  private readonly rows: HTMLElement;
+  private readonly list: ToolCallList;
   private readonly announcer: HTMLElement;
-  /** The "Working..." row; always the last child of `rows`, shown only when idle and active. */
-  private readonly working: HTMLElement;
-  private readonly rowViews = new Map<string, ToolRow>();
-  private readonly thoughts = new Map<number, { signature: string; node: HTMLElement }>();
   /** The viewer's explicit expand/collapse choice, if any. */
   private userExpanded: boolean | undefined;
+  /**
+   * Set the first time the group is shown collapsed. From then on it stays
+   * collapsed unless the viewer opens it: a failure or late update arriving
+   * after collapse must not spring it open again.
+   */
+  private collapsedOnce = false;
   private rendered = false;
   private iconSignature = "";
   private announced = new Set<string>();
+  private currentPhase: "waiting" | "active" | "done" = "active";
+  private hasFailures = false;
 
-  constructor(private readonly actions: ToolGroupCardActions, private readonly formatters: ToolFormatterRegistry = defaultToolFormatters) {
+  constructor(private readonly actions: ToolGroupCardActions, formatters: ToolFormatterRegistry = defaultToolFormatters) {
     const bodyId = elementId("tool-group-body");
     this.icons = h("span", { class: "tool-group-icons", aria: { hidden: "true" } });
     this.status = h("span", { class: "tool-group-status" });
@@ -128,19 +363,11 @@ export class ToolGroupCard {
     this.header = h("button", { class: "tool-group-header", type: "button", aria: { expanded: "false", controls: bodyId },
       onClick: () => { this.userExpanded = !this.isExpanded(); this.applyExpansion(this.currentPhase, this.hasFailures); } },
     this.icons, this.status, this.detail, icon("caret-down", { className: "tool-group-caret" }));
-    this.working = h("div", { class: "tool-row tool-row-working", aria: { hidden: "true" } },
-      h("div", { class: "tool-row-head" },
-        h("span", { class: "tool-row-icon" }, spinner()),
-        h("span", { class: "tool-row-text" }, h("span", { class: "tool-row-label tool-shimmer" }, "Working…"))));
-    this.working.hidden = true;
-    this.rows = h("div", { class: "tool-group-rows" }, this.working);
-    this.body = h("div", { class: "tool-group-body", id: bodyId }, h("div", { class: "tool-group-clip" }, this.rows));
+    this.list = new ToolCallList(actions, formatters);
+    this.body = h("div", { class: "tool-group-body", id: bodyId }, h("div", { class: "tool-group-clip" }, this.list.element));
     this.announcer = h("div", { class: "sr-only", aria: { live: "polite" } });
     this.element = h("section", { class: "tool-group-card", aria: { label: "Tool activity" } }, this.header, this.body, this.announcer);
   }
-
-  private currentPhase: "waiting" | "active" | "done" = "active";
-  private hasFailures = false;
 
   update(model: ToolGroupCardModel): void {
     const summary = summarizeGroup(model.group, model.calls, model.live);
@@ -154,50 +381,29 @@ export class ToolGroupCard {
     this.hasFailures = summary.failed > 0;
 
     const calls = model.group.callIds.flatMap((id) => model.calls[id] === undefined ? [] : [model.calls[id]!]);
-    const views = new Map(calls.map((call) => [call.id, this.describe(call, model)] as const));
-    const iconNames = [...new Set([...views.values()].map((view) => view.icon))];
+    const views = this.list.update({
+      ...(model.runId === undefined ? {} : { runId: model.runId }),
+      entries: model.group.entries, calls: model.calls, live: model.live, pendingApprovalIds: model.pendingApprovalIds,
+      canRetry: model.canRetry, approvals: true, renderThought: model.renderThought,
+      // Rows of a live group fade in, including its first one; a group first
+      // seen finished (a replay or reload) appears without motion.
+      animate: this.rendered || summary.phase !== "done",
+      // Between calls the agent is still working; say so at the end of the rail.
+      working: summary.phase === "active" && calls.every((call) => call.status !== "running" && call.status !== "awaiting_approval"),
+    });
+    const iconNames = [...new Set(views.map((view) => view.icon))];
     const iconSignature = iconNames.slice(0, MAX_HEADER_ICONS).join(",") + (iconNames.length > MAX_HEADER_ICONS ? "+" : "");
     if (iconSignature !== this.iconSignature) {
       this.iconSignature = iconSignature;
       this.icons.replaceChildren(...iconNames.slice(0, MAX_HEADER_ICONS).map((name) => h("span", { class: "tool-group-icon", data: { icon: name } }, icon(name))));
     }
-
-    // Entries only ever append, in order: new rows and thoughts go before the
-    // "Working..." row. Rows arriving in the same update drop in staggered.
-    let entering = 0;
-    for (const entry of model.group.entries) {
-      if (entry.kind === "call") {
-        const view = views.get(entry.id);
-        if (view === undefined) continue;
-        let row = this.rowViews.get(entry.id);
-        if (row === undefined) {
-          // Rows of a live group fade in, including its first one; a group
-          // first seen finished (a replay or reload) appears without motion.
-          const animate = this.rendered || summary.phase !== "done";
-          row = new ToolRow(this.actions, animate, model.runId);
-          if (animate) row.element.style.setProperty("--enter-delay", `${Math.min(entering++, 8) * 55}ms`);
-          this.rowViews.set(entry.id, row);
-        }
-        row.update(view);
-        if (row.element.parentNode !== this.rows) this.rows.insertBefore(row.element, this.working);
-        if (view.approval?.actionable === true && !this.announced.has(view.approval.id)) {
-          this.announced.add(view.approval.id);
-          this.announcer.textContent = `Approval needed: ${view.approval.action}`;
-        }
-      } else {
-        const thought = model.renderThought(entry.index);
-        if (thought === undefined) continue;
-        const previous = this.thoughts.get(entry.index);
-        if (previous?.signature === thought.signature && previous.node.parentNode === this.rows) continue;
-        const node = h("div", { class: "tool-group-thought" }, thought.render());
-        if (previous !== undefined && previous.node.parentNode === this.rows) previous.node.replaceWith(node);
-        else this.rows.insertBefore(node, this.working);
-        this.thoughts.set(entry.index, { signature: thought.signature, node });
+    for (const view of views) {
+      if (view.approval?.actionable === true && !this.announced.has(view.approval.id)) {
+        this.announced.add(view.approval.id);
+        this.announcer.textContent = `Approval needed: ${view.approval.action}`;
       }
     }
 
-    // Between calls the agent is still working; say so at the end of the rail.
-    this.working.hidden = !(summary.phase === "active" && calls.every((call) => call.status !== "running" && call.status !== "awaiting_approval"));
     this.applyExpansion(summary.phase, this.hasFailures);
     if (!this.rendered) {
       this.rendered = true;
@@ -211,52 +417,20 @@ export class ToolGroupCard {
     return this.header.getAttribute("aria-expanded") === "true";
   }
 
+  /**
+   * Open while active, forced open while an approval waits, closed once done
+   * (open if the group finished with a failure it never collapsed over). Once
+   * shown collapsed it stays so until the viewer opens it.
+   */
   private applyExpansion(phase: "waiting" | "active" | "done", hasFailures: boolean): void {
-    const expanded = phase === "waiting" || (this.userExpanded ?? (phase !== "done" || hasFailures));
+    const automatic = this.collapsedOnce ? false : phase !== "done" || hasFailures;
+    const expanded = phase === "waiting" || (this.userExpanded ?? automatic);
+    if (!expanded) this.collapsedOnce = true;
     this.header.setAttribute("aria-expanded", String(expanded));
     this.element.classList.toggle("expanded", expanded);
     // Collapsed rows stay in the DOM for the height animation but must not be
     // focusable or read out.
     this.body.inert = !expanded;
-  }
-
-  private describe(call: ToolCall, model: ToolGroupCardModel): RowView {
-    const status = displayStatus(call, model.live);
-    const context = toolCallContext({
-      tool: call.tool, input: call.input, ...(call.mcp === undefined ? {} : { mcp: call.mcp }),
-      ...(call.output === undefined ? {} : { output: call.output }), ...(call.progress === undefined ? {} : { progress: call.progress }),
-      isError: status === "error", ...(call.approval?.request.reason === undefined ? {} : { reason: call.approval.request.reason }),
-    });
-    const format = this.formatters.resolve(context);
-    const duration = status === "success" || status === "error" ? callDurationMs(call) : undefined;
-    const approval = call.approval;
-    const actionable = approval !== undefined && approval.state === "pending" && status === "awaiting_approval"
-      && model.live && model.pendingApprovalIds.has(approval.request.id);
-    // Calls that did not run read as the action; finished ones in the past
-    // tense; failed ones as "Could not ..."; anything still going (or
-    // stopped mid-way) in the present tense.
-    const label = status === "awaiting_approval" || status === "denied" ? format.approval.action
-      : status === "success" ? format.label("past") : status === "error" ? format.label("failed") : format.label("present");
-    const outcome = STATUS_TEXT[status];
-    const approvalNote = approval?.state === "allowed" && call.approvalOnly ? "Allowed"
-      : approval?.state === "unanswered" ? "Not answered" : undefined;
-    // A failure's error is its second line; the right side then holds only Retry.
-    const failed = status === "error";
-    return {
-      id: call.id, icon: format.icon, label, status, statusText: outcome.label,
-      ...(status === "success" && format.summary !== undefined ? { summary: format.summary } : {}),
-      ...(failed && format.summary !== undefined ? { subtitle: format.summary } : {}),
-      ...(failed && model.canRetry && this.actions.retry !== undefined ? { retry: {
-        action: format.label("imperative"), ...(format.summary === undefined ? {} : { error: format.summary }) } } : {}),
-      ...(approvalNote === undefined ? {} : { note: approvalNote }),
-      ...(duration === undefined || failed ? {} : { duration: formatDuration(duration) }),
-      ...(approval === undefined || approval.state !== "pending" || status !== "awaiting_approval" ? {} : { approval: {
-        id: approval.request.id, action: format.approval.action,
-        ...(format.approval.consequence === undefined ? {} : { consequence: format.approval.consequence }),
-        actionable,
-      } }),
-      details: callDetails(context, call.input),
-    };
   }
 }
 
@@ -273,7 +447,7 @@ const STATUS_TEXT: Readonly<Record<ToolCallStatus, { readonly icon: IconName; re
   incomplete: { icon: "question", label: "No result", visible: true },
 };
 
-interface RowView {
+export interface RowView {
   readonly id: string;
   readonly icon: IconName;
   readonly label: string;
@@ -318,7 +492,9 @@ class ToolRow {
     if (animateEntry) {
       // Remove the entry animation once it ran, so moving or restyling the
       // row later can never replay it.
-      this.element.addEventListener("animationend", () => this.element.classList.remove("entering"), { once: true });
+      // Only the row's own drop-in ends it; a child's animation (the status
+      // mark fading in) bubbles here too and must not cut the drop short.
+      this.element.addEventListener("animationend", (event) => { if (event.target === this.element) this.element.classList.remove("entering"); });
     }
   }
 

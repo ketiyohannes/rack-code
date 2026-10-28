@@ -26,6 +26,7 @@
  * produced a call, and their output is display text only.
  */
 import type { IconName } from "../icons.js";
+import type { ToolCall, ToolGroupEntry } from "./turn-activity.js";
 import { formatValue } from "./tool-presentation.js";
 
 /**
@@ -455,6 +456,88 @@ export function createDefaultRegistry(): ToolFormatterRegistry {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Merged rows: consecutive calls that share an icon
+// ---------------------------------------------------------------------------
+
+export type ListItem =
+  | { readonly kind: "call"; readonly id: string }
+  /** Two or more consecutive calls sharing an icon, keyed by the first call so the row is stable as the run grows. */
+  | { readonly kind: "cluster"; readonly key: string; readonly ids: readonly string[] }
+  | { readonly kind: "thought"; readonly index: number };
+
+/**
+ * What the list shows, in order: consecutive calls that share an icon (the
+ * same program, file type or integration) merge into one item; a thought
+ * or a call with an approval ends the run and stands alone, so a decision is
+ * never hidden inside a merged row. Pure, for tests.
+ */
+export function mergeSimilarCalls(entries: readonly ToolGroupEntry[], calls: Readonly<Record<string, ToolCall>>, iconOf: (callId: string) => IconName | undefined): readonly ListItem[] {
+  const items: ListItem[] = [];
+  let run: { icon: IconName; ids: string[] } | undefined;
+  const flush = () => {
+    if (run !== undefined) items.push(run.ids.length >= 2 ? { kind: "cluster", key: run.ids[0]!, ids: run.ids } : { kind: "call", id: run.ids[0]! });
+    run = undefined;
+  };
+  for (const entry of entries) {
+    if (entry.kind === "thought") { flush(); items.push(entry); continue; }
+    const call = calls[entry.id];
+    const iconName = iconOf(entry.id);
+    if (call === undefined || iconName === undefined) continue;
+    if (call.approval !== undefined || call.approvalOnly) { flush(); items.push({ kind: "call", id: entry.id }); continue; }
+    if (run !== undefined && run.icon === iconName) run.ids.push(entry.id);
+    else { flush(); run = { icon: iconName, ids: [entry.id] }; }
+  }
+  flush();
+  return items;
+}
+
+
+/** Plural nouns for files of one type, by their icon. */
+const FILE_NOUNS: Readonly<Partial<Record<IconName, string>>> = {
+  "brand-typescript": "TypeScript files", "brand-javascript": "JavaScript files", "brand-react": "React files", "brand-python": "Python files",
+  "brand-rust": "Rust files", "brand-go": "Go files", "brand-markdown": "Markdown files", "brand-json": "JSON files", "brand-css": "CSS files",
+  "brand-sass": "Sass files", "brand-html": "HTML files", "brand-yaml": "YAML files", "brand-toml": "TOML files", "brand-bash": "shell scripts",
+  "brand-swift": "Swift files", "brand-kotlin": "Kotlin files", "brand-ruby": "Ruby files", "brand-php": "PHP files", "brand-vue": "Vue files",
+  "brand-svelte": "Svelte files", "brand-c": "C files", "brand-cpp": "C++ files", "brand-dotnet": "C# files", "brand-dart": "Dart files",
+  "brand-lua": "Lua files", "brand-graphql": "GraphQL files", "brand-docker": "Docker files", "brand-npm": "package files",
+};
+
+/** Display names of MCP servers for merged rows ("Used Notion 3 times"). */
+function serverName(server: string): string {
+  const known: Readonly<Record<string, string>> = { github: "GitHub", gitlab: "GitLab", slack: "Slack", linear: "Linear", notion: "Notion", figma: "Figma",
+    jira: "Jira", sentry: "Sentry", vercel: "Vercel", stripe: "Stripe", postgres: "Postgres", postgresql: "Postgres", rack: "the browser" };
+  return known[normalizeServer(server)] ?? humanize(server);
+}
+
+/**
+ * Label for consecutive calls merged into one row because they share an
+ * icon: "Ran 3 git commands", "Reading 2 TypeScript files", "Read and edited
+ * 4 files", "Used Notion 3 times". Display only.
+ */
+export function clusterLabel(calls: readonly ToolCallContext[], icon: IconName, tense: Tense): string {
+  const count = calls.length;
+  const kinds = new Set(calls.map((call) => call.server === undefined ? builtinKind(call) ?? "other" : "mcp"));
+  const only = kinds.size === 1 ? [...kinds][0] : undefined;
+  const fileNoun = FILE_NOUNS[icon] ?? "files";
+  if (only === "command") {
+    const programs = new Set(calls.map((call) => shellCommand(commandOf(call) ?? "").program));
+    const program = programs.size === 1 ? [...programs][0]! : "";
+    const noun = PROGRAM_ICONS[program] !== undefined && program !== "" && !["bash", "sh", "zsh"].includes(program) ? `${program} commands` : "commands";
+    return `${pick(tense, "Run", "Running", "Ran")} ${count} ${noun}`;
+  }
+  if (only === "read") return `${pick(tense, "Read", "Reading", "Read")} ${count} ${fileNoun}`;
+  if (only === "edit") return `${pick(tense, "Edit", "Editing", "Edited")} ${count} ${fileNoun}`;
+  if (kinds.size === 2 && kinds.has("read") && kinds.has("edit")) return `${pick(tense, "Read and edit", "Reading and editing", "Read and edited")} ${count} ${fileNoun}`;
+  if (only === "search") return `${pick(tense, "Run", "Running", "Ran")} ${count} searches`;
+  if (only === "web") return `${pick(tense, "Fetch", "Fetching", "Fetched")} ${count} pages`;
+  if (only === "mcp") {
+    const servers = new Set(calls.map((call) => call.server ?? ""));
+    if (servers.size === 1) return `${pick(tense, "Use", "Using", "Used")} ${serverName([...servers][0]!)} ${count} times`;
+  }
+  return `${pick(tense, "Use", "Using", "Used")} ${count} tools`;
+}
 
 // ---------------------------------------------------------------------------
 // Program, file-type and integration icons

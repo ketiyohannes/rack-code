@@ -50,6 +50,15 @@ export interface StartRunInput {
   readonly interactionMode?: "normal" | "plan";
   readonly skillIds?: readonly string[];
   readonly approvedPlanRunId?: string;
+  /**
+   * Starts this run as an edit of an earlier user message. `fromRunId` is
+   * the run whose prompt is being replaced; it and every later run of the
+   * session are superseded, together with `supersedeIds` (workflow runs,
+   * which execution does not own, supplied by the host). History is cut
+   * only after every other start check passed, so a rejected edit leaves
+   * the conversation untouched. See `SessionsService.rewind`.
+   */
+  readonly rewind?: { readonly fromRunId: string; readonly supersedeIds?: readonly string[] };
 }
 
 export interface ExecutionHandle {
@@ -150,16 +159,20 @@ export class ExecutionService {
     if (project) input = { ...input, projectId: project.id };
     const projectPath = project?.path ?? await this.sessions.workspace(session.id);
     const attachments = await this.sessions.resolveAttachments(input.sessionId, input.attachmentIds ?? []);
+    // Runs replaced by an earlier edit are no longer part of the
+    // conversation, so they never count as the "latest" turn.
+    const superseded = new Set(session.supersededRunIds ?? []);
     let approvedPlan: string | undefined;
     if (input.approvedPlanRunId !== undefined) {
       const plan = await this.getRun(input.approvedPlanRunId);
-      const runs = await this.store.listRuns(session.id);
+      const runs = (await this.store.listRuns(session.id)).filter((candidate) => !superseded.has(candidate.id));
       const newest = [...runs].reverse().sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       if (plan.sessionId !== session.id || plan.interactionMode !== "plan" || plan.status !== "completed" || !plan.result?.trim()
         || newest?.id !== plan.id || input.interactionMode === "plan") throw new InvalidSessionError("Choose the latest completed plan in this conversation.");
       approvedPlan = plan.result;
     }
     if (input.prompt.trim() === "" && attachments.length === 0 && approvedPlan === undefined) throw new InvalidSessionError("A prompt or attachment is required.");
+    const replaced = input.rewind === undefined ? undefined : await this.supersededBy(session.id, superseded, input.rewind, input.approvedPlanRunId);
     const account = await this.resolveAccount(input);
     const runtime = this.runtimes.get(input.runtimeId);
     if (runtime.providerId !== undefined && runtime.providerId !== account.providerId) throw new AccountProviderMismatchError(account.id, runtime.providerId, account.providerId);
@@ -170,6 +183,9 @@ export class ExecutionService {
       return skill;
     });
     if (skills.length > 16 || new Set(input.skillIds).size !== skills.length) throw new InvalidSessionError("Choose up to 16 distinct skills.");
+    // Every check that can reject this start has passed; only now is it safe
+    // to remove the replaced turns from the conversation.
+    if (replaced !== undefined) await this.sessions.rewind(session.id, replaced);
     const effectivePermission = input.interactionMode === "plan" ? "read_only" : input.permissionMode;
     const runtimePrompt = approvedPlan === undefined ? input.prompt : `Implement this explicitly approved plan:\n\n${approvedPlan}\n\n${input.prompt}`;
     const runId = this.createId();
@@ -189,6 +205,7 @@ export class ExecutionService {
       permissionMode: input.permissionMode,
       ...(input.interactionMode === undefined ? {} : { interactionMode: input.interactionMode }),
       ...(input.approvedPlanRunId === undefined ? {} : { approvedPlanRunId: input.approvedPlanRunId }),
+      ...(input.rewind === undefined ? {} : { editOfRunId: input.rewind.fromRunId }),
       ...(skills.length === 0 ? {} : { skills }),
       status: "queued",
       attemptIds: [attemptId],
@@ -354,6 +371,33 @@ export class ExecutionService {
     await this.getRun(runId);
     const entries = await this.store.listJournal(runId);
     return [...entries].sort((left, right) => left.sequence - right.sequence);
+  }
+
+  /**
+   * Validates an edit and returns every run ID it replaces: the edited run,
+   * each later run of the session not already superseded, and the host's
+   * workflow run IDs. Rejects an edit of another session's run, of a turn
+   * that was already replaced, and of a plan-approval implementation turn
+   * (its prompt is generated from the approved plan, not typed by the user).
+   * The new run itself is not created yet, so it is never in the list.
+   */
+  private async supersededBy(
+    sessionId: string,
+    superseded: ReadonlySet<string>,
+    rewind: NonNullable<StartRunInput["rewind"]>,
+    approvedPlanRunId: string | undefined,
+  ): Promise<readonly string[]> {
+    const from = await this.getRun(rewind.fromRunId);
+    if (from.sessionId !== sessionId) throw new InvalidSessionError("Only messages in this conversation can be edited.");
+    if (superseded.has(from.id)) throw new InvalidSessionError("This message was already replaced by a later edit.");
+    if (from.approvedPlanRunId !== undefined || approvedPlanRunId !== undefined) throw new InvalidSessionError("A plan implementation turn cannot be edited.");
+    // Transcript order (a stable sort by creation time), so runs created in
+    // the same millisecond keep their recorded order.
+    const runs = await this.listRuns(sessionId);
+    const later = runs.slice(runs.findIndex((run) => run.id === from.id))
+      .filter((run) => !superseded.has(run.id))
+      .map((run) => run.id);
+    return [...new Set([...later, ...(rewind.supersedeIds ?? [])])];
   }
 
   private async resolveAccount(input: StartRunInput): Promise<AccountRecord> {

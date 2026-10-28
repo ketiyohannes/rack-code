@@ -14,6 +14,7 @@ import { SharedBrowser } from "../src/main/shared-browser.js";
 import { LocalPtyBackend } from "@rack/node-adapters/pty/local-pty";
 import { TerminalService } from "@rack/features/terminal";
 import { CodexRuntimeAdapter } from "@rack/runtimes/codex/codex";
+import { finish } from "./fixture-harness.js";
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -27,7 +28,7 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 // module evaluation open with a top-level await of app.whenReady().
 async function verify(): Promise<void> {
   await app.whenReady();
-  const watchdog = setTimeout(() => { console.error("Native feature check timed out."); app.exit(1); }, 45_000);
+  const watchdog = setTimeout(() => finish(1, "Native feature check timed out."), 45_000);
   const directory = await realpath(await mkdtemp(join(tmpdir(), "rack-native-features-")));
   const browser = new SharedBrowser();
   const terminals = new TerminalService(new LocalPtyBackend());
@@ -159,7 +160,9 @@ async function verify(): Promise<void> {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
     clearTimeout(watchdog);
-    app.exit(process.exitCode ?? 0);
+    // finish() waits for stdout and stderr to drain, so the PASS line or the
+    // error above is never lost to an immediate exit.
+    finish(Number(process.exitCode ?? 0));
   }
 }
-void verify().catch((error: unknown) => { console.error(error); app.exit(1); });
+void verify().catch((error: unknown) => finish(1, error instanceof Error ? error.stack ?? error.message : String(error)));

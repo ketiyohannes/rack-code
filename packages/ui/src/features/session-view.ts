@@ -53,6 +53,9 @@ import { renderFileDiff, renderFileRow } from "./changes-view.js";
 import { formatAttachmentSize } from "./attachments.js";
 import { compacts, type ActivityItem } from "./tool-groups.js";
 import { renderWorkspaceChip } from "./workspace.js";
+import { visibleRuns as conversationRuns, visibleWorkflowRuns, supersededRunIds, canEditTurn, turnsReplacedByEdit } from "./conversation-history.js";
+import { createMessageEditor, type MessageEditor } from "./message-editor.js";
+import { activeWorkflow } from "./orchestra-state.js";
 
 /** Prompts longer than this (characters or lines) start clipped. */
 const LONG_PROMPT_CHARS = 600;
@@ -80,6 +83,15 @@ interface ViewMemory {
   readonly workerNodes: Map<string, HTMLElement>;
   /** Worker runs whose journals were already requested, so a redraw does not re-request them. */
   readonly requestedActivity: Set<string>;
+  /** The open inline editor for an earlier message, kept across redraws so its draft and focus survive. */
+  readonly editor: { current: MessageEditor | undefined };
+}
+
+/** How a turn's message offers editing. Absent when the turn cannot be edited at all. */
+interface PromptEdit {
+  /** Why Edit is unavailable right now (a turn running): its tooltip and accessible description. */
+  readonly blocked: string | undefined;
+  readonly open: () => void;
 }
 
 export function mountSessionView(root: HTMLElement, header: HTMLElement, store: Store, controller: Controller): void {
@@ -104,7 +116,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   });
 
   const memory: ViewMemory = { expandedPrompts: new Set(), openTools: new Set(), openToolGroups: new Set(), selectedChanges: new Map(), splitChanges: { value: false },
-    cards: new Map(), turnNodes: new Map(), workerNodes: new Map(), requestedActivity: new Set() };
+    cards: new Map(), turnNodes: new Map(), workerNodes: new Map(), requestedActivity: new Set(), editor: { current: undefined } };
   let current: AppState | undefined;
   const folds = new TurnActivityCache();
   const turns = new Map<string, { signature: readonly unknown[]; node: HTMLElement }>();
@@ -116,14 +128,42 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     if (current !== undefined) draw(current, false);
   };
   const fold = (id: string, events: readonly RuntimeEvent[]) => folds.fold(id, events);
+  const openEditor = (run: RunView) => {
+    memory.editor.current = createMessageEditor({
+      runId: run.id, prompt: run.prompt, attachmentCount: run.attachments?.length ?? 0,
+      save: async (text) => {
+        const accepted = await controller.editMessage(run, text);
+        if (accepted) {
+          memory.editor.current = undefined;
+          rerender();
+          // The edited turn is gone; continue where the new turn is composed.
+          root.ownerDocument.querySelector<HTMLElement>(".prompt-input")?.focus({ preventScroll: true });
+        }
+        return accepted;
+      },
+      cancel: () => {
+        memory.editor.current = undefined;
+        rerender();
+        transcript.querySelector<HTMLElement>(`.turn[data-run-id="${CSS.escape(run.id)}"] .prompt-edit`)?.focus();
+      },
+    });
+    rerender();
+    memory.editor.current.focus();
+  };
   const renderCachedTurn = (run: RunView, state: AppState): HTMLElement => {
     const live = state.live[run.id];
     const latest = latestRunId(state) === run.id;
     const busy = sessionBusy(state);
-    const signature = [run, live, state.transcripts[run.id], state.accounts, state.session?.messages, latest, busy];
+    const blocked = editBlockedReason(state);
+    const editable = live === undefined && canEditTurn(state, run);
+    const editing = memory.editor.current?.runId === run.id;
+    const signature = [run, live, state.transcripts[run.id], state.accounts, state.session?.messages, latest, busy, editable, blocked];
     const cached = turns.get(run.id);
-    if (cached && signature.every((value, index) => value === cached.signature[index])) return cached.node;
-    const node = renderTurn(run, state, controller, fold, memory, rerender, { latest, busy });
+    // A turn with an open editor always redraws: how many turns a save
+    // replaces depends on the rest of the conversation.
+    if (!editing && cached && signature.every((value, index) => value === cached.signature[index])) return cached.node;
+    const node = renderTurn(run, state, controller, fold, memory, rerender, { latest, busy },
+      editable ? { blocked, open: () => openEditor(run) } : undefined);
     turns.set(run.id, { signature, node });
     return node;
   };
@@ -166,6 +206,24 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
   };
   transcript.addEventListener("scroll", updateChrome, { passive: true });
 
+  // Notices and queued messages float above the composer, over the end of
+  // the transcript. Reserve their height as bottom padding so the newest
+  // output never hides under them, and keep following the end if the view
+  // was there. The composer mounts after this view, hence the frame delay.
+  requestAnimationFrame(() => {
+    const overlays = root.ownerDocument.querySelector(".composer-overlays");
+    if (overlays === null || typeof ResizeObserver === "undefined") return;
+    new ResizeObserver(() => {
+      const height = Math.ceil(overlays.getBoundingClientRect().height);
+      const space = height === 0 ? "0px" : `${height + 8}px`;
+      if (transcript.style.getPropertyValue("--composer-overlay-space") === space) return;
+      const follow = isAtEnd();
+      transcript.style.setProperty("--composer-overlay-space", space);
+      if (follow) transcript.scrollTop = transcript.scrollHeight;
+      updateChrome();
+    }).observe(overlays);
+  });
+
   function draw(state: AppState, jumpToEnd: boolean): void {
     // Keep following streamed output only when the user is already at the end.
     const follow = jumpToEnd || isAtEnd();
@@ -173,8 +231,11 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
     const children = renderTranscript(state, controller, fold, memory, rerender,
       (run) => renderCachedTurn(run, state), (messages) => renderCachedHistory(messages, state), visibleRuns,
       (run) => renderCachedWorkflow(run, state));
-    const hasEarlier = state.runs.length > visibleRuns || (state.session?.messages.filter((message) => message.metadata?.["imported"] === "true").length ?? 0) > visibleMessages;
+    const hasEarlier = conversationRuns(state).length > visibleRuns || (state.session?.messages.filter((message) => message.metadata?.["imported"] === "true").length ?? 0) > visibleMessages;
     reconcileChildren(transcript, hasEarlier ? [older, ...children] : children);
+    // The edited turn left the conversation (replaced in another window, or
+    // the session changed); its editor goes with it.
+    if (memory.editor.current !== undefined && !transcript.contains(memory.editor.current.element)) memory.editor.current = undefined;
     transcript.scrollTop = follow ? transcript.scrollHeight : scrollTop;
     const ids = [...transcript.querySelectorAll<HTMLElement>(".turn")].map((turn) => turn.dataset["runId"] ?? turn.id).join("|");
     if (rail.dataset["turns"] !== ids) { renderRail(rail, transcript); rail.dataset["turns"] = ids; }
@@ -193,7 +254,7 @@ export function mountSessionView(root: HTMLElement, header: HTMLElement, store: 
       const sessionChanged = state.session?.id !== lastSessionId;
       if (sessionChanged || state.page !== "chat") closeContentMenu();
       lastSessionId = state.session?.id;
-      if (sessionChanged) { turns.clear(); workflowTurns.clear(); folds.clear(); memory.cards.clear(); memory.turnNodes.clear(); memory.workerNodes.clear(); memory.requestedActivity.clear(); importedCache = undefined; visibleRuns = 50; visibleMessages = 100; }
+      if (sessionChanged) { turns.clear(); workflowTurns.clear(); folds.clear(); memory.cards.clear(); memory.turnNodes.clear(); memory.workerNodes.clear(); memory.requestedActivity.clear(); memory.editor.current = undefined; importedCache = undefined; visibleRuns = 50; visibleMessages = 100; }
       if (state.page === "chat" && !document.hidden) draw(state, sessionChanged);
     },
   );
@@ -265,11 +326,13 @@ function renderTranscript(
   }
 
   // Live runs of this session that the persisted list does not contain yet.
+  // Turns replaced by an edit are left out (see conversation-history.ts).
+  const superseded = supersededRunIds(state);
   const liveOnly = Object.values(state.live)
     .map((live) => live.run)
-    .filter((run) => run.sessionId === session.id && !state.runs.some((stored) => stored.id === run.id));
-  const runs = [...state.runs, ...liveOnly];
-  const workflowRuns = state.orchestra.runs.filter((run) => run.sessionId === session.id);
+    .filter((run) => run.sessionId === session.id && !superseded.has(run.id) && !state.runs.some((stored) => stored.id === run.id));
+  const runs = [...conversationRuns(state), ...liveOnly];
+  const workflowRuns = visibleWorkflowRuns(state, session.id);
   const imported = session.messages.filter((message) => message.metadata?.["imported"] === "true");
   if (runs.length === 0 && imported.length === 0 && workflowRuns.length === 0) {
     return [session.projectId === undefined
@@ -326,11 +389,20 @@ function renderImportedHistory(messages: readonly SessionMessageView[], memory: 
   return nodes;
 }
 
-/** Run ID of the session's newest turn, live or stored. */
+/** Run ID of the session's newest turn, live or stored; replaced turns never count. */
 function latestRunId(state: AppState): string | undefined {
   const sessionId = state.session?.id;
-  const runs = [...state.runs, ...Object.values(state.live).map((live) => live.run).filter((run) => run.sessionId === sessionId)];
+  const superseded = supersededRunIds(state);
+  const runs = [...conversationRuns(state), ...Object.values(state.live).map((live) => live.run).filter((run) => run.sessionId === sessionId && !superseded.has(run.id))];
   return runs.reduce<RunView | undefined>((latest, run) => latest === undefined || run.createdAt > latest.createdAt ? run : latest, undefined)?.id;
+}
+
+/** Why an earlier message cannot be edited right now, or undefined when it can. */
+function editBlockedReason(state: AppState): string | undefined {
+  if (state.host.status !== "ready") return "Rack is not connected to its host right now.";
+  if (sessionBusy(state) || activeWorkflow(state) !== undefined) return "Stop the current turn before editing an earlier message.";
+  if (state.orchestra.generations?.some((entry) => entry.sessionId === state.session?.id)) return "Finish or cancel the workflow designer before editing a message.";
+  return undefined;
 }
 
 /** Whether this session has a run the host is still executing. */
@@ -395,6 +467,7 @@ function renderTurn(
   memory: ViewMemory,
   rerender: () => void,
   position: { readonly latest: boolean; readonly busy: boolean },
+  edit?: PromptEdit,
 ): HTMLElement {
   const live = state.live[stored.id];
   const run = live?.run ?? stored;
@@ -479,18 +552,43 @@ function renderTurn(
     memory.turnNodes.set(run.id, nodes);
   }
   reconcileChildren(nodes.reply, [...reply, meta]);
+  const editor = memory.editor.current?.runId === run.id ? memory.editor.current : undefined;
+  if (editor !== undefined) editor.update(turnsReplacedByEdit(state, run), edit === undefined ? "This message can no longer be edited." : edit.blocked);
+  // Edit stays focusable while it is unavailable, so a keyboard user can be
+  // resting on it when the turn ends and the prompt row is rebuilt; keep
+  // their place instead of dropping focus to the document body.
+  const editFocused = nodes.article.querySelector(".prompt-edit") === nodes.article.ownerDocument.activeElement;
   reconcileChildren(nodes.article, [
-    renderPrompt(run, memory, rerender, controller),
+    editor?.element ?? renderPrompt(run, memory, rerender, controller, edit),
     ...(run.interactionMode === "plan" ? [h("div", { class: "turn-workflow note" }, icon("list-checks"), "Plan")] : []),
     nodes.reply,
   ]);
+  if (editFocused && editor === undefined) nodes.article.querySelector<HTMLElement>(".prompt-edit")?.focus({ preventScroll: true });
   return nodes.article;
 }
 
-function renderPrompt(run: Pick<RunView, "id" | "prompt" | "attachments">, memory: ViewMemory, rerender: () => void, controller?: Controller): HTMLElement {
+function renderPrompt(run: Pick<RunView, "id" | "prompt" | "attachments" | "editOfRunId">, memory: ViewMemory, rerender: () => void, controller?: Controller, edit?: PromptEdit): HTMLElement {
   const long = run.prompt.length > LONG_PROMPT_CHARS || run.prompt.split("\n").length > LONG_PROMPT_LINES;
   const expanded = memory.expandedPrompts.has(run.id);
-  return h("div", { class: "prompt-row" },
+  const edited = run.editOfRunId !== undefined;
+  // Edit is revealed on hover or keyboard focus (see .prompt-actions) and
+  // stays in the tab order, so it is reachable without a pointer. While it is
+  // unavailable it uses aria-disabled rather than `disabled`: a disabled
+  // button leaves the tab order, and keyboard and screen-reader users would
+  // never learn why. The reason is its accessible description, the pointer
+  // tooltip, and a visible hint while it has keyboard focus.
+  const blocked = edit?.blocked;
+  const reasonId = `prompt-edit-reason-${run.id}`;
+  const actions = !edited && edit === undefined ? null : h("div", { class: "prompt-actions" },
+    edited ? h("span", { class: "prompt-edited", title: "This message was edited and resent; the turns it replaced are kept in run history." }, "Edited") : null,
+    blocked === undefined ? null : h("span", { class: "prompt-edit-reason", id: reasonId }, blocked),
+    edit === undefined ? null : h("button", {
+      class: "icon-button prompt-edit", type: "button",
+      title: blocked ?? "Edit message",
+      aria: blocked === undefined ? { label: "Edit message" } : { label: "Edit message", disabled: "true", describedby: reasonId },
+      onClick: () => { if (blocked === undefined) edit.open(); },
+    }, icon("pencil-simple")));
+  return h("div", { class: actions === null ? "prompt-row" : "prompt-row has-actions" },
     h("div", { class: long && !expanded ? "bubble clipped" : "bubble" },
       run.prompt === "" ? null : h("div", { class: "bubble-text" }, run.prompt),
       (run.attachments?.length ?? 0) === 0 ? null : h("div", { class: "attachment-list turn-attachments", aria: { label: "Attached files" } },
@@ -509,6 +607,7 @@ function renderPrompt(run: Pick<RunView, "id" | "prompt" | "attachments">, memor
         },
       }, expanded ? "Show less" : "Show full message"),
     ),
+    actions,
   );
 }
 

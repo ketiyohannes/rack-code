@@ -81,11 +81,14 @@ live view of that run:
   pending input.
 - Every agent execution in order, as a collapsible card showing its status,
   name, the model it uses (with reasoning effort when set) and its tool-call
-  count. Inside, its tool calls form a waterfall along a rail: each row shows a
-  status mark (spinner, check, warning or stop), a readable title and its
-  command/path target. Rows that arrive together drop in staggered. While the
-  agent works without a tool in flight, a shimmering "Working…" row shows.
-  At most the newest 60 rows are shown per agent, with a count of older ones.
+  count. Inside, its tool calls use the transcript's own tool rows
+  (`ToolCallList`, updated 2026-10-28): brand and file-type icons on a rail,
+  labels in the right tense, summaries and times, the arc spinner, check and
+  warning marks, consecutive calls sharing an icon merged into one expandable
+  row, rows dropping in staggered, and a shimmering "Working…" row while the
+  agent works without a tool in flight. Approval rows show the waiting mark;
+  they are answered on the transcript row. At most the newest 60 items are
+  shown per agent, with a count of older calls.
 
 Running agents start open. When an agent settles it collapses with an animated
 height transition, unless the user opened or closed it explicitly; that choice

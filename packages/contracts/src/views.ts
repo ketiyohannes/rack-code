@@ -28,7 +28,7 @@ import type { ProjectRecord, ProjectWriter } from "@rack/core/projects/types";
 export type { IsolatedWorkspace, ProjectWriter, SessionWorkspaceState as SessionWorkspaceView, WorkspaceMode } from "@rack/core/projects/types";
 export type { ProjectBranches, ProjectBranch, ProjectChanges, ProjectChangeFile, ProjectChangeGroup, ProjectChangeStatus, ProjectRepositories, RepositoryDiscoveryOptions, SourceControlAction, SourceControlActionKind, SourceControlResult } from "@rack/core/projects/types";
 import type { ConnectView } from "@rack/core/connections/types";
-import type { SessionMessage, SessionRecord } from "@rack/core/sessions/types";
+import type { QueuedMessage, QueuePauseReason, SessionMessage, SessionQueue, SessionRecord } from "@rack/core/sessions/types";
 export type { SessionDiscovery, ExternalSessionSnapshot, ImportSessionResult, DiscoveredSession } from "@rack/core/session-imports/types";
 // Optional Timeline feature read models; type-only, safe for the renderer bundle.
 export type {
@@ -110,6 +110,13 @@ export interface SessionSummaryView {
  */
 export type SessionView = SessionRecord;
 export type SessionMessageView = SessionMessage;
+/**
+ * A session's waiting messages (`SessionView.queue`). The host owns it;
+ * clients render it and change it only through the `queue.*` commands.
+ */
+export type SessionQueueView = SessionQueue;
+export type QueuedMessageView = QueuedMessage;
+export type QueuePauseReasonView = QueuePauseReason;
 
 /** A run plus its attempts, enough to label it with runtime and account. */
 export interface RunView extends RunRecord {
@@ -169,6 +176,17 @@ export interface ActiveRunView {
 export interface StartRunResult {
   readonly run: RunView;
   readonly fallbackFromAccountId?: string;
+}
+
+/**
+ * Result of a queue command that may start a run right away (`queue.add`
+ * when the session was idle, `queue.sendNow` and `queue.resume`). `started`
+ * is present only when a run started during the command; clients add it as
+ * a live run exactly like a `runs.start` result. When the session was busy,
+ * the run starts later and is announced by `run.started`.
+ */
+export interface QueueStartResult {
+  readonly started?: StartRunResult;
 }
 
 /** A provider that offers "Connect <displayName> account". */
