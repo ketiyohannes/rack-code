@@ -58,6 +58,13 @@ After upgrading Electron, run `npm run rebuild:native` for `node-pty`.
 - Websites run in sandboxed native views without Node, preload or the Rack
   bridge. Main owns page lifetime and bounds; the trusted renderer owns the
   toolbar. Views detach for Settings, menus, modals, splitter drags and hidden tabs.
+- When the agent changes page (navigate, back, forward or reload) in the
+  conversation on screen, the right panel expands and the Browser tab comes
+  forward, so the user sees the page without opening it by hand. Reads and
+  in-page input leave the panel alone, as do agents in other conversations
+  and full-page views such as Settings or Usage. Recognized from the live
+  `tool_request` (`revealsBrowserPage` in `packages/ui/src/features/agent-browser.ts`);
+  replayed events do not reveal again.
 - The agent's `rack_browser` tool supports snapshot, navigate, click, type,
   select, press, scroll, back, forward and reload. `text` supplies field text,
   an option value or a key name. Keys: Enter, Tab, Escape, Space, arrows,

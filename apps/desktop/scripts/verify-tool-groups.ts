@@ -83,7 +83,8 @@ const runtime: RuntimeAdapter = {
     yield { type: "native_session", nativeSessionId: `fixture-${input.runId}` };
     // The prompt picks the script: the release question, the same question
     // with the database down, or the follow-up a failed row's Retry sends.
-    const script: readonly ScenarioStep[] = input.prompt.includes(ICONS_PROMPT) ? ICONS_SCENARIO
+    const script: readonly ScenarioStep[] = input.prompt.includes(BROWSER_PROMPT) ? BROWSER_SCENARIO
+      : input.prompt.includes(ICONS_PROMPT) ? ICONS_SCENARIO
       : input.prompt.includes(FAILURE_PROMPT) ? RELEASE_FAILURE_SCENARIO
       : input.prompt.includes("Retry the step that failed") ? RETRY_SCENARIO : RELEASE_SCENARIO;
     for (const step of script) {
@@ -105,6 +106,7 @@ const runtime: RuntimeAdapter = {
 
 const FAILURE_PROMPT = "Check the release again";
 const ICONS_PROMPT = "Ship the branch";
+const BROWSER_PROMPT = "Open the changelog";
 /** Everyday built-in calls, shaped like Claude's Bash/Read/Edit and Codex's command items. */
 const builtin = (id: string, tool: string, input: Record<string, unknown>): ScenarioStep[] => [
   { delayMs: 40, event: { type: "tool_request", tool, toolCallId: id, input } },
@@ -124,6 +126,14 @@ const ICONS_SCENARIO: readonly ScenarioStep[] = [
   ...builtin("i-git3", "Bash", { command: "cd /repo && git log --oneline -3" }),
   { delayMs: 40, event: { type: "message_delta", text: "Pushed." } },
   { delayMs: 0, event: { type: "completed", result: "Pushed." } },
+];
+/** The agent reads the page, then opens one: only the second shows the Browser tab. */
+const BROWSER_SCENARIO: readonly ScenarioStep[] = [
+  { delayMs: 0, event: { type: "message_delta", text: "Opening the changelog." } },
+  ...builtin("b-read", "mcp__rack__rack_browser", { action: "snapshot" }),
+  ...builtin("b-open", "mcp__rack__rack_browser", { action: "navigate", url: "https://example.com/changelog" }),
+  { delayMs: 40, event: { type: "message_delta", text: " Opened." } },
+  { delayMs: 0, event: { type: "completed", result: "Opening the changelog. Opened." } },
 ];
 const RETRY_SCENARIO: readonly ScenarioStep[] = [
   { delayMs: 0, event: { type: "message_delta", text: "Retrying the migrations query." } },
@@ -342,8 +352,22 @@ async function run(): Promise<string> {
   await js("document.querySelector('.turn:last-child .tool-group-card').scrollIntoView({ block: 'center', behavior: 'instant' })");
   await new Promise((done) => setTimeout(done, 200));
   await shot("6-icons");
+
+  check.step("agent browser reveals its tab");
+  // The agent's page is a native view shown only through the Browser tab.
+  // Reading the page leaves the panel alone; opening one brings it forward.
+  const activeTool = "document.querySelector('.workbench-tab-item.active [data-tool]')?.dataset.tool";
+  assert.notEqual(await js<string | undefined>(activeTool), "browser");
+  await js(`(() => { const p = document.querySelector('textarea[aria-label=Prompt]'); p.value=${JSON.stringify(BROWSER_PROMPT)}; p.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+  await until("!document.querySelector('button[aria-label=Run]')?.disabled");
+  const revealedBefore = await js<boolean>(`${activeTool} === 'browser'`);
+  await js("document.querySelector('button[aria-label=Run]').click()");
+  await until("document.querySelectorAll('.turn').length === 5 && !!document.querySelector('.turn:last-child .turn-action')");
+  assert.equal(revealedBefore, false);
+  await until(`${activeTool} === 'browser' && !!document.querySelector('.browser-panel')?.isConnected`);
+  await shot("7-browser-revealed");
   assert.deepEqual(check.consoleErrors, []);
-  return `PASS: ${texts.join(" > ")} [${liveDetail}]; rows ${rows.map((row) => `${row.label} (${row.summary} · ${row.duration})`).join(", ")}; replay identical; failed row with Retry`;
+  return `PASS: ${texts.join(" > ")} [${liveDetail}]; rows ${rows.map((row) => `${row.label} (${row.summary} · ${row.duration})`).join(", ")}; replay identical; failed row with Retry; agent page change reveals the Browser tab`;
 }
 
 check.run(run);

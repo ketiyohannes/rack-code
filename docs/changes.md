@@ -1,3 +1,11 @@
+## 2026-10-28 — The Browser tab opens when the agent opens a page (branch `fix/reveal-agent-browser`)
+
+- **Bug.** The agent drives a native page that is visible only through the Browser tab. When it opened a page, nothing on screen changed: the user had to open the Browser tab by hand to watch or step in (for example to sign in).
+- **Fix.** `revealsBrowserPage` (`packages/ui/src/features/agent-browser.ts`) recognizes a `rack_browser` request that changes page: navigate, back, forward or reload. It accepts Claude's `mcp__rack__rack_browser` name and Codex's MCP identity (server `rack`, tool `rack_browser`, arguments apart from the native input). `Controller.applyRunEvent` then calls the existing `openTool("browser")`, which enables the plugin if needed, selects or adds the tab and expands a collapsed right panel. It only does so for a newly appended event, in the conversation on screen, while the chat page is shown. Snapshots, clicks and typing, other conversations' agents and replayed events never change tabs, and Settings or Usage are never interrupted.
+- **Validation performed.** New unit tests for both runtimes' shapes and every non-revealing case, and a controller test covering the read, the reveal, a replayed event, a background conversation and the Usage page. `verify-tool-groups.ts` gains a step where the fixture agent reads and then opens a page in the real window: the Browser tab is not active before and is active with its panel attached after (screenshot `/tmp/rack-tool-groups-7-browser-revealed.png`). Typecheck and boundaries are clean. Full suite: 569 tests, 567 passed; the two failures were load timeouts (the known Timeline one and Git discovery depth), both passing in isolated reruns. `npm run build:desktop`, then `npm run test:tool-groups` passed.
+- **Not performed.** A run with a real Claude or Codex account driving the real browser; the fixture uses the same event shapes the adapters emit.
+- **Release.** Shipped as a rebuilt `v0.0.1`; the version is unchanged and the earlier `v0.0.1` release and tag were replaced.
+
 ## 2026-10-28 — Actions on Node.js 24, and the v1.0.0 draft removed (branch `build/upgrade-actions`)
 
 - **Why.** GitHub has deprecated actions that run on Node.js 20, and the v0.0.1 release run warned about `actions/checkout@v4`, `actions/setup-node@v4` and `actions/upload-artifact@v4`.
