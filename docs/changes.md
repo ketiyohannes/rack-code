@@ -1,3 +1,12 @@
+## 2026-10-29 — Rack has its own app icon (branch `feat/app-icon`)
+
+- **Why.** Packaged builds and development runs showed Electron's default icon; Rack had none.
+- **The icon.** `apps/desktop/assets/icon.svg`: three off-white rack units on a graphite tile, each with an emerald status light, drawn on Apple's 1024 grid (an 824 body, 186 corner radius). It is original artwork; no third-party marks.
+- **Rendering.** `apps/desktop/scripts/render-icons.mjs` (run with `npx electron`, on a Mac) has Chromium rasterize the SVG separately at each size and writes `icon.icns` (through `iconutil`), `icon.ico` (PNG entries from 16 to 256 px) and a 1024 px `icon.png`. All outputs are committed, so builds and the release workflow never run it.
+- **Wiring.** `package-desktop.ts` passes `assets/icon` to @electron/packager, which takes `icon.icns` on macOS and `icon.ico` on Windows. On macOS it also warns that there is no Icon Composer `.icon`; that is harmless. `build-desktop.ts` copies `icon.png` to `dist/icon.png`. Linux has no bundle icon, so `createMainWindow` sets it as the window icon there. Unpackaged macOS runs set it as the Dock icon; packaged ones use the bundle.
+- **Validation performed.** Typecheck clean. `npm run package --workspace @rack/desktop` on macOS arm64: the bundle's icon file is byte-identical to `assets/icon.icns`, and its 16 to 1024 px sizes were checked visually, including the 32 px rendering. `file` confirms the ICO's 7 PNG entries and the 1024 px PNG.
+- **Not performed.** Packaging on Windows and Linux (the release workflow does that), and looking at the Linux window icon on a real desktop.
+
 ## 2026-10-28 — The Browser tab opens when the agent opens a page (branch `fix/reveal-agent-browser`)
 
 - **Bug.** The agent drives a native page that is visible only through the Browser tab. When it opened a page, nothing on screen changed: the user had to open the Browser tab by hand to watch or step in (for example to sign in).

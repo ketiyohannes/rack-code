@@ -24,6 +24,9 @@
  *   user-data directory (renderer storage, single-instance lock) from it;
  *   installations that still hold a directory under the product's former
  *   name adopt it on first start (`src/main/user-data.ts`).
+ * - The icon comes from `assets/` (rendered from `assets/icon.svg` by
+ *   `render-icons.mjs`): `icon.icns` on macOS and `icon.ico` on Windows.
+ *   Linux has no bundle icon; the window sets `dist/icon.png`.
  * - On macOS the bundle is ad-hoc signed (`codesign -s -`) so the modified
  *   Electron bundle has a consistent local signature. This is not a
  *   distribution signature or notarization.
@@ -116,6 +119,9 @@ try {
     name: PRODUCT_NAME,
     appBundleId: "local.rack",
     appCategoryType: "public.app-category.developer-tools",
+    // The packager picks icon.icns or icon.ico. On macOS it also looks for an
+    // Icon Composer `.icon` and warns that there is none; that is harmless.
+    icon: join(appRoot, "assets", "icon"),
     platform: process.platform,
     arch: process.arch,
     overwrite: true,
