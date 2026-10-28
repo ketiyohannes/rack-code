@@ -136,6 +136,34 @@ test("provider diagnostics suppress duplicate clicks and clear stale successes o
   assert.equal(store.get().providerDiagnostics[key], undefined);
 });
 
+test("the agent opening a page brings the Browser tab forward only in the conversation on screen", async () => {
+  const store = new ImmediateStore();
+  let emit!: (event: HostEvent) => void;
+  const host = { onEvent: (listener: typeof emit) => { emit = listener; return () => {}; }, selectDirectory: async () => undefined,
+    call: async (command: string) => command === "models.list" ? { models: [], failures: [] } : [],
+  } as unknown as HostClient;
+  await new Controller(host, store).start();
+  store.update((state) => ({ ...state, session, selection: { projectId: "project", sessionId: "session" } }));
+  const browse = (action: string) => ({ type: "tool_request" as const, tool: "mcp__rack__rack_browser", input: { action, url: "https://example.com" } });
+  emit({ type: "run.started", run: { ...run, status: "running" } });
+  emit({ type: "run.event", runId: run.id, index: 0, event: browse("snapshot") });
+  assert.equal(store.get().toolRequest, undefined, "reading the page does not change tabs");
+  emit({ type: "run.event", runId: run.id, index: 1, event: browse("navigate") });
+  assert.deepEqual(store.get().toolRequest, { id: "browser", seq: 1 });
+  // A replayed event (already in the snapshot) does not reveal again.
+  emit({ type: "run.event", runId: run.id, index: 1, event: browse("navigate") });
+  assert.equal(store.get().toolRequest?.seq, 1);
+  // Another conversation's agent does not take over the panel.
+  emit({ type: "run.started", run: { ...run, id: "background", sessionId: "other", status: "running" } });
+  emit({ type: "run.event", runId: "background", index: 0, event: browse("navigate") });
+  assert.equal(store.get().toolRequest?.seq, 1);
+  // Nor does it pull the user away from a full-page view such as Usage.
+  store.update((state) => ({ ...state, page: "usage" }));
+  emit({ type: "run.event", runId: run.id, index: 2, event: browse("navigate") });
+  assert.equal(store.get().toolRequest?.seq, 1);
+  assert.equal(store.get().page, "usage");
+});
+
 test("live thinking and response chunks update view state before run completion", async () => {
   const store = new ImmediateStore();
   let emit!: (event: HostEvent) => void;

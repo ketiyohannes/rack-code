@@ -40,6 +40,7 @@ import { MAX_ATTACHMENTS, type SessionAttachment } from "@rack/core/sessions/att
 import { loadModelFavorites, saveModelFavorites } from "./model-favorites.js";
 import { modelKey } from "./components/model-settings.js";
 import type { BrowserPresentation, BrowserRequest } from "@rack/features/browser";
+import { revealsBrowserPage } from "./features/agent-browser.js";
 import { sessionWorkerRunIds, type OrchestraTarget } from "./features/orchestra-state.js";
 
 interface CachedSession {
@@ -1015,6 +1016,13 @@ export class Controller {
       pendingQuestions: event.type === "question_request" ? [...(current.pendingQuestions ?? []), event.request]
         : event.type === "question_resolved" ? (current.pendingQuestions ?? []).filter((request) => request.id !== event.requestId) : current.pendingQuestions ?? [],
     }));
+    // The agent's page lives in a native view that is only visible through
+    // the Browser tab. Bring it forward when the agent changes page in the
+    // conversation on screen; never for background sessions or other pages.
+    if (revealsBrowserPage(event)) {
+      const state = this.store.get();
+      if (state.page === "chat" && live.run.sessionId === state.selection.sessionId) this.openTool("browser");
+    }
   }
 
   private finishRun(run: RunView): void {
