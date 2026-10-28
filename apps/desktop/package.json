@@ -1,7 +1,7 @@
 {
   "name": "@rack/desktop",
   "productName": "Rack",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Electron desktop app: windows, native integrations, and a local host utility process.",
   "type": "module",
@@ -16,7 +16,8 @@
     "test:orchestra": "tsx scripts/bundle-fixture.ts verify-orchestra && electron dist/verify-orchestra.mjs",
     "test:run-changes": "tsx scripts/bundle-fixture.ts verify-run-changes && electron dist/verify-run-changes.mjs",
     "test:tool-groups": "tsx scripts/bundle-fixture.ts verify-tool-groups && electron dist/verify-tool-groups.mjs",
-    "demo:tool-groups": "tsx scripts/bundle-fixture.ts verify-tool-groups && RACK_DEMO=1 electron dist/verify-tool-groups.mjs"
+    "demo:tool-groups": "tsx scripts/bundle-fixture.ts verify-tool-groups && RACK_DEMO=1 electron dist/verify-tool-groups.mjs",
+    "test:message-queue": "tsx scripts/bundle-fixture.ts verify-message-queue && electron dist/verify-message-queue.mjs"
   },
   "dependencies": {
     "@rack/contracts": "*",
